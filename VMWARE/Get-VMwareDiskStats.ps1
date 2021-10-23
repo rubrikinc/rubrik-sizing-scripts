@@ -19,12 +19,12 @@ If there is not enough space in vCenter to save it for 5 days then run this scri
 Make sure that the data gathering covers the busiest days for the VMs.
 To configure stats collection, click on your vCenter -> Configure -> General -> Edit
 
-$critKBps and $warnKBps are set to highlight any VMDKs that we need to take a closer look at for sizing
+$highKBps and $lowKBps are set to highlight any VMDKs that we need to take a closer look at for sizing
 
 This script will attempt to gather 5 min stats for a list of VMs.
 Three different results files can be created:
 1) VM level stats - for each time period, the sum of all VM write throughput
-2) VMDK level stats - a list of any VMDK that has a write throughput greater than $warnKBps
+2) VMDK level stats - a list of any VMDK that has a write throughput greater than $lowKBps
 3) Raw stats that are gathered - if the # of rows are too large, the output will be split by day
 
 By default, the script will gather stats for all VMs listed in vCenter.
@@ -85,9 +85,9 @@ $rawCSVoutput = "./vm_raw_disk_stats-"
 # List of stats to gather
 $statList = @('virtualDisk.write.average')
 # Max sustained KBps to highlight for a VMDK
-$critKBps = 50000
+$highKBps = 50000
 # Warning sustained KBps to highlight for a VMDK
-$warnKBps = 40000
+$lowKBps = 40000
 
 ### Begin - PowerCLI authentication ###
 if (!$server) { $server = Read-Host "vCenter hostname or IP" }
@@ -156,40 +156,42 @@ foreach ($i in $vmGroup)
   $vmResults += $KBpsPerTimestamp
 } # foreach ($i in $vmGroup)
 
-# For each VMDK level stat, build a list of VMDKs whose Value are greater than $critKBps
-$critVMDKs = $vmdkDataArray | Where Value -ge $critKBps | Sort-Object -Property Value -Descending |
+# For each VMDK level stat, build a list of VMDKs whose Value are greater than $highKBps
+$highVMDKs = $vmdkDataArray | Where Value -ge $highKBps | Sort-Object -Property Value -Descending |
   Select @{n='KBps'; e={$_.Value}}, @{n='VM'; e={$_.Entity}}, 'Instance', 'Timestamp', 'MetricId'
 
-# For each VMDK level stat, build a list of VMDKs whose Value are greater than $warnKBps
-$warnVMDKs = $vmdkDataArray | Where { $_.value -ge $warnKBps -and $_.value -lt $critKBps } |
+# For each VMDK level stat, build a list of VMDKs whose Value are greater than $lowKBps
+$lowVMDKs = $vmdkDataArray | Where { $_.value -ge $lowKBps -and $_.value -lt $highKBps } |
   Sort-Object -Property Value -Descending | Select @{n='KBps'; e={$_.Value}}, @{n='VM'; e={$_.Entity}}, 'Instance', 'Timestamp', 'MetricId'
 
 Write-Host ""
-Write-Host "These VMDKs had sustained write throughput that crossed the warning threshold of $warnKBPs KBps:" -foregroundcolor green
-$warnVMDKs | Format-Table
+Write-Host "These VMDKs had sustained write throughput that crossed the low threshold of $lowKBps KBps:" -foregroundcolor green
+$lowVMDKs | Format-Table
 
-Write-Host "These VMDKs had sustained write throughput that crossed the critical threshold of $critKBPs KBps:" -foregroundcolor green
-$critVMDKs | Format-Table
+Write-Host "These VMDKs had sustained write throughput that crossed the high threshold of $highKBps KBps:" -foregroundcolor green
+$highVMDKs | Format-Table
 
 Write-Host "Top 5 time time periods that had the highest sustained write throughput:" -foregroundcolor green
 $vmResults | Sort-Object KBps -Desc -Top 5 | Format-Table
 
 Write-Host
-Write-Host "Total times a VMDK crossed the warning threshold of $warnKBPs KBps: $($warnVMDKs.count)"
-Write-Host "Total times a VMDK crossed the critical threshold of $critKBPs KBps: $($critVMDKs.count)"
+Write-Host "Total times a VMDK crossed the low threshold of $lowKBps KBps: $($lowVMDKs.count)"
+Write-Host "Total times a VMDK crossed the high threshold of $highKBps KBps: $($highVMDKs.count)"
 Write-Host ""
-Write-Host "Number of unique VMs that crossed the warning threshold: $(($warnVMDKs.VM | Sort-Object | Unique).count)" -foregroundcolor green
-Write-Host "Number of unique VMs that crossed the critical threshold: $(($critVMDKs.VM | Sort-Object | Unique).count)" -foregroundcolor green
+Write-Host "Number of unique VMs that crossed the low threshold of $lowKBps KBps: $(($lowVMDKs.VM |
+  Sort-Object | Unique).count)" -foregroundcolor green
+Write-Host "Number of unique VMs that crossed the high threshold of $highKBps KBps: $(($highVMDKs.VM |
+  Sort-Object | Unique).count)" -foregroundcolor green
 Write-Host "Highest sustained write throughput: $(($vmResults.KBps | Measure -Maximum).maximum) KBps" -foregroundcolor green
 Write-Host
 
 $vmResults | Export-CSV -NoTypeInformation -Path $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
 Write-Host "VM level results output to: $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv" -foregroundcolor green
 
-# Combine VMDKs that are above $warnVMDKs and $critVMDKs into one and output to a CSV file if there are results
-$critVMDKs += $warnVMDKs
-if ($critVMDKs.count -gt 0) {
-  $critVMDKs | Export-CSV -NoTypeInformation -Path $vmdkCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
+# Combine VMDKs that are above $lowKBps and $highKBps into one and output to a CSV file if there are results
+$highVMDKs += $lowVMDKs
+if ($highVMDKs.count -gt 0) {
+  $highVMDKs | Export-CSV -NoTypeInformation -Path $vmdkCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
   Write-Host "VMDK level results output to: $vmdkCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv" -foregroundcolor green
 } else {
   Write-Host "No VMDK level results to output" -foregroundcolor green
