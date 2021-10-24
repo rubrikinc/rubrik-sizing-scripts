@@ -19,25 +19,26 @@ If there is not enough space in vCenter to save it for 5 days then run this scri
 Make sure that the data gathering covers the busiest days for the VMs.
 To configure stats collection, click on your vCenter -> Configure -> General -> Edit
 
-$highKBps and $lowKBps are set to highlight any VMDKs that we need to take a closer look at for sizing
+$highKBps and $lowKBps are set to highlight any VMDKs that we need to take a closer look at for sizing.
 
 This script will attempt to gather 5 min stats for a list of VMs.
-Three different results files can be created:
-1) VM level stats - for each time period, the sum of all VM write throughput
+Three different results files may be created:
+1) VM level stats - for each 5 min time period, contains the sum of all VM write throughput
 2) VMDK level stats - a list of any VMDK that has a write throughput greater than $lowKBps
-3) Raw stats that are gathered - if the # of rows are too large, the output will be split by day
+3) Raw stats that are gathered - if the # of rows are too large, the output will be split by each day
 
 By default, the script will gather stats for all VMs listed in vCenter.
 You can also pass in a CSV with a list of VMs to gather stats for.
 The list of VMs should have a column "Name" with a list of VMs to gather stats for.
+
 A list of VMs in vCenter can also be generated with this script which can be edited and then passed back in.
 
-If you are using Windows Powershell (not Core) you can store your credentials using:
+If you are using Windows Powershell (not Core) you can also store vCenter credentials using:
 - New-VICredentialStoreItem
 
 .EXAMPLE
 ./Get-VMwareDiskStats.ps1
-Prompts for vCenter info and gets stats for all VMs.
+Prompts for vCenter server & login and gets stats for all VMs.
 
 ./Get-VMwareDiskStats.ps1 -server <vcenter_server>
 Prompts for vCenter username & password and gets stats on all VMs.
@@ -112,7 +113,7 @@ if ($outputVMfile -ne '')
 # Otherwise, get a list of all VMs from vCenter to run the stats collection against.
 if ($importVMfile -ne '')
 {
-  Write-Host "`nImporting CSV file: $importVMfile`n" -foregroundcolor Green
+  Write-Host "`nImporting VM list CSV file: $importVMfile`n" -foregroundcolor Green
   $vmList = Import-CSV $importVMfile | Sort-Object
 } else {
   $vmList = Get-VM | Sort-Object
@@ -172,7 +173,7 @@ Write-Host "These VMDKs had sustained write throughput that crossed the high thr
 $highVMDKs | Format-Table
 
 Write-Host "Top 5 time time periods that had the highest sustained write throughput:" -foregroundcolor green
-$vmResults | Sort-Object KBps -Desc -Top 5 | Format-Table
+$vmResults | Sort-Object KBps -Desc | Select -First 5 | Format-Table
 
 Write-Host
 Write-Host "Total times a VMDK crossed the low threshold of $lowKBps KBps: $($lowVMDKs.count)"
@@ -185,8 +186,12 @@ Write-Host "Number of unique VMs that crossed the high threshold of $highKBps KB
 Write-Host "Highest sustained write throughput: $(($vmResults.KBps | Measure -Maximum).maximum) KBps" -foregroundcolor green
 Write-Host
 
-$vmResults | Export-CSV -NoTypeInformation -Path $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
-Write-Host "VM level results output to: $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv" -foregroundcolor green
+if ($vmResults.count -gt 0) {
+  $vmResults | Export-CSV -NoTypeInformation -Path $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
+  Write-Host "VM level results output to: $vmCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv" -foregroundcolor green
+} else {
+  Write-Host "No VM level results to output" -foregroundcolor green
+}
 
 # Combine VMDKs that are above $lowKBps and $highKBps into one and output to a CSV file if there are results
 $highVMDKs += $lowVMDKs
@@ -194,17 +199,17 @@ if ($highVMDKs.count -gt 0) {
   $highVMDKs | Export-CSV -NoTypeInformation -Path $vmdkCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
   Write-Host "VMDK level results output to: $vmdkCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv" -foregroundcolor green
 } else {
-  Write-Host "No VMDK level results to output" -foregroundcolor green
+  Write-Host "No VMDK throughput higher than low threshold to output" -foregroundcolor green
 }
-
-Write-Host ""
 
 # Combine the raw results for the VM summary results and VMDK results
 $vmDataArray += $vmdkDataArray
 
 # Excel supports 1M rows. If the raw data is less than a large number, output raw results to a single file
 # Otherwise, split up outputting the raw data by date
-if ($vmDataArray.count -lt 800000)
+if ($vmDataArray.count -eq 0) {
+  Write-Host "No raw data captured to output" -foregroundcolor green
+} elseif ($vmDataArray.count -lt 800000)
 {
   $vmDataArray | Select 'Timestamp', 'Value', 'Entity', 'Instance', 'MetricId', 'Unit', 'IntervalSecs' |
     Export-CSV -NoTypeInformation -Path $rawCSVoutput$($date.ToString("yyyy-MM-dd_HHmm")).csv
