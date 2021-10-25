@@ -86,9 +86,9 @@ $rawCSVoutput = "./vm_raw_disk_stats-"
 # List of stats to gather
 $statList = @('virtualDisk.write.average')
 # Max sustained KBps to highlight for a VMDK
-$highKBps = 50000
+$highKBps = 10000
 # Warning sustained KBps to highlight for a VMDK
-$lowKBps = 40000
+$lowKBps = 5000
 
 ### Begin - PowerCLI authentication ###
 if (!$server) { $server = Read-Host "vCenter hostname or IP" }
@@ -184,6 +184,7 @@ Write-Host "Number of unique VMs that crossed the low threshold of $lowKBps KBps
 Write-Host "Number of unique VMs that crossed the high threshold of $highKBps KBps: $(($highVMDKs.VM |
   Sort-Object | Unique).count)" -foregroundcolor green
 Write-Host "Highest sustained write throughput: $(($vmResults.KBps | Measure -Maximum).maximum) KBps" -foregroundcolor green
+Write-Host "Average sustained write throughput: $((($vmResults.KBps | Measure -Average).average).ToString("#.###")) KBps" -foregroundcolor green
 Write-Host
 
 if ($vmResults.count -gt 0) {
