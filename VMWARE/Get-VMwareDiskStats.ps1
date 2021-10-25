@@ -86,9 +86,9 @@ $rawCSVoutput = "./vm_raw_disk_stats-"
 # List of stats to gather
 $statList = @('virtualDisk.write.average')
 # Max sustained KBps to highlight for a VMDK
-$highKBps = 10000
+$highKBps = 50000
 # Warning sustained KBps to highlight for a VMDK
-$lowKBps = 5000
+$lowKBps = 40000
 
 ### Begin - PowerCLI authentication ###
 if (!$server) { $server = Read-Host "vCenter hostname or IP" }
