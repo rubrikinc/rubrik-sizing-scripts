@@ -1,4 +1,4 @@
-#requires -module VMware.vim
+#requires -module VMware.PowerCLI
 # https://build.rubrik.com
 
 <#
@@ -77,6 +77,8 @@ param (
   [Parameter(Mandatory=$false)]
   [string]$importVMfile = $null
 )
+
+Import-Module VMware.PowerCLI
 
 # Base filename to output the stats to
 $vmCSVoutput = "./vm_level_disk_stats-"
