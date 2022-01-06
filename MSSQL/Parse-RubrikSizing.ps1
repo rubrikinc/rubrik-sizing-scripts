@@ -35,6 +35,7 @@ $return = [ordered]@{
             'DBs with Partitioning' = ($rawdata | Measure-Object -Property 'Partitioning' -Sum).Sum
             'DBs with TransparentDatabaseEncryption' = ($rawdata | Measure-Object -Property 'TransparentDatabaseEncryption' -Sum).Sum
             'DBs with Greater than 300 Files' = ($rawdata | Where-Object {[int]$_.NumberOfFiles -ge 300} | Measure-Object).Count
+            'DBs in an Availability Group' = ($rawdata | Where-Object {[string]::IsNullOrEmpty($_.AG_Name) -eq $false } | Measure-Object ).Count
         }
 
 $MaxDbCountSingleHost = ($rawdata | Group-Object ServerName | Sort-Object Count -Descending| Select-Object Name, Count -first 1)
