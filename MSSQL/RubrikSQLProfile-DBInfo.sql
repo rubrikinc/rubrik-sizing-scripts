@@ -44,7 +44,34 @@ SELECT @@servername AS ServerName,
 	COUNT(database_id) as NumberOfFiles
 FROM sys.master_files
 GROUP BY database_id;
+/**********************************************************
+Get Availability Info
+*********************************************************/
+IF OBJECT_ID('tempdb.dbo.##AG_Info') IS NOT NULL
+DROP TABLE ##AG_Info
 
+CREATE TABLE ##AG_Info(
+	ServerName    SYSNAME,
+	DatabaseName  NVARCHAR(50),
+	AG_Name NVARCHAR(50),
+)
+IF (SELECT cast(left(cast(serverproperty('productversion') AS VARCHAR), 4) AS DECIMAL(5, 1))) >= 11
+BEGIN
+    INSERT INTO ##AG_Info
+    SELECT @@servername AS ServerName
+        , db_name(drs.database_id) AS DBName
+        , ag_name
+    FROM sys.dm_hadr_database_replica_states drs
+    JOIN sys.dm_hadr_name_id_map map
+    ON drs.group_id = map.ag_id
+END
+ELSE
+BEGIN   
+    INSERT INTO ##AG_Info
+    SELECT @@servername AS ServerName
+        , null as DBName
+        , null as ag_name
+END;
 /**********************************************************
 Create the output for the server
 *********************************************************/
@@ -113,6 +140,10 @@ DBFiles
 AS
 (
 	SELECT * FROM ##database_files
+),
+AGInfo
+AS(
+    SELECT * FROM ##AG_Info
 )
 
 SELECT
@@ -134,15 +165,16 @@ SELECT
 	,ISNULL(ef.[Partitioning],0) AS Partitioning
 	,ISNULL(ef.[TransparentDatabaseEncryption],0) as TransparentDatabaseEncryption
 	,DBFiles.NumberOfFiles
+    ,AG_Name
 FROM sys.databases db
 JOIN DBInfo ON db.name = dbinfo.name
 LEFT OUTER JOIN LogBackupInfo lbi ON db.name = lbi.database_name
 LEFT OUTER JOIN FullBackupInfo fbi ON db.name = fbi.database_name
 LEFT OUTER JOIN LogBackupInterval lbii ON db.name = lbii.database_name
 LEFT OUTER JOIN EnterpriseFeatures ef ON db.name = ef.DatabaseName
+LEFT OUTER JOIN AGInfo agi on db.name = agi.DatabaseName
 JOIN DBFiles ON db.name = DBFiles.DatabaseName
 WHERE db.database_id != 2
- --   AND lbii.PreviousBackupStartDate <> '1900-01-01 00:00:00.000'
 GROUP BY db.name
 	,db.recovery_model_desc
 	,dbinfo.DBTotalSizeMB
@@ -158,7 +190,5 @@ GROUP BY db.name
 	,ISNULL(ef.[Partitioning],0)
 	,ISNULL(ef.[TransparentDatabaseEncryption],0)
 	,DBFiles.NumberOfFiles
+    ,AG_Name
 ORDER BY name
-
-
---exec sp_helpdb @dbname = 'AdventureWorks2012'
