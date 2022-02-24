@@ -1,0 +1,5 @@
+"Database","Server","ElasticPool","ManagedInstance","MaxSizeGiB","MaxSizeGB","Subscription","Region","ResourceGroup","DatabaseID","InstanceType","Status"
+"","","az-tong-pool","","32","34.36","se_roadrunner_perf_lab","eastus2","rg-lumnah-test","","GP_Gen5",
+"az-tong-sql1","az-lumnah-test","","","48","51.54","se_roadrunner_perf_lab","eastus2","rg-lumnah-test","8c49b71e-bef1-4d0d-8862-ab7734bac126","GP_Gen5","Online"
+"lumnah-test-db","az-lumnah-test","","","32","34.36","se_roadrunner_perf_lab","eastus2","rg-lumnah-test","c6147218-cd06-4d8b-b9b3-b4df4e312878","GP_S_Gen5","Paused"
+"","","","az-tong-managedinstance","64","68.719","se_roadrunner_perf_lab","westus3","rp-stong-cc-westus","","GP_Gen5",

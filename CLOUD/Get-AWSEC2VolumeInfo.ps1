@@ -7,12 +7,14 @@
 Gets all EC2 instances with the # of attached volumes and total sizes of all volumes.
 
 .DESCRIPTION
-The 'Get-AWSEC2VolumeInfo.ps1' script gets all EC2 instances in the specified regions.
-For each EC2 instance it grabs the total number of volumes and total size (GiB) for all volumes.
+The 'Get-AWSEC2VolumeInfo.ps1' script gets all EC2 instances in the specified region(s).
+For each EC2 instance it grabs the total number of volumes and total size for all volumes.
 A summary of the total # of instances, # of volumes, and capacity will be output to console.
-A CSV file will be exported with the details.
 
-Update the region list ($regions) as needed.
+A CSV file will be exported with the details.
+You should copy/paste the console output to send along with the CSV.
+
+Update the region list ($regions) with the regions you want to pull info from.
 
 Run in AWS CloudShell or use 'Set-AWSCredential' to set the AWS credentials to run with.
 See: https://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-started.html
@@ -21,6 +23,7 @@ See: https://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-sta
 Written by Steven Tong for community usage
 GitHub: stevenctong
 Date: 11/8/21
+Updated: 2/24/21
 
 .EXAMPLE
 ./Get-EC2AWSVolumeInfo.ps1
@@ -45,6 +48,8 @@ $regionsSA = @( 'sa-east-1' )
 
 # Set the regions that you want to get EC2 instance and volume details for
 $regions = @()
+
+# This adds the US Regions to the regions list
 $regions += $regionsUS
 
 Write-Host "Importing AWS Powershell module" -foregroundcolor green
@@ -73,12 +78,12 @@ foreach ($region in $regions) {
 
     $ec2obj = [PSCustomObject] @{
       "InstanceId" = $ec2.InstanceId
-      "InstanceType" = $ec2.InstanceType
+      "Name" = $ec2.tags.name
       "Volumes" = $volumes.count
       "SizeGiB" = $volSize
       "SizeGB" = [math]::round($($volSize * 1.073741824), 3)
       "Region" = $region
-      "Name" = $ec2.tags.name
+      "InstanceType" = $ec2.InstanceType
       "Platform" = $ec2.Platform
     }
 
