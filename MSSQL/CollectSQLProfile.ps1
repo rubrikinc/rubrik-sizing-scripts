@@ -23,7 +23,7 @@ param(
     [string[]] $SQLInstance,
     [Parameter(ParameterSetName='File Of Instances')]
     [String] $InstancesFile,
-    [string] $OutPath = [Environment]::GetFolderPath("MyDocuments"),
+    [string] $OutPath = '.\',
     [string] $QueryPath = '.\',
     [Switch] $Anonymize,
     [ValidateNotNull()]
@@ -33,7 +33,7 @@ param(
 )
 BEGIN{
     if(Get-Module -ListAvailable SqlServer){Import-Module SqlServer}
-    else{Import-Module SQLPS -DisableNameChecking}
+    # else{Import-Module SQLPS -DisableNameChecking}
 
     $queries = Get-ChildItem $QueryPath -Filter "*.sql"
     $queries | ForEach-Object {$_ | Add-Member -MemberType NoteProperty -Name FileName -Value "$($_.Name.Replace('.sql',''))-$(Get-Date -Format 'yyyyMMddHHmm').csv"}
@@ -67,7 +67,7 @@ PROCESS{
             $OutFile = Join-Path -Path $OutPath -ChildPath $q.filename
 
             Write-Verbose "Collecting data from $i"
-            $output = Invoke-SqlCmd -ServerInstance "$i" -Database TempDB -Query "$sql" -Credential $Credential
+            $output = Invoke-SqlCmd -ServerInstance "$i" -Database master -Query "$sql" -Credential $Credential
 
             if($header -eq $true){
                 $output | ConvertTo-Csv -Delimiter '|' -NoTypeInformation | Out-File $OutFile -Append

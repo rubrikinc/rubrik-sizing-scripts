@@ -16,7 +16,7 @@ CREATE TABLE ##enterprise_features(
 	feature_name VARCHAR(100),
 	feature_id   INT
 )
-EXEC sp_msforeachdb
+EXEC sp_MSforeachdb
 	N' USE [?] 
 	--	IF (SELECT COUNT(*) FROM sys.dm_db_persisted_sku_features) > 0 
 	--	BEGIN 
@@ -59,7 +59,7 @@ IF (SELECT cast(left(cast(serverproperty('productversion') AS VARCHAR), 4) AS DE
 BEGIN
     INSERT INTO ##AG_Info
     SELECT @@servername AS ServerName
-        , db_name(drs.database_id) AS DBName
+        , db_name(drs.database_id) AS dbname
         , ag_name
     FROM sys.dm_hadr_database_replica_states drs
     JOIN sys.dm_hadr_name_id_map map
@@ -69,7 +69,7 @@ ELSE
 BEGIN   
     INSERT INTO ##AG_Info
     SELECT @@servername AS ServerName
-        , null as DBName
+        , null as dbname
         , null as ag_name
 END;
 /**********************************************************
@@ -111,7 +111,7 @@ AS
 EnterpriseFeatures
 AS
 (
-	SELECT dbName AS 'DatabaseName'
+	SELECT dbname AS 'DatabaseName'
 		,[ChangeCapture]
 		,[ColumnStoreIndex]
 		,[Compression]
@@ -155,7 +155,7 @@ SELECT
 	,ISNULL(fbi.AverageBackupSizeMB,0) AS AverageFullMB
 	,ISNULL(fbi.AverageBackupTime,0) AS AverageFullTimeSec
 	,ISNULL(lbi.AverageLogBackupTime,0) AS AverageLogTimeSec
-	,dbinfo.DBTotalSizeMB
+	,DBInfo.DBTotalSizeMB
     ,AVG(lbii.BackupInterval) AS AverageLogBackupInterval
 	,ISNULL(ef.ChangeCapture,0) AS ChangeCapture
 	,ISNULL(ef.ColumnStoreIndex,0) AS ColumnStoreIndex
@@ -167,7 +167,7 @@ SELECT
 	,DBFiles.NumberOfFiles
     ,AG_Name
 FROM sys.databases db
-JOIN DBInfo ON db.name = dbinfo.name
+JOIN DBInfo ON db.name = DBInfo.name
 LEFT OUTER JOIN LogBackupInfo lbi ON db.name = lbi.database_name
 LEFT OUTER JOIN FullBackupInfo fbi ON db.name = fbi.database_name
 LEFT OUTER JOIN LogBackupInterval lbii ON db.name = lbii.database_name
@@ -177,7 +177,7 @@ JOIN DBFiles ON db.name = DBFiles.DatabaseName
 WHERE db.database_id != 2
 GROUP BY db.name
 	,db.recovery_model_desc
-	,dbinfo.DBTotalSizeMB
+	,DBInfo.DBTotalSizeMB
 	,ISNULL(lbi.LogBackupTotalMB,0)
 	,ISNULL(fbi.AverageBackupSizeMB,0)
 	,ISNULL(fbi.AverageBackupTime,0)
