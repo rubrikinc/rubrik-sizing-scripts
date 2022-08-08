@@ -1,151 +1,331 @@
 REM Oracle Data Collection Script
 
--- create private temporary table to hold all  collected
+-- connect to the system schema
+--conn SYSTEM@$1
 
-create private temporary table ORA$PTT_rubrikDataCollection
-	(con_id 	number,
-	conName	varchar2(20),
-	name   	varchar2(200),
-	value   	varchar2(200),
-	total		number)
-on commit preserve definition;
+-- create temporary table to hold all  collected
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'executionTime', to_char(systimestamp,'YYYY-MM-DD HH24:MI:SS TZH:TZM'), null from dual);
+create global temporary table  rubrikDataCollection
+	(
+	con_id number,
+	conName varchar2(128),
+	dbSizeMB number,
+	allocated_dbSizeMB number,
+	biggestBigfileMB number,
+	dailyChangeRate number,
+	dailyRedoSize number,	
+	datafileCount number,		
+	hostName varchar2(64),
+	instName varchar2(16),
+	dbVersion varchar2(17),
+--	dbEdition varchar2(7),
+-- changing dbEdition size to support v$instance.version size
+	dbEdition varchar2(100),
+	platformName varchar2(101),
+	dbName varchar2(9),
+	dbUniqueName varchar2(30),
+	dbID varchar2(200),
+	flashbackEnabled varchar2(18),
+	archiveLogEnabled varchar2(12),
+	spfile varchar2(200),
+	patchLevel varchar2(100),
+	cpuCount number,
+	blockSize number,
+	racEnabled varchar2(20),
+	sgaMaxSize number,
+	sgaTarget number,
+	pgaAggregateTarget number,
+	physMemory number,
+	dNFSenabled varchar2(20),
+	GoldenGate varchar2(20),
+	exadataEnabled varchar2(20),
+	bctEnabled varchar2(20),
+	LogArchiveConfig varchar2(200),
+	ArchiveLagTarget number,
+	tablespaceCount number,
+	encryptedTablespaceCount number,
+	encryptedDataSizeMB number,
+	bigfileTablespaceCount number,
+	bigfileDataSizeMB number,
+	logfileCount number,
+	tempfileCount number
+	)
+on commit preserve rows;
 
--- no container query for v$instance
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'instName', instance_name, null from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'hostName', host_name, null from v$instance);
+insert into rubrikDataCollection
+(
+conName,
+hostName,
+instName,
+dbVersion,
+platformName,
+dbName,
+dbUniqueName,
+dbID,
+flashbackEnabled,
+archiveLogEnabled
+)
+select db.name,
+inst.host_name,
+inst.instance_name,
+inst.version,
+db.platform_name,
+db.name,
+db.db_unique_name,
+db.dbid,
+db.flashback_on,
+db.log_mode
+from v$instance inst,
+v$database db
+/
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'dbVersion', version_full, null from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'dbEdition', edition, null from v$instance);
+-- to be improved
+-- dbEdition (EE, SE) info
+UPDATE rubrikDataCollection rbk
+SET dbEdition = (select * from v$version where ROWNUM = 1)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- no container query for v$database
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'platformName', platform_name, null from v$database);
+UPDATE rubrikDataCollection rbk
+SET spfile = (select decode(count(*), 0, 'NO', 'YES') from v$parameter where name='spfile')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'dbName', name, null from v$database);
- 
-insert into ORA$PTT_rubrikDataCollection ( 
-select 0, '11g', 'dbUniqueName', db_unique_name, null from v$database);
+UPDATE rubrikDataCollection rbk
+SET patchLevel = (select * from (select comments from DBA_REGISTRY_HISTORY where ACTION_TIME is not null order by action_time desc) where ROWNUM = 1)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection ( 
---select con_id, name, 'dbID', dbid, null  from v$containers);
-select 0, '11g', 'dbID', dbid, null from v$database);
+UPDATE rubrikDataCollection rbk
+SET cpuCount = (SELECT value from v$parameter where name='cpu_count')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection ( 
-select 0, '11g', 'flashbackEnabled', flashback_on, null  from v$database);
+UPDATE rubrikDataCollection rbk
+SET blockSize = (SELECT value from v$parameter where name='db_block_size')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection ( 
-select 0, '11g', 'archiveLogEnabled', log_mode, null  from v$database);
+UPDATE rubrikDataCollection rbk
+SET racEnabled = (SELECT value from v$parameter where name='cluster_database')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
---no container query for dba_registry_sqlpatch
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'patchLevel', description, null from dba_registry_sqlpatch);
+UPDATE rubrikDataCollection rbk
+SET sgaMaxSize = (SELECT value from v$parameter where name='sga_max_size')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- no container query for v$parameter
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'cpuCount', null, value from v$parameter where name='cpu_count');
+UPDATE rubrikDataCollection rbk
+SET sgaTarget = (SELECT value from v$parameter where name='sga_target')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'blockSize', null, value from v$parameter where name='db_block_size');
+UPDATE rubrikDataCollection rbk
+SET pgaAggregateTarget = (SELECT value from v$parameter where name='pga_aggregate_target')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'racEnabled', value, null  from v$parameter where name = 'cluster_database');
+UPDATE rubrikDataCollection rbk
+SET physMemory = (SELECT max(value) from dba_hist_osstat where stat_name = 'PHYSICAL_MEMORY_BYTES')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'sgaMaxSize', null, value from v$parameter where name='sga_max_size');
+UPDATE rubrikDataCollection rbk
+SET dNFSenabled = (select decode(count(*), 0, 'No', 'Yes') from v$dnfs_servers)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'sgaTarget', null, value from v$parameter where name='sga_target');
+UPDATE rubrikDataCollection rbk
+SET dbSizeMB = (select sum(bytes)/1024/1024 bytes from dba_segments)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'pgaAggregateTarget', null, value from v$parameter where name='pga_aggregate_target');
+UPDATE rubrikDataCollection rbk
+SET allocated_dbSizeMB = (select sum(bytes)/1024/1024 BYTES from v$datafile)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- no container query for dba_hist_osstat
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'physMemory', null, max(value) from dba_hist_osstat where stat_name = 'PHYSICAL_MEMORY_BYTES');
+UPDATE rubrikDataCollection rbk
+SET GoldenGate = (select decode(count(*), 0, 'No', 'Yes') from v$archive_dest where status = 'VALID' and target = 'STANDBY')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$datafile is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection ( 
-select 0, '11g', 'dbSize', null, sum(bytes) from v$datafile);
- 
--- v$archive_dest is container-aware(no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'GoldenGate', decode(count(*), 0, 'No', 'Yes'), null  from v$archive_dest where status = 'VALID' and target = 'STANDBY');
+UPDATE rubrikDataCollection rbk
+SET exadataEnabled = (select decode(count(*), 0, 'No', 'Yes') from v$cell)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- gv$cell is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'exadataEnabled', decode(count(*), 0, 'No', 'Yes'), null  from gv$cell);
+UPDATE rubrikDataCollection rbk
+SET bctEnabled = (select status from v$block_change_tracking)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$dnfs_servers is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'dNFSenabled', decode(count(*), 0, 'No', 'Yes'), null  from v$dnfs_servers);
+UPDATE rubrikDataCollection rbk
+SET LogArchiveConfig = (SELECT value from v$parameter where name='log_archive_config')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$block_change_tracking is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'bctEnabled', status, null from v$block_change_tracking);
+UPDATE rubrikDataCollection rbk
+SET LogArchiveConfig = 'NO'
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance)
+and LogArchiveConfig is null;
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'tablespaceCount', null, count(*)  from v$tablespace);
+UPDATE rubrikDataCollection rbk
+SET ArchiveLagTarget = (SELECT value from v$parameter where name='archive_lag_target')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);	
 
--- containers clause works on dba_tablespaces 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'encryptedTablespaceCount', null, count(*) from dba_tablespaces where encrypted='YES');
+UPDATE rubrikDataCollection rbk
+SET tablespaceCount = (select count(*)  from v$tablespace)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'bigfileTablespaceCount', null, count(*) from dba_tablespaces where bigfile='YES' );
+UPDATE rubrikDataCollection rbk
+SET encryptedTablespaceCount = (select count(*) from dba_tablespaces where encrypted='YES')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- containers clause works on dba_data_files and dba_tablespaces
-insert into ORA$PTT_rubrikDataCollection (
-select dbf.0, '11g', 'encryptedDataSize', null, sum(bytes) from dba_data_files dbf, dba_tablespaces tbsp where dbf.tablespace_name=tbsp.tablespace_name and dbf.con_id=tbsp.con_id and tbsp.encrypted='YES' group by dbf.con_id);
+UPDATE rubrikDataCollection rbk
+SET encryptedDataSizeMB = (select sum(bytes/1024/1024) from (select sum(bytes) bytes from dba_data_files dbf, dba_tablespaces tbsp where dbf.tablespace_name=tbsp.tablespace_name and tbsp.encrypted='YES'))
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
-insert into ORA$PTT_rubrikDataCollection (
-select dbf.0, '11g', 'bigfileDataSize', null, sum(bytes) from dba_data_files dbf, dba_tablespaces tbsp where dbf.tablespace_name=tbsp.tablespace_name and tbsp.bigfile='YES');
+UPDATE rubrikDataCollection rbk
+SET encryptedDataSizeMB = 0
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance)
+and encryptedDataSizeMB is null;
 
-insert into ORA$PTT_rubrikDataCollection (
-select dbf.0, '11g', 'dailyChangeRate', null, round((avg(redo_size)/sum(dbf.bytes))/100,8) from v$datafile dbf, (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time)));
+UPDATE rubrikDataCollection rbk
+SET bigfileTablespaceCount = (select count(*) from dba_tablespaces where bigfile='YES')
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$datafile is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'datafileCount', null, count(*) from v$datafile );
+UPDATE rubrikDataCollection rbk
+SET biggestBigfileMB = (select sum(bytes/1024/1024) from (select max(bytes) bytes from dba_data_files dbf, dba_tablespaces tbsp where dbf.tablespace_name=tbsp.tablespace_name and tbsp.bigfile='YES'))
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$logfile is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'logfileCount', null, count(*) from v$logfile );
+UPDATE rubrikDataCollection rbk
+SET biggestBigfileMB = 0
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance)
+and biggestBigfileMB is null;
 
--- v$tempfile is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'tempfileCount', null, count(*) from v$tempfile );
+UPDATE rubrikDataCollection rbk
+SET bigfileDataSizeMB = (select sum(bytes/1024/1024) from (select sum(bytes) bytes from dba_data_files dbf, dba_tablespaces tbsp where dbf.tablespace_name=tbsp.tablespace_name and tbsp.bigfile='YES'))
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
 
--- v$archived_log is container-aware (no need for container clause)
-insert into ORA$PTT_rubrikDataCollection (
-select 0, '11g', 'dailyRedoSize', null, avg(redo_size) from (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) );
+UPDATE rubrikDataCollection rbk
+SET bigfileDataSizeMB = 0
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance)
+and bigfileDataSizeMB is null;
+
+-- 20220310 smcelhinney removing division by 100 from dailyChangeRate as it negatively skews change rate 
+UPDATE rubrikDataCollection rbk
+SET dailyChangeRate = (select dailyChangeRate from (select round((avg(redo_size)/sum(dbf.bytes)),8) dailyChangeRate from v$datafile dbf, (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET datafileCount = (select count(*) from v$datafile)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET logfileCount = (select count(*) from v$logfile)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET logfileCount = (select count(*) from v$logfile)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET tempfileCount = (select count(*) from v$tempfile)
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET dailyRedoSize = (select dailyRedoSize/1024/1024 from (select avg(redo_size) dailyRedoSize from (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance);
+
+UPDATE rubrikDataCollection rbk
+SET dailyRedoSize = 0
+WHERE instName = (select instance_name from v$instance)
+and hostName= (select host_name from v$instance)
+and dailyRedoSize is null;
+
 
 -- update temp table with con_name for recorded con_id
---update ORA$PTT_rubrikDataCollection rbk set con_id=1 where con_id=0 or con_id is null;
---update ORA$PTT_rubrikDataCollection rbk set conName=(select name from v$containers where con_id=rbk.con_id) where conName is null;
+update rubrikDataCollection rbk set con_id=0 where con_id is null;
+
+commit;
 
 -- format data collected for json output
-set markup csv on
+set linesize 32000
 set colsep ,
 set headsep off
-set trimspool on
 set head off
+set trimspool on
+set trimout on
 set feedback off
 set pagesize 0
+set wrap off
 
 spool rbkDiscovery.csv append
 
-select * from ORA$PTT_rubrikDataCollection;
+select con_id ||','|| conName ||','|| dbSizeMB ||','|| allocated_dbSizeMB ||','||
+        biggestBigfileMB ||','||
+        dailyChangeRate ||','||
+        dailyRedoSize ||','||
+        datafileCount ||','||
+        hostName ||','||
+        instName ||','||
+        dbVersion ||','||
+        dbEdition ||','||
+        platformName ||','||
+        dbName ||','||
+        dbUniqueName ||','||
+        dbID ||','||
+        flashbackEnabled ||','||
+        archiveLogEnabled ||','||
+        spfile ||','||
+        patchLevel ||','||
+        cpuCount ||','||
+        blockSize ||','||
+        racEnabled ||','||
+        sgaMaxSize ||','||
+        sgaTarget ||','||
+        pgaAggregateTarget ||','||
+        physMemory ||','||
+        dNFSenabled ||','||
+        GoldenGate ||','||
+        exadataEnabled ||','||
+        bctEnabled ||','||
+        LogArchiveConfig ||','||
+        ArchiveLagTarget ||','||
+        tablespaceCount ||','||
+        encryptedTablespaceCount ||','||
+        encryptedDataSizeMB ||','||
+        bigfileTablespaceCount ||','||
+        bigfileDataSizeMB ||','||
+        logfileCount ||','||
+        tempfileCount 
+ from rubrikDataCollection;
 
 spool off
+
+truncate table rubrikDataCollection;
+
+drop table rubrikDataCollection;
 
 exit;

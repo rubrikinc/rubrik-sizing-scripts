@@ -19,7 +19,7 @@ create global temporary table rubrikDataCollection
 	instName varchar2(16),
 	dbVersion varchar2(17),
 --	dbEdition varchar2(7),
--- updating dbEdition to support larger settings in v$instance.version
+-- updating dbEdition to support larger entries in v$instance.version
 	dbEdition varchar2(100),
 	platformName varchar2(101),
 	dbName varchar2(9),
@@ -71,7 +71,7 @@ select cont.con_id,
 cont.name,
 inst.host_name,
 inst.instance_name,
-inst.version_full,
+inst.version,
 inst.edition,
 db.platform_name,
 db.name,
@@ -91,7 +91,7 @@ and hostName= (select host_name from v$instance);
 
 -- result is the latest patch
 UPDATE rubrikDataCollection rbk
-SET patchLevel = (select * from (select description from dba_registry_sqlpatch order by TARGET_BUILD_TIMESTAMP desc) where ROWNUM = 1)
+SET patchLevel = (select * from (select description from dba_registry_sqlpatch order by ACTION_TIME desc) where ROWNUM = 1)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance);
 
@@ -205,16 +205,16 @@ WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
 
--- containers clause works on dba_tablespaces 
+-- containers clause works on dba_tablespaces -- NOT IN 12.1
 UPDATE rubrikDataCollection rbk
-SET encryptedTablespaceCount = (select count(*) from containers(dba_tablespaces) where encrypted='YES' and con_id=rbk.con_id)
+SET encryptedTablespaceCount = (select count(*) from dba_tablespaces dba, v$tablespace v where dba.encrypted='YES' and dba.tablespace_name=v.name and v.con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
 
 -- containers clause works on dba_data_files and dba_tablespaces
 UPDATE rubrikDataCollection rbk
-SET encryptedDataSizeMB = (select sum(bytes/1024/1024) from (select dbf.con_id,sum(bytes) bytes from containers(dba_data_files) dbf, containers(dba_tablespaces) tbsp where dbf.tablespace_name=tbsp.tablespace_name and dbf.con_id=tbsp.con_id and tbsp.encrypted='YES' group by dbf.con_id) where con_id=rbk.con_id)
+SET encryptedDataSizeMB = (select sum(bytes/1024/1024) from (select dbf.con_id,sum(bytes) bytes from v$datafile dbf, v$tablespace v, dba_tablespaces tbsp where dbf.TS#=v.TS# and v.name=tbsp.tablespace_name and dbf.con_id=v.con_id and tbsp.encrypted='YES' group by dbf.con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -226,14 +226,14 @@ and hostName= (select host_name from v$instance)
 and encryptedDataSizeMB is null;
 
 UPDATE rubrikDataCollection rbk
-SET bigfileTablespaceCount = (select count(*) from containers(dba_tablespaces) where bigfile='YES' and con_id=rbk.con_id)
+SET bigfileTablespaceCount = (select count(*) from dba_tablespaces where bigfile='YES' and con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
 
 -- containers clause works on dba_data_files and dba_tablespaces
 UPDATE rubrikDataCollection rbk
-SET biggestBigfileMB = (select sum(bytes/1024/1024) from (select dbf.con_id, max(bytes) bytes from containers(dba_data_files) dbf, containers(dba_tablespaces) tbsp where dbf.tablespace_name=tbsp.tablespace_name and dbf.con_id=tbsp.con_id and tbsp.bigfile='YES' group by dbf.con_id) where con_id=rbk.con_id)
+SET biggestBigfileMB = (select sum(bytes/1024/1024) from (select dbf.con_id, max(bytes) bytes from v$datafile dbf, v$tablespace tbsp where dbf.TS#=tbsp.TS# and dbf.con_id=tbsp.con_id and tbsp.bigfile='YES' group by dbf.con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -245,7 +245,7 @@ and hostName= (select host_name from v$instance)
 and biggestBigfileMB is null;
 
 UPDATE rubrikDataCollection rbk
-SET bigfileDataSizeMB = (select sum(bytes/1024/1024) from (select dbf.con_id, sum(bytes) bytes from containers(dba_data_files) dbf, containers(dba_tablespaces) tbsp where dbf.tablespace_name=tbsp.tablespace_name and dbf.con_id=tbsp.con_id and tbsp.bigfile='YES' group by dbf.con_id) where con_id=rbk.con_id)
+SET bigfileDataSizeMB = (select sum(bytes/1024/1024) from (select dbf.con_id, sum(bytes) bytes from v$datafile dbf, v$tablespace tbsp where dbf.TS#=tbsp.TS# and dbf.con_id=tbsp.con_id and tbsp.bigfile='YES' group by dbf.con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -257,9 +257,9 @@ and hostName= (select host_name from v$instance)
 and bigfileDataSizeMB is null;
 
 -- v$datafile and v$archived_log are container-aware (no need for container clause)
--- 20220310 removed division by 100 from change rate calc as it is skewing change rate down smcelhinney
+-- 20220310 smcelhinney removing division by 100 from dailyChangeRate as it negatively skews change rate
 UPDATE rubrikDataCollection rbk
-SET dailyChangeRate = (select dailyChangeRate from (select dbf.con_id, round((avg(redo_size)/sum(dbf.bytes)),8) dailyChangeRate from containers(v$datafile) dbf, (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from containers(v$archived_log) where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by dbf.con_id) where con_id=rbk.con_id)
+SET dailyChangeRate = (select dailyChangeRate from (select dbf.con_id, round((avg(redo_size)/sum(dbf.bytes)),8) dailyChangeRate from v$datafile dbf, (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by dbf.con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -352,7 +352,7 @@ update rubrikDataCollection rbk set conName=(select name ||'.' from v$database)|
 commit;
 
 -- format data collected for csv output
--- set markup csv on
+--set markup csv on
 set linesize 32000
 set colsep ,
 set headsep off
@@ -366,10 +366,11 @@ set wrap off
 spool rbkDiscovery.csv append
 
 -- select * from rubrikDataCollection;
-select con_id ||','||
-        conName ||','||
-        dbSizeMB ||','||
-        allocated_dbSizeMB ||','||
+
+select con_id ||','|| 
+	conName ||','||
+	dbSizeMB ||','||
+	allocated_dbSizeMB ||','||
         biggestBigfileMB ||','||
         dailyChangeRate ||','||
         dailyRedoSize ||','||
