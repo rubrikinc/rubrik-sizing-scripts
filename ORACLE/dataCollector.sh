@@ -11,7 +11,7 @@
 #	- Hostname of all database hosts
 #	- Database Listener port for all databases 
 #	- Database Service Name for all databases
-#	- Database version is provided for databases (11g, 12c, 19c, etc)
+#	- Database version is provided for databases as a 3 digit number representing the MAJOR (ie: 12c) and DOT (ie: 12.1) release (for example:10gR2 -> 102; 11gR2 -> 112; 12cR1 -> 121 etc. )
 #	- access to sqlplus on the host executing the utility
 # 
 # description: shell script to collect data on all Oracle databases defined as input
@@ -84,10 +84,16 @@ then
 		login=system/$passwd
 		
 # determine database version from collectionInput.lst & set appropriate sql script for execution
-		if test "$dbversion" = "11g"
+		if test "$dbversion" -lt 120 
 		then
 			sql="rbkDataCollection_11g.sql"
-		else		
+		elif test "$dbversion" -lt 122
+		then
+			sql="rbkDataCollection_121.sql"
+		elif test "$dbversion" -lt 180
+		then		
+			sql="rbkDataCollection_12c.sql"
+		else
 			sql="rbkDataCollection.sql"
 		fi
 		echo $sql
