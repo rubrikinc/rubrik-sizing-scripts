@@ -1,4 +1,4 @@
-# https://build.rubrik.com
+#requires -Modules Az.Accounts, Az.Compute, Az.Sql
 
 <#
 .SYNOPSIS
@@ -47,6 +47,7 @@ param (
   [string]$subscriptions = ''
 )
 
+Import-Module Az.Accounts, Az.Compute, Az.Sql
 $date = Get-Date
 
 # Filenames of the CSVs to output
