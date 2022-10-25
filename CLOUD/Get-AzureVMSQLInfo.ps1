@@ -48,6 +48,10 @@ param (
 )
 
 Import-Module Az.Accounts, Az.Compute, Az.Sql
+
+$azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
+Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
+
 $date = Get-Date
 
 # Filenames of the CSVs to output
