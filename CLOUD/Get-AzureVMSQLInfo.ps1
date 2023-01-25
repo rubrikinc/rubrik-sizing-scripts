@@ -35,6 +35,9 @@ A comma separated list of subscriptions to gather data from.
 .PARAMETER AllSubscriptions
 Flag to find all subscriptions in the tenant and download data.
 
+.PARAMETER ManagementGroups
+A comme separated list of Azure Management Groups to gather data from.
+
 .PARAMETER CurrentSubscription
 Flog to only gather information from the current subscription.
 
@@ -56,6 +59,11 @@ Runs the script against subscriptions 'sub1' and 'sub2'.
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1 -AllSubscriptions
 Runs the script against all subscriptions in the tenant. 
+
+.EXAMPLE
+./Get-AzureVMSQLInfo.ps1 -ManagementGroups "Group1,Group2"
+Runs the script against Azure Management Groups 'Group1' and 'Group2'.
+
 
 .LINK
 https://build.rubrik.com
@@ -81,7 +89,11 @@ param (
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [switch]$CurrentSubscription
+  [switch]$CurrentSubscription,
+  [Parameter(ParameterSetName='ManagementGroups',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ManagementGroups = ''
 
 )
 
@@ -108,8 +120,13 @@ $sqlList = @()
 if ($AllSubscriptions -eq $true) {
   $subs =  $(Get-AzContext -ListAvailable).subscription.name
 } 
-elseif ( $subscriptions -eq '' ) {
+elseif ($subscriptions -eq '') {
   $subs = $context.subscription.name
+}
+elseif ($ManagementGroups -ne '' ) {
+  foreach ($managmentGroup in $ManagementGroups) {
+    $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup)
+  }
 }
 else {
   [string[]]$subs = $subscriptions.split(',')
