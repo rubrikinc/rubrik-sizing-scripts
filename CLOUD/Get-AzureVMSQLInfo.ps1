@@ -93,7 +93,7 @@ param (
   [Parameter(ParameterSetName='ManagementGroups',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
-  [string]$ManagementGroups = ''
+  [string]$ManagementGroups
 
 )
 
@@ -116,20 +116,23 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 $vmList = @()
 $sqlList = @()
 
-# If no subscription is specified, only use the current subscription
-if ($AllSubscriptions -eq $true) {
-  $subs =  $(Get-AzContext -ListAvailable).subscription.name
-} 
-elseif ($subscriptions -eq '') {
-  $subs = $context.subscription.name
-}
-elseif ($ManagementGroups -ne '' ) {
-  foreach ($managmentGroup in $ManagementGroups) {
-    $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup)
+switch ($PSCmdlet.ParameterSetName) {
+  'UserSubscriptions' {
+    [string[]]$subs = $subscriptions.split(',')
   }
-}
-else {
-  [string[]]$subs = $subscriptions.split(',')
+  'AllSubscriptions' {
+    $subs =  $(Get-AzContext -ListAvailable).subscription.name
+  } 
+  'CurrentSubscription' {
+    # If no subscription is specified, only use the current subscription
+    $subs = $context.subscription.name
+  }
+  'ManagementGroups' {
+    # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
+    foreach ($managmentGroup in $ManagementGroups) {
+      $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup).DisplayName
+    }
+  }
 }
 
 
