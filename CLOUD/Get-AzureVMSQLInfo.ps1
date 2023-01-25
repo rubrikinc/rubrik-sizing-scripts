@@ -1,4 +1,4 @@
-#requires -Modules Az.Accounts, Az.Compute, Az.Sql
+#requires -Modules Az.Accounts, Az.Compute, Az.Sql, Az.ResourceGraph
 
 <#
 .SYNOPSIS
@@ -47,6 +47,7 @@ GitHub: stevenctong
 Date: 2/19/22
 Updated: 7/13/22
 Updated: 10/20/22
+Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1
@@ -130,7 +131,8 @@ switch ($PSCmdlet.ParameterSetName) {
   'ManagementGroups' {
     # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
     foreach ($managmentGroup in $ManagementGroups) {
-      $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup).DisplayName
+#      $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup).DisplayName
+      $subs = $subs+(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managmentGroup).name
     }
   }
 }
