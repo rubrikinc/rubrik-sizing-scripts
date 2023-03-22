@@ -135,9 +135,10 @@ SET dNFSenabled = (select decode(count(*), 0, 'NO', 'YES') from v$dnfs_servers)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance);
 
--- v$datafile is container-aware
+-- cdb_segments can use the containers clause.
+-- this query returns USED space per container
 UPDATE rubrikDataCollection rbk
-SET dbSizeMB = (select sum(bytes)/1024/1024 bytes from dba_segments where con_id=rbk.con_id group by con_id)
+SET dbSizeMB = (select sum(bytes)/1024/1024 bytes from containers(cdb_segments) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -258,8 +259,9 @@ and bigfileDataSizeMB is null;
 
 -- v$datafile and v$archived_log are container-aware (no need for container clause)
 -- 20220310 smcelhinney removing division by 100 from dailyChangeRate as it negatively skews change rate
+-- 20230321 updated change rate calculations to leverage cdb_segments to determine actual space USED instead of ALLOCATED -  smcelhinney
 UPDATE rubrikDataCollection rbk
-SET dailyChangeRate = (select dailyChangeRate from (select dbf.con_id, round((avg(redo_size)/sum(dbf.bytes)),8) dailyChangeRate from v$datafile dbf, (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by dbf.con_id) where con_id=rbk.con_id)
+SET dailyChangeRate = (select dailyChangeRate from (select sgmt.con_id, round((avg(redo_size)/sum(sgmt.bytes)),8) dailyChangeRate from cdb_segments sgmt, (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by sgmt.con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
@@ -322,15 +324,17 @@ and hostName= (select host_name from v$instance)
 and tempfileCount is null;
 
 -- v$archived_log is container-aware (no need for container clause)
+-- 20230322 - updating query to return dailyRedoSize in MB - smcelhinney
 UPDATE rubrikDataCollection rbk
-SET dailyRedoSize = (select dailyRedoSize from (select con_id, avg(redo_size) dailyRedoSize from (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by con_id) where con_id=rbk.con_id)
+SET dailyRedoSize = (select dailyRedoSize from (select con_id, avg(redo_size/1024/1024) dailyRedoSize from (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by con_id) where con_id=rbk.con_id)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and con_id=rbk.con_id;
 
 -- as Multitenant instance won't have con_id=0, the result will be add into the root container (con_id=1)
+-- 20230322 - updating query to return dailyRedoSize in MB - smcelhinney
 UPDATE rubrikDataCollection rbk
-SET dailyRedoSize = (select dailyRedoSize from (select con_id, avg(redo_size) dailyRedoSize from (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by con_id) where con_id=0)
+SET dailyRedoSize = (select dailyRedoSize from (select con_id, avg(redo_size/1024/1024) dailyRedoSize from (select con_id, trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time), con_id) group by con_id) where con_id=0)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and rbk.con_id=1;
@@ -366,15 +370,21 @@ set wrap off
 spool rbkDiscovery.csv append
 
 -- select * from rubrikDataCollection;
-
-select con_id ||','|| 
-	conName ||','||
-	dbSizeMB ||','||
-	allocated_dbSizeMB ||','||
-        biggestBigfileMB ||','||
+-- 20230322 - reordering query output to logically group data - smcelhinney
+select con_id ||','||
+        conName ||','||
+        dbSizeMB ||','||
+        allocated_dbSizeMB ||','||
         dailyChangeRate ||','||
         dailyRedoSize ||','||
         datafileCount ||','||
+        tablespaceCount ||','||
+        encryptedTablespaceCount ||','||
+        encryptedDataSizeMB ||','||
+        biggestBigfileMB ||','||
+        bigfileTablespaceCount ||','||
+        bigfileDataSizeMB ||','||
+        blockSize ||','||
         hostName ||','||
         instName ||','||
         dbVersion ||','||
@@ -388,7 +398,6 @@ select con_id ||','||
         spfile ||','||
         patchLevel ||','||
         cpuCount ||','||
-        blockSize ||','||
         racEnabled ||','||
         sgaMaxSize ||','||
         sgaTarget ||','||
@@ -400,11 +409,6 @@ select con_id ||','||
         bctEnabled ||','||
         LogArchiveConfig ||','||
         ArchiveLagTarget ||','||
-        tablespaceCount ||','||
-        encryptedTablespaceCount ||','||
-        encryptedDataSizeMB ||','||
-        bigfileTablespaceCount ||','||
-        bigfileDataSizeMB ||','||
         logfileCount ||','||
         tempfileCount
  from rubrikDataCollection;
