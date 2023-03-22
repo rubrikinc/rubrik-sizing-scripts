@@ -227,9 +227,10 @@ WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance)
 and bigfileDataSizeMB is null;
 
--- 20220310 smcelhinney removing division by 100 from dailyChangeRate as it negatively skews change rate 
+-- 20220310 smcelhinney removing division by 100 from dailyChangeRate as it negatively skews change rate
+-- 20230321 updated change rate calculations to leverage cdb_segments to determine actual space USED instead of ALLOCATED -  smcelhinney
 UPDATE rubrikDataCollection rbk
-SET dailyChangeRate = (select dailyChangeRate from (select round((avg(redo_size)/sum(dbf.bytes)),8) dailyChangeRate from v$datafile dbf, (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
+SET dailyChangeRate = (select dailyChangeRate from (select round((avg(redo_size)/sum(sgmt.bytes)),8) dailyChangeRate from dba_segments sgmt, (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance);
 
@@ -253,8 +254,9 @@ SET tempfileCount = (select count(*) from v$tempfile)
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance);
 
+-- 20230322 - updating query to return dailyRedoSize in MB - smcelhinney
 UPDATE rubrikDataCollection rbk
-SET dailyRedoSize = (select dailyRedoSize/1024/1024 from (select avg(redo_size) dailyRedoSize from (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
+SET dailyRedoSize = (select dailyRedoSize from (select avg(redo_size/1024/1024) dailyRedoSize from (select trunc(completion_time) rundate, sum(blocks*block_size) redo_size from v$archived_log where first_time > sysdate - 7 group by trunc(completion_time))))
 WHERE instName = (select instance_name from v$instance)
 and hostName= (select host_name from v$instance);
 
@@ -283,11 +285,21 @@ set wrap off
 
 spool rbkDiscovery.csv append
 
-select con_id ||','|| conName ||','|| dbSizeMB ||','|| allocated_dbSizeMB ||','||
-        biggestBigfileMB ||','||
+-- 20230322 - reordering query output to logically group data - smcelhinney
+select con_id ||','||
+        conName ||','||
+        dbSizeMB ||','||
+        allocated_dbSizeMB ||','||
         dailyChangeRate ||','||
         dailyRedoSize ||','||
         datafileCount ||','||
+        tablespaceCount ||','||
+        encryptedTablespaceCount ||','||
+        encryptedDataSizeMB ||','||
+        biggestBigfileMB ||','||
+        bigfileTablespaceCount ||','||
+        bigfileDataSizeMB ||','||
+        blockSize ||','||
         hostName ||','||
         instName ||','||
         dbVersion ||','||
@@ -301,7 +313,6 @@ select con_id ||','|| conName ||','|| dbSizeMB ||','|| allocated_dbSizeMB ||','|
         spfile ||','||
         patchLevel ||','||
         cpuCount ||','||
-        blockSize ||','||
         racEnabled ||','||
         sgaMaxSize ||','||
         sgaTarget ||','||
@@ -313,13 +324,8 @@ select con_id ||','|| conName ||','|| dbSizeMB ||','|| allocated_dbSizeMB ||','|
         bctEnabled ||','||
         LogArchiveConfig ||','||
         ArchiveLagTarget ||','||
-        tablespaceCount ||','||
-        encryptedTablespaceCount ||','||
-        encryptedDataSizeMB ||','||
-        bigfileTablespaceCount ||','||
-        bigfileDataSizeMB ||','||
         logfileCount ||','||
-        tempfileCount 
+        tempfileCount
  from rubrikDataCollection;
 
 spool off
