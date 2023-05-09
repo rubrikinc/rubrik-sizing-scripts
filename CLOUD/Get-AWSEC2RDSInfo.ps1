@@ -231,8 +231,26 @@ foreach ($profile in $profiles) {
         "Platform" = $ec2.Platform
       }
 
+    Write-Host "Getting unattached EC2 volume info for region: $awsRegion" -foregroundcolor green
+    $ec2UnattachedVolumes = ""
+    $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $cred -region $awsRegion -Filter @{ Name="status"; Values="available" })
+    Write-Host "Found" $ec2UnattachedVolumes.Count "unattached EC2 volume(s)." -foregroundcolor green
+
+    foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
+      $volSize = 0
+
+      $ec2UnVolObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
         "VolumeId" = $ec2UnattachedVolume.VolumeId
+        "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+        "SizeGiB" = $ec2UnattachedVolume.Size
+        "SizeGB" = [math]::round($($ec2UnattachedVolume.Size * 1.073741824), 3)
+        "Region" = $awsRegion
+        "VolumeType" = $ec2UnattachedVolume.VolumeType
+      }
+
+      $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
     }
 
     Write-Host "Getting RDS info for region: $awsRegion" -foregroundcolor green
@@ -270,10 +288,11 @@ Write-Host
 Write-Host "Total # of RDS instances: $($rdsList.count)" -foregroundcolor green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB" -foregroundcolor green
 
-
 # Export to CSV
 Write-Host ""
+Write-Host "CSV file output to: $outputEc2Instance" -foregroundcolor green
+$ec2List | Export-CSV -path $outputEc2Instance
+Write-Host "CSV file output to: $outputEc2UnattachedVolume" -foregroundcolor green
+$ec2UnattachedVolList | Export-CSV -path $outputEc2UnattachedVolume
 Write-Host "CSV file output to: $outputRDS" -foregroundcolor green
 $rdsList | Export-CSV -path $outputRDS
-Write-Host "CSV file output to: $outputEc2Disk" -foregroundcolor green
-$ec2List | Export-CSV -path $outputEc2Disk
