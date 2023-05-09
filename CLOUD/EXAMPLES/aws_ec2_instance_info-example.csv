@@ -1,0 +1,6 @@
+"AwsAccountId","AwsAccountAlias","InstanceId","Name","Volumes","SizeGiB","SizeGB","Region","InstanceType","Platform"
+"012345678901","example1","i-01234567890abcdef","sample_ec2_1","2","140","150.324","us-west-2","m4.xlarge",
+"012345678901","example1","i-01234567890abcde1","sample_ec2_2","2","160","171.799","us-west-2","m5.4xlarge",
+"098765432109","example2","i-01234567890abcde2","sample_ec2_3","1","8","8.59","us-west-2","t2.micro",
+"098765432109","example2","i-01234567890abcde3","sample_ec2_4","2","160","171.799","us-west-2","m5.4xlarge",
+"098765432109","example2","i-01234567890abcde4","sample_ec2_5","1","10","10.737","us-west-2","m5.xlarge",

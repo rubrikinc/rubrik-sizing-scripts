@@ -20,7 +20,8 @@ script by running:
 
 "Install-Module AWSPowerShell.NetCore"
 
-Run in AWS CloudShell or use 'Set-AWSCredential' to set the AWS credentials to run with.
+    "Install-Module AWS.Tools.IdentityManagement"
+
 See: https://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-started.html
 
 This script uses AWS's stored Profiles to collect data from multiple AWS accounts. More information
@@ -187,14 +188,7 @@ foreach ($profile in $profiles) {
 
   
   Write-Host "Current identity:" -foregroundcolor green
-  if ($profile -ne "rk_current_profile_account") {
-    Write-Debug "Profile name is $profile and queryRegion name is $queryRegion"
-    $awsaccountinfo = Get-STSCallerIdentity  -ProfileName $profile -Region $queryRegion
-  }
-  else {
-    $awsaccountinfo = Get-STSCallerIdentity
-  }
-  $awsaccountinfo | format-table
+  $awsAccountAlias = Get-IAMAccountAlias -Credential $cred -Region $queryRegion
 
   # For all specified regions get the EC2 instance and RDS info
   foreach ($awsRegion in $awsRegions) {
@@ -212,7 +206,7 @@ foreach ($profile in $profiles) {
       }
 
       $ec2obj = [PSCustomObject] @{
-        "AwsAccountId" = $awsaccountinfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
         "InstanceId" = $ec2.InstanceId
         "Name" = $ec2.tags.name
         "Volumes" = $volumes.count
@@ -223,7 +217,8 @@ foreach ($profile in $profiles) {
         "Platform" = $ec2.Platform
       }
 
-      $ec2list += $ec2obj
+        "AwsAccountAlias" = $awsAccountAlias
+        "VolumeId" = $ec2UnattachedVolume.VolumeId
     }
 
     Write-Host "Getting RDS info for region: $awsRegion" -foregroundcolor green
@@ -231,7 +226,7 @@ foreach ($profile in $profiles) {
 
     foreach ($rds in $rdsDBs) {
       $rdsObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsaccountinfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
         "RDSInstance" = $rds.DBInstanceIdentifier
         "SizeGiB" = $rds.AllocatedStorage
         "SizeGB" = [math]::round($($rds.AllocatedStorage * 1.073741824), 3)
