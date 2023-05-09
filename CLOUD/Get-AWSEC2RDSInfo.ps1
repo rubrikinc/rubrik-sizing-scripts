@@ -1,4 +1,4 @@
-#requires -modules AWSPowerShell.NetCore
+#requires -modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement
 
 # https://build.rubrik.com
 
@@ -15,16 +15,30 @@ A summary of the total # of instances, # of volumes, RDS instance, and capacity 
 A CSV file will be exported with the details.
 You should copy/paste the console output to send along with the CSV.
 
-This script requires the AWSPowerShell.NetCore PowerShell module. Install the module prior to running this
-script by running:
+    Installation/Setup:
 
-"Install-Module AWSPowerShell.NetCore"
+    This script is designed to run either from a system with Powershell or from AWS CloudShell. When 
+    running this script from AWS CloudShell, after opening the AWS CloudShell, run "pwsh" to start 
+    PowerShell.  All needed Powershell modules are pre-installed in the AWS Cloud shell, so no
+    additional steps are required. 
 
+    If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
+    Install these modules prior to running this script locally by issuing the commands:
+
+    "Install-Module AWS.Tools.Common" 
+    "Install-Module AWS.Tools.EC2" 
+    "Install-Module AWS.Tools.S3"
+    "Install-Module AWS.Tools.RDS"
+    "Install-Module AWS.Tools.SecurityToken"
+    "Install-Module AWS.Tools.Organizations"
     "Install-Module AWS.Tools.IdentityManagement"
 
+    For both cases the source/default AWS credentials that the script will use to query AWS can be set 
+    by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
+    as the credentials that were used to login to the AWS console are the same as what the script will use.
 See: https://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-started.html
 
-This script uses AWS's stored Profiles to collect data from multiple AWS accounts. More information
+    This script also can use AWS's stored Profiles to collect data from multiple AWS accounts. More information
 about how to store multiple credentials in the AWS PowerShell tools can be found in AWS' documentation.
 see: https://docs.aws.amazon.com/powershell/latest/userguide/specifying-your-aws-credentials.html
 
