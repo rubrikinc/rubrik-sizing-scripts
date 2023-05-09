@@ -42,11 +42,28 @@ See: https://docs.aws.amazon.com/powershell/latest/userguide/pstools-getting-sta
 about how to store multiple credentials in the AWS PowerShell tools can be found in AWS' documentation.
 see: https://docs.aws.amazon.com/powershell/latest/userguide/specifying-your-aws-credentials.html
 
-Use the -AccountProfile name parameter to limit what accounts the script collects data from. Otherwise
-the script will collect data from every profile in the current users's configuration.
+    The following permissions policy is needed on the IAM entity that is being used to query each account.
+    This includes any cross account roles that are used to query multiple accounts:
 
-Use the -Regions parameter to limit what regions that the script collects data from. Otherwise it will
-collect data from all regions that are enabled for the specified AWS account.
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+          {
+              "Sid": "VisualEditor0",
+              "Effect": "Allow",
+              "Action": [
+                  "sts:AssumeRole",
+                  "organizations:ListAccounts",
+                  "ec2:DescribeInstances",
+                  "ec2:DescribeVolumes",
+                  "rds:DescribeDBInstances",
+                  "iam:ListAccountAliases"
+              ],
+              "Resource": "*"
+          }
+      ]
+    }
+
 
 For reference here are some common AWS region identifier based on geo:
 
