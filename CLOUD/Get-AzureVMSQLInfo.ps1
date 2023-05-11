@@ -1,4 +1,4 @@
-#requires -Modules Az.Accounts, Az.Compute, Az.Sql
+#requires -Modules Az.Accounts, Az.Compute, Az.Sql, Az.ResourceGraph
 
 <#
 .SYNOPSIS
@@ -35,6 +35,9 @@ A comma separated list of subscriptions to gather data from.
 .PARAMETER AllSubscriptions
 Flag to find all subscriptions in the tenant and download data.
 
+.PARAMETER ManagementGroups
+A comme separated list of Azure Management Groups to gather data from.
+
 .PARAMETER CurrentSubscription
 Flog to only gather information from the current subscription.
 
@@ -44,6 +47,7 @@ GitHub: stevenctong
 Date: 2/19/22
 Updated: 7/13/22
 Updated: 10/20/22
+Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1
@@ -56,6 +60,11 @@ Runs the script against subscriptions 'sub1' and 'sub2'.
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1 -AllSubscriptions
 Runs the script against all subscriptions in the tenant. 
+
+.EXAMPLE
+./Get-AzureVMSQLInfo.ps1 -ManagementGroups "Group1,Group2"
+Runs the script against Azure Management Groups 'Group1' and 'Group2'.
+
 
 .LINK
 https://build.rubrik.com
@@ -81,7 +90,11 @@ param (
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [switch]$CurrentSubscription
+  [switch]$CurrentSubscription,
+  [Parameter(ParameterSetName='ManagementGroups',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ManagementGroups
 
 )
 
@@ -104,15 +117,24 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 $vmList = @()
 $sqlList = @()
 
-# If no subscription is specified, only use the current subscription
-if ($AllSubscriptions -eq $true) {
-  $subs =  $(Get-AzContext -ListAvailable).subscription.name
-} 
-elseif ( $subscriptions -eq '' ) {
-  $subs = $context.subscription.name
-}
-else {
-  [string[]]$subs = $subscriptions.split(',')
+switch ($PSCmdlet.ParameterSetName) {
+  'UserSubscriptions' {
+    [string[]]$subs = $subscriptions.split(',')
+  }
+  'AllSubscriptions' {
+    $subs =  $(Get-AzContext -ListAvailable).subscription.name
+  } 
+  'CurrentSubscription' {
+    # If no subscription is specified, only use the current subscription
+    $subs = $context.subscription.name
+  }
+  'ManagementGroups' {
+    # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
+    foreach ($managmentGroup in $ManagementGroups) {
+#      $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup).DisplayName
+      $subs = $subs+(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managmentGroup).name
+    }
+  }
 }
 
 

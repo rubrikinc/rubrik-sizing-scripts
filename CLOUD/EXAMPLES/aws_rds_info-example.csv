@@ -1,11 +1,4 @@
-RDSInstance,SizeGiB,SizeGB,RDSInstanceARN,Region,InstanceType,Platform
-demo-sql-database,20,21.475,arn:aws:rds:us-east-1:773366712345:db:demo-sql-database,us-east-1,db.t3.medium,sqlserver-ex
-rr-poc-mysql,5,5.369,arn:aws:rds:us-east-1:773366712345:db:rr-poc-mysql,us-east-1,db.m6g.large,mysql
-rr-poc-oracle,20,21.475,arn:aws:rds:us-east-1:773366712345:db:rr-poc-oracle,us-east-1,db.m5.xlarge,oracle-ee
-rr-poc-postgres,5,5.369,arn:aws:rds:us-east-1:773366712345:db:rr-poc-postgres,us-east-1,db.m5.xlarge,postgres
-rr-poc-sql,20,21.475,arn:aws:rds:us-east-1:773366712345:db:rr-poc-sql,us-east-1,db.t3.small,sqlserver-ex
-stong-mariadb-1,100,107.374,arn:aws:rds:us-west-1:773366712345:db:stong-mariadb-1,us-west-1,db.m6g.large,mariadb
-stong-mysql-1,20,21.475,arn:aws:rds:us-west-1:773366712345:db:stong-mysql-1,us-west-1,db.m6g.large,mysql
-stong-oracle-1,20,21.475,arn:aws:rds:us-west-1:773366712345:db:stong-oracle-1,us-west-1,db.m5.xlarge,oracle-ee
-stong-postgresql-1,100,107.374,arn:aws:rds:us-west-1:773366712345:db:stong-postgresql-1,us-west-1,db.m6g.large,postgres
-stong-sql-1,48,51.54,arn:aws:rds:us-west-1:773366712345:db:stong-sql-1,us-west-1,db.m5.xlarge,sqlserver-se
+"AwsAccountId","AwsAccountAlias","RDSInstance","DBInstanceIdentifier","SizeGiB","SizeGB","Region","InstanceType","Platform"
+"012345678901","example1","example_db_1","example_db_1","1","1.074","us-west-2","db.r5.large","aurora-mysql"
+"012345678901","example1","example_db_2","example_db_2","100","107.374","us-west-2","db.m6i.large","mysql"
+"098765432109","example2","example_db_3","example_db_3","20","21.475","us-west-2","db.m6i.xlarge","sqlserver-web"

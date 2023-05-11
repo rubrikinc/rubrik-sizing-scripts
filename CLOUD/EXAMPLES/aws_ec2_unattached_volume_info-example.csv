@@ -1,0 +1,2 @@
+"AwsAccountId","AwsAccountAlias","VolumeId","Name","SizeGiB","SizeGB","Region","VolumeType"
+"012345678901","example1","vol-01234567890abcdef","example_unattached_volume1","5","5.369","us-west-2","gp2"

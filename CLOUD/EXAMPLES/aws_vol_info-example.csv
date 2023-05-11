@@ -1,6 +1,0 @@
-"InstanceId","Name","Volumes","SizeGiB","SizeGB","Region","InstanceType","Platform"
-"i-017d8068c1905c9a8",,"1","8","8.59","us-east-1","t2.micro",
-"i-0fd9406ea8c187b46",,"0","0","0","us-east-1","m5.xlarge",
-"i-00a2615c41ca1885b",,"1","30","32.212","us-west-1","t2.medium","Windows"
-"i-02b37097c9c1f6084",,"1","30","32.212","us-west-1","t2.medium","Windows"
-"i-0993cac2d50aa2bbf",,"1","8","8.59","us-west-1","t2.medium",
