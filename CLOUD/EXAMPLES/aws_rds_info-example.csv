@@ -1,4 +1,4 @@
 "AwsAccountId","AwsAccountAlias","RDSInstance","DBInstanceIdentifier","SizeGiB","SizeGB","Region","InstanceType","Platform"
-"012345678901","example1","example_db_1","example_db_1","1","1.074","us-west-2","db.r5.large","aurora-mysql"
-"012345678901","example1","example_db_2","example_db_2","100","107.374","us-west-2","db.m6i.large","mysql"
-"098765432109","example2","example_db_3","example_db_3","20","21.475","us-west-2","db.m6i.xlarge","sqlserver-web"
+"012345678901","account1","example_db_1","example_db_1","1","1.074","us-west-2","db.r5.large","aurora-mysql"
+"012345678901","account1","example_db_2","example_db_2","100","107.374","us-west-2","db.m6i.large","mysql"
+"098765432109","account2","example_db_3","example_db_3","20","21.475","us-west-2","db.m6i.xlarge","sqlserver-web"
