@@ -252,7 +252,7 @@ function getAWSData($cred) {
   }
 
   
-  Write-Host "Current identity:" -foregroundcolor green
+  Write-Host "Current identity:"  -ForegroundColor Green
   Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
   $awsAccountInfo = Get-STSCallerIdentity  -Credential $cred -Region $queryRegion
   $awsAccountInfo | format-table
@@ -260,10 +260,9 @@ function getAWSData($cred) {
 
   # For all specified regions get the EC2 instance and RDS info
   foreach ($awsRegion in $awsRegions) {
-    Write-Host "Getting EC2 instance info for region: $awsRegion" -foregroundcolor green
-    $ec2Instances = ""
+    Write-Host "Getting EC2 instance info for region: $awsRegion"  -ForegroundColor Green
     $ec2Instances = (Get-EC2Instance -Credential $cred -region $awsRegion).instances
-    Write-Host "Found" $ec2Instances.Count "EC2 instance(s)." -foregroundcolor green
+    Write-Host "Found" $ec2Instances.Count "EC2 instance(s)."  -ForegroundColor Green
 
     foreach ($ec2 in $ec2Instances) {
       $volSize = 0
@@ -291,10 +290,10 @@ function getAWSData($cred) {
       $ec2List.Add($ec2obj) | Out-Null
     }
 
-    Write-Host "Getting unattached EC2 volume info for region: $awsRegion" -foregroundcolor green
+    Write-Host "Getting unattached EC2 volume info for region: $awsRegion"  -ForegroundColor Green
     $ec2UnattachedVolumes = ""
     $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $cred -region $awsRegion -Filter @{ Name="status"; Values="available" })
-    Write-Host "Found" $ec2UnattachedVolumes.Count "unattached EC2 volume(s)." -foregroundcolor green
+    Write-Host "Found" $ec2UnattachedVolumes.Count "unattached EC2 volume(s)."  -ForegroundColor Green
 
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
       $volSize = 0
@@ -313,10 +312,10 @@ function getAWSData($cred) {
       $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
     }
     
-    Write-Host "Getting RDS info for region: $awsRegion" -foregroundcolor green
+    Write-Host "Getting RDS info for region: $awsRegion"  -ForegroundColor Green
     $rdsDBs = ""
     $rdsDBs = Get-RDSDBInstance -Credential $cred -region $awsRegion
-    Write-Host "Found" $rdsDBs.Count "RDS database(s)." -foregroundcolor green
+    Write-Host "Found" $rdsDBs.Count "RDS database(s)."  -ForegroundColor Green
 
     foreach ($rds in $rdsDBs) {
       $rdsObj = [PSCustomObject] @{
@@ -361,7 +360,7 @@ if ($PSCmdlet.ParameterSetName -eq 'DefaultProfile') {
     exit 1
   }
   Write-Host
-  Write-Host "Source Profile/Credential is: $caller" -foregroundcolor green
+  Write-Host "Source Profile/Credential is: $caller"  -ForegroundColor Green
   $cred = Get-AWSCredential
   getAWSData $cred
 }
@@ -370,7 +369,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   [string[]]$awsProfiles = $UserSpecifiedProfileNames.split(',')
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
-    Write-Host "Using profile: $awsProfile" -foregroundcolor green
+    Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     $cred = Get-AWSCredential -ProfileName $awsProfile
     getAWSData $cred
   }
@@ -379,7 +378,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
   $awsProfiles = $(Get-AWSCredential -ListProfileDetail).ProfileName
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
-    Write-Host "Using profile: $awsProfile" -foregroundcolor green
+    Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     Set-AWSCredential -ProfileName $awsProfile
     $cred = Get-AWSCredential -ProfileName $awsProfile
     getAWSData $cred
@@ -468,9 +467,19 @@ Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or
 
 # Export to CSV
 Write-Host ""
-Write-Host "CSV file output to: $outputEc2Instance" -foregroundcolor green
+Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
 $ec2List | Export-CSV -path $outputEc2Instance
-Write-Host "CSV file output to: $outputEc2UnattachedVolume" -foregroundcolor green
+Write-Host "CSV file output to: $outputEc2UnattachedVolume"  -ForegroundColor Green
 $ec2UnattachedVolList | Export-CSV -path $outputEc2UnattachedVolume
-Write-Host "CSV file output to: $outputRDS" -foregroundcolor green
+Write-Host "CSV file output to: $outputRDS"  -ForegroundColor Green
 $rdsList | Export-CSV -path $outputRDS
+Write-Host "Total # of EC2 instances: $($ec2list.count)"  -ForegroundColor Green
+Write-Host "Total # of volumes: $(($ec2list.volumes | Measure-Object -Sum).sum)"  -ForegroundColor Green
+Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB"  -ForegroundColor Green
+Write-Host
+
+Write-Host "Total # of EC2 unattached volumes: $($ec2UnattachedVolList.count)"  -ForegroundColor Green
+Write-Host "Total capacity of all unattached volumes: $ec2UnVolTotalGiB GiB or $ec2UnVolTotalGB GB"  -ForegroundColor Green
+
+Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
+Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB"  -ForegroundColor Green
