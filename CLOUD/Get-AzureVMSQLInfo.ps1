@@ -364,11 +364,13 @@ foreach ($sub in $subs) {
       }
     $azFSList += $azFSObj
     } #foreach ($azFS in $azFSs)
-  Write-Progress -Id 6 -Activity "Getting Storage Account info for: $($azSA.StorageAccountName)" -Completed
+    Write-Progress -Id 7 -Activity "Getting Azure File Share info for: $($azFS.Name)" -Completed
   } # foreach ($azSA in $azSAs)
+  Write-Progress -Id 6 -Activity "Getting Storage Account info for: $($azSA.StorageAccountName)" -Completed
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting info from subscription: $($sub.Name)" -Completed
 
+Write-Host "Calculating results and saving data..." -ForegroundColor Green
 # Reset subscription context back to original.
 Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
 
