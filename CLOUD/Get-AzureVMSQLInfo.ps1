@@ -48,6 +48,7 @@ Date: 2/19/22
 Updated: 7/13/22
 Updated: 10/20/22
 Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
+Updated: 07/18/23 - Fixed 25 subscription limit for -AllSubscriptions options - Damani
 
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1
@@ -118,21 +119,28 @@ $vmList = @()
 $sqlList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
-  'UserSubscriptions' {
-    [string[]]$subs = $subscriptions.split(',')
+    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    $subs = @()
+    foreach ($subscription in $Subscriptions.split(',')) {
+      write-host "Getting for sub: $($subscription)"
+      $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription")
+    }
   }
   'AllSubscriptions' {
-    $subs =  $(Get-AzContext -ListAvailable).subscription.name
+    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    $subs =  Get-AzSubscription
   } 
   'CurrentSubscription' {
     # If no subscription is specified, only use the current subscription
-    $subs = $context.subscription.name
+    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    $subs = Get-AzSubscription -SubscriptionName $context.subscription.name
   }
   'ManagementGroups' {
     # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
-    foreach ($managmentGroup in $ManagementGroups) {
-#      $subs = $subs+(Get-AzManagementGroupSubscription -GroupName $managmentGroup).DisplayName
-      $subs = $subs+(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managmentGroup).name
+    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    $subs = @()
+    foreach ($managementGroup in $ManagementGroups) {
+      $subs = $subs + $(Get-AzSubscription -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name)
     }
   }
 }
@@ -142,13 +150,22 @@ switch ($PSCmdlet.ParameterSetName) {
 foreach ($sub in $subs) {
   Write-Host "Getting VM info for subscription: $sub" -foregroundcolor green
 
-  $setContext = Set-AzContext -SubscriptionName $sub
-  if ($null -eq $setContext)
-  {
-    Write-Error "Error switching to subscription: $sub"
+  try {
+    Set-AzContext -SubscriptionName $sub.Name | Out-Null
+  } catch {
+    Write-Error "Error switching to subscription: $($sub.Name)"
+    Write-Error $_
     break
   }
 
+  #Get tenant name for subscription
+  try {
+    $tenant = Get-AzTenant -TenantId $($sub.TenantId)
+  } catch {
+    Write-Error "Error getting tenant information for: $($sub.TenantId))"
+    Write-Error $_
+    break
+  }
   # Get a list of all VMs in the current subscription
   $vms = Get-AzVM
 
