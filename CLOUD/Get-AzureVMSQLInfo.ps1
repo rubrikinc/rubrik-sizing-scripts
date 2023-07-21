@@ -93,7 +93,7 @@ https://github.com/stevenctong/rubrik
 #>
 
 param (
-  [CmdletBinding(DefaultParameterSetName = 'CurrentSubscription')]
+  [CmdletBinding(DefaultParameterSetName = 'AllSubscriptions')]
 
   # Choose to get info for only Azure VMs and/or SQL
   [Parameter(ParameterSetName='UserSubscriptions',
