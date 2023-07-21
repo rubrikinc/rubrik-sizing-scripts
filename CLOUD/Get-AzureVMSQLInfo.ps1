@@ -95,8 +95,11 @@ https://github.com/stevenctong/rubrik
 param (
   [CmdletBinding(DefaultParameterSetName = 'AllSubscriptions')]
 
-  # Choose to get info for only Azure VMs and/or SQL
-  [Parameter(ParameterSetName='UserSubscriptions',
+  [Parameter(ParameterSetName='CurrentSubscription',
+    Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$CurrentSubscription,
+  [Parameter(ParameterSetName='Subscriptions',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$Subscriptions = '',
@@ -105,10 +108,6 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [switch]$AllSubscriptions,
-  [Parameter(ParameterSetName='CurrentSubscription',
-    Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [switch]$CurrentSubscription,
   [Parameter(ParameterSetName='ManagementGroups',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -128,7 +127,7 @@ $outputVmDisk = "azure_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
-Write-Host "Current identity:" -foregroundcolor green
+Write-Host "Current identity:" -ForeGroundColor Green
 $context = Get-AzContext
 $context | Select-Object -Property Account,Environment,Tenant |  format-table
 
@@ -138,6 +137,7 @@ $sqlList = @()
 $azFSList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
+  'Subscriptions' {
     Write-Host "Gathering subscription information..." -ForegroundColor Green
     $subs = @()
     foreach ($subscription in $Subscriptions.split(',')) {
@@ -203,14 +203,12 @@ foreach ($sub in $subs) {
     $diskNum = 0
     $diskSizeGiB = 0
     # Loop through each OS disk on the VM and add to the disk info
-    foreach ($osDisk in $vm.StorageProfile.osdisk)
-    {
+    foreach ($osDisk in $vm.StorageProfile.osdisk) {
       $diskNum += 1
       $diskSizeGiB += [int]$osDisk.DiskSizeGB
     }
     # Loop through each data disk on the VM and add to the disk info
-    foreach ($dataDisk in $vm.StorageProfile.dataDisks)
-    {
+    foreach ($dataDisk in $vm.StorageProfile.dataDisks) {
       $diskNum += 1
       $diskSizeGiB += [int]$dataDisk.DiskSizeGB
     }
@@ -245,7 +243,7 @@ foreach ($sub in $subs) {
     } 
   }
   Write-Progress -Id 3 -Activity "Getting VM info for: $($vm.Name)" -Completed
-
+  
   # Get all Azure SQL servers
   $sqlServers = Get-AzSqlServer
 
@@ -257,39 +255,36 @@ foreach ($sub in $subs) {
     # Get all SQL DBs on the current SQL server
     $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName
     # Loop through each SQL DB on the current SQL server to gather size info
-    foreach ($sqlDB in $sqlDBs)
-    {
+    foreach ($sqlDB in $sqlDBs) {
       # Only count SQL DBs that are not SYSTEM DBs
-      if ($sqlDB.SkuName -ne 'System')
-      {
+      if ($sqlDB.SkuName -ne 'System') {
         # If SQL DB is in an Elastic Pool, count the max capacity of Elastic Pool and not the DB
-        if ($sqlDB.SkuName -eq 'ElasticPool')
-        {
+        if ($sqlDB.SkuName -eq 'ElasticPool') {
           # Get Elastic Pool info for the current DB
+          $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName
           # Loop through the pools on the current database.
           foreach ($pool in $pools) {
-          # Check if the current Elastic Pool already exists in the SQL list
-          $poolName = $sqlList | Where-Object -Property 'ElasticPool' -eq $pool.ElasticPoolName
-          # If Elastic Pool does not exist then add it
-          if ($null -eq $poolName)
-          {
-            $sqlObj = [PSCustomObject] @{
-              "Database" = ""
-              "Server" = ""
-              "ElasticPool" = $pool.ElasticPoolName
-              "ManagedInstance" = ""
-              "MaxSizeGiB" = [math]::round($($pool.MaxSizeBytes / 1073741824), 0)
-              "MaxSizeGB" = [math]::round($($pool.MaxSizeBytes / 1000000000), 3)
+            # Check if the current Elastic Pool already exists in the SQL list
+            $poolName = $sqlList | Where-Object -Property 'ElasticPool' -eq $pool.ElasticPoolName
+            # If Elastic Pool does not exist then add it
+            if ($null -eq $poolName) {
+              $sqlObj = [PSCustomObject] @{
+                "Database" = ""
+                "Server" = ""
+                "ElasticPool" = $pool.ElasticPoolName
+                "ManagedInstance" = ""
+                "MaxSizeGiB" = [math]::round($($pool.MaxSizeBytes / 1073741824), 0)
+                "MaxSizeGB" = [math]::round($($pool.MaxSizeBytes / 1000000000), 3)
                 "Subscription" = $sub.Name
                 "Tenant" = $tenant.Name
-              "Region" = $pool.Location
-              "ResourceGroup" = $pool.ResourceGroupName
-              "DatabaseID" = ""
-              "InstanceType" = $pool.SkuName
-              "Status" = $pool.Status
+                "Region" = $pool.Location
+                "ResourceGroup" = $pool.ResourceGroupName
+                "DatabaseID" = ""
+                "InstanceType" = $pool.SkuName
+                "Status" = $pool.Status
+              }
+              $sqlList += $sqlObj
             }
-            $sqlList += $sqlObj
-          }
           } #foreach ($pool in $pools)
         } else {
           $sqlObj = [PSCustomObject] @{
@@ -375,7 +370,7 @@ foreach ($sub in $subs) {
 Write-Progress -Id 1 -Activity "Getting info from subscription: $($sub.Name)" -Completed
 
 # Reset subscription context back to original.
-$setContext = Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
+Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
 
 $VMtotalGiB = ($vmList.SizeGiB | Measure-Object -Sum).sum
 $VMtotalGB = ($vmList.SizeGB | Measure-Object -Sum).sum
@@ -394,28 +389,31 @@ $azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
 Write-Host
 Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
 Write-Host
+Write-Host "Total # of Azure VMs: $($vmList.count)" -ForeGroundColor Green
+Write-Host "Total # of Managed Disks: $(($vmList.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
+Write-Host "Total capacity of all disks: $VMtotalGiB GiB or $VMtotalGB GB" -ForeGroundColor Green
 
 Write-Host
 Write-Host "Total # of Azure File Shares: $($azFSList.count)" -ForeGroundColor Green
 Write-Host "Total capacity of all Azure File shares: $azFSTotalGiB GiB or $azFSTotalGB GB" -ForeGroundColor Green
 
 Write-Host
-Write-Host "Total # of SQL DBs (independent): $(($sqlList.Database -ne '').count)" -foregroundcolor green
-Write-Host "Total # of SQL Elastic Pools: $(($sqlList.ElasticPool -ne '').count)" -foregroundcolor green
-Write-Host "Total # of SQL Managed Instances: $(($sqlList.ManagedInstance -ne '').count)" -foregroundcolor green
-Write-Host "Total capacity of all SQL DBs (independent): $DBtotalGiB GiB or $DBtotalGB GB" -foregroundcolor green
-Write-Host "Total capacity of all SQL Elastic Pools: $elasticTotalGiB GiB or $elasticTotalGB GB" -foregroundcolor green
-Write-Host "Total capacity of all SQL Managed Instances: $MITotalGiB GiB or $MITotalGB GB" -foregroundcolor green
+Write-Host "Total # of SQL DBs (independent): $(($sqlList.Database -ne '').count)" -ForeGroundColor Green
+Write-Host "Total # of SQL Elastic Pools: $(($sqlList.ElasticPool -ne '').count)" -ForeGroundColor Green
+Write-Host "Total # of SQL Managed Instances: $(($sqlList.ManagedInstance -ne '').count)" -ForeGroundColor Green
+Write-Host "Total capacity of all SQL DBs (independent): $DBtotalGiB GiB or $DBtotalGB GB" -ForeGroundColor Green
+Write-Host "Total capacity of all SQL Elastic Pools: $elasticTotalGiB GiB or $elasticTotalGB GB" -ForeGroundColor Green
+Write-Host "Total capacity of all SQL Managed Instances: $MITotalGiB GiB or $MITotalGB GB" -ForeGroundColor Green
 
 Write-Host
-Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $($sqlList.count)" -foregroundcolor green
-Write-Host "Total capacity of all SQL: $sqlTotalGiB GiB or $sqlTotalGB GB" -foregroundcolor green
+Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $($sqlList.count)" -ForeGroundColor Green
+Write-Host "Total capacity of all SQL: $sqlTotalGiB GiB or $sqlTotalGB GB" -ForeGroundColor Green
 
 # Export to CSV
 Write-Host ""
-Write-Host "VM CSV file output to: $outputVmDisk" -foregroundcolor green
+Write-Host "VM CSV file output to: $outputVmDisk" -ForeGroundColor Green
 $vmList | Export-CSV -path $outputVmDisk
-Write-Host "SQL CSV file output to: $outputSQL" -foregroundcolor green
+Write-Host "Azure SQL/MI CSV file output to: $outputSQL" -ForeGroundColor Green
 $sqlList | Export-CSV -path $outputSQL
 Write-Host "Azure File Share CSV file output to: $outputAzFS" -ForeGroundColor Green
 $azFSList | Export-CSV -path $outputAzFS
