@@ -53,6 +53,8 @@ Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 Updated: 07/18/23 - Fixed 25 subscription limit for -AllSubscriptions options - Damani
 Updated: 07/20/23 - Added support for Microsoft SQL in an Azure VM.
                     Added support for Azure Files.
+                    Added Support for Azure SQL Managed Instances
+                    Changed default collection to AllSubscriptions.
                     Improved status reporting
 
 
@@ -325,6 +327,7 @@ foreach ($sub in $subs) {
       "Status" = $MI.Status
     }
     $sqlList += $sqlObj
+  } # foreach ($MI in $sqlManagedInstances)
   Write-Progress -Id 5 -Activity "Getting Azure Managed Instance info for: $($MI.ManagedInstanceName)" -Completed
 
   # Get a list of all Azure Storage Accounts.
