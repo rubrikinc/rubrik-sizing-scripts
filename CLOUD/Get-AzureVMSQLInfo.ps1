@@ -57,6 +57,14 @@ Updated: 07/20/23 - Added support for Microsoft SQL in an Azure VM.
                     Changed default collection to AllSubscriptions.
                     Improved status reporting
 
+If you run this script and get an error message similar to this:
+
+./Get-AzureVMSQLInfo.ps1: The script 'Get-AzureVMSQLInfo.ps1' cannot be run because the following
+modules that are specified by the "#requires" statements of the script are missing: Az.ResourceGraph.
+
+Install the missing module by using the Install-Module command similar to this:
+
+Install-Module -Name Az.ResourceGraph
 
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1
