@@ -202,7 +202,8 @@ foreach ($sub in $subs) {
       "Disks" = $diskNum
       "SizeGiB" = $diskSizeGiB
       "SizeGB" = [math]::round($($diskSizeGiB * 1.073741824), 3)
-      "Subscription" = $sub
+      "Subscription" = $sub.Name
+      "Tenant" = $tenant.Name
       "Region" = $vm.Location
       "ResourceGroup" = $vm.ResourceGroupName
       "vmID" = $vm.vmID
@@ -247,7 +248,8 @@ foreach ($sub in $subs) {
               "ManagedInstance" = ""
               "MaxSizeGiB" = [math]::round($($pool.MaxSizeBytes / 1073741824), 0)
               "MaxSizeGB" = [math]::round($($pool.MaxSizeBytes / 1000000000), 3)
-              "Subscription" = $sub
+                "Subscription" = $sub.Name
+                "Tenant" = $tenant.Name
               "Region" = $pool.Location
               "ResourceGroup" = $pool.ResourceGroupName
               "DatabaseID" = ""
@@ -264,7 +266,8 @@ foreach ($sub in $subs) {
             "ManagedInstance" = ""
             "MaxSizeGiB" = [math]::round($($sqlDB.MaxSizeBytes / 1073741824), 0)
             "MaxSizeGB" = [math]::round($($sqlDB.MaxSizeBytes / 1000000000), 3)
-            "Subscription" = $sub
+            "Subscription" = $sub.Name
+            "Tenant" = $tenant.Name
             "Region" = $sqlDB.Location
             "ResourceGroup" = $sqlDB.ResourceGroupName
             "DatabaseID" = $sqlDB.DatabaseId
@@ -293,7 +296,8 @@ foreach ($sub in $subs) {
       "ManagedInstance" = $MI.ManagedInstanceName
       "MaxSizeGiB" = $MI.StorageSizeInGB
       "MaxSizeGB" = [math]::round($($MI.StorageSizeInGB * 1.073741824), 3)
-      "Subscription" = $sub
+      "Subscription" = $sub.Name
+      "Tenant" = $tenant.Name
       "Region" = $MI.Location
       "ResourceGroup" = $MI.ResourceGroupName
       "DatabaseID" = ""
