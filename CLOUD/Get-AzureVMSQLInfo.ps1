@@ -49,6 +49,8 @@ Updated: 7/13/22
 Updated: 10/20/22
 Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 Updated: 07/18/23 - Fixed 25 subscription limit for -AllSubscriptions options - Damani
+                    Improved status reporting
+
 
 .EXAMPLE
 ./Get-AzureVMSQLInfo.ps1
@@ -147,8 +149,12 @@ switch ($PSCmdlet.ParameterSetName) {
 
 
 # Get Azure info for all specified subscriptions
+$subNum=1
+$processedSubs=0
+Write-Host "Found $($subs.Count) subscriptions to process." -ForeGroundColor Green
 foreach ($sub in $subs) {
-  Write-Host "Getting VM info for subscription: $sub" -foregroundcolor green
+  Write-Progress -Id 1 -Activity "Getting info from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  $subNum++
 
   try {
     Set-AzContext -SubscriptionName $sub.Name | Out-Null
@@ -166,12 +172,16 @@ foreach ($sub in $subs) {
     Write-Error $_
     break
   }
+  $processedSubs++
+
   # Get a list of all VMs in the current subscription
   $vms = Get-AzVM
 
   # Loop through each VM to get all disk info
-  foreach ($vm in $vms)
-  {
+  $vmNum=1
+  foreach ($vm in $vms) {
+    Write-Progress -Id 2 -Activity "Getting VM info for: $($vm.Name)" -PercentComplete $(($vmNum/$vms.Count)*100) -ParentId 1 -Status "VM $($vmNum) of $($vms.Count)"
+    $vmNum++
     # Count of and size of all disks attached to the VM
     $diskNum = 0
     $diskSizeGiB = 0
@@ -201,13 +211,17 @@ foreach ($sub in $subs) {
     }
     $vmList += $vmObj
   }
+  Write-Progress -Id 2 -Activity "Getting VM info for: $($vm.Name)" -Completed
+
 
   # Get all Azure SQL servers
   $sqlServers = Get-AzSqlServer
 
   # Loop through each SQL server to get size info
-  foreach ($sqlServer in $sqlServers)
-  {
+  $sqlServerNum=1
+  foreach ($sqlServer in $sqlServers) {
+    Write-Progress -Id 4 -Activity "Getting Azure SQL info for SQL Server: $($sqlServer.ServerName)" -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1 -Status "Azure SQL Server $($sqlServerNum) of $($sqlServers.Count)"
+    $sqlServerNum++
     # Get all SQL DBs on the current SQL server
     $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName
     # Loop through each SQL DB on the current SQL server to gather size info
@@ -262,13 +276,16 @@ foreach ($sub in $subs) {
       }  # if ($sqlDB.SkuName -ne 'System')
     }  # foreach ($sqlDB in $sqlDBs)
   }  # foreach ($sqlServer in $sqlServers)
+  Write-Progress -Id 4 -Activity "Getting Azure SQL info for SQL Server: $($sqlServer.ServerName)" -Completed
 
   # Get all Azure Managed Instances
   $sqlManagedInstances = Get-AzSqlInstance
 
   # Loop through each SQL Managed Instances to get size info
-  foreach ($MI in $sqlManagedInstances)
-  {
+  $managedInstanceNum=1
+  foreach ($MI in $sqlManagedInstances) {
+    Write-Progress -Id 5 -Activity "Getting Azure Managed Instance info for: $($MI.ManagedInstanceName)" -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
+    $managedInstanceNum++
     $sqlObj = [PSCustomObject] @{
       "Database" = ""
       "Server" = ""
@@ -284,8 +301,7 @@ foreach ($sub in $subs) {
       "Status" = $MI.Status
     }
     $sqlList += $sqlObj
-  }  # foreach ($MI in $sqlManagedInstances)
-}  # foreach ($sub in $subs) {
+  Write-Progress -Id 5 -Activity "Getting Azure Managed Instance info for: $($MI.ManagedInstanceName)" -Completed
 
 # Reset subscription context back to original.
 $setContext = Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
