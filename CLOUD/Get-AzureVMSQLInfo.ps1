@@ -14,6 +14,8 @@ This script requires the Azure Powershell module. That module can be installed b
 If not already done use the `Connect-AzAccount` command to connect to a specific Azure Tenant to report on.
 
 The script gathers all Azure VMs and associated Managed Disk information.
+The script will try to determine if MS SQL is running in the Azure VMs. This depends on the Azure SQL Server
+IaaS Agent being installed and running in the VM. 
 The script also gathers all Azure SQL DB (independent), Elastic Pool, and Managed Instance size information.
 
 For SQL, the script will gather the Max Size for each SQL DB that is provisioned on an Azure SQL server.
@@ -49,6 +51,7 @@ Updated: 7/13/22
 Updated: 10/20/22
 Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 Updated: 07/18/23 - Fixed 25 subscription limit for -AllSubscriptions options - Damani
+Updated: 07/20/23 - Added support for Microsoft SQL in an Azure VM.
                     Improved status reporting
 
 
@@ -209,11 +212,25 @@ foreach ($sub in $subs) {
       "vmID" = $vm.vmID
       "InstanceType" = $vm.HardwareProfile.vmSize
       "Status" = $vm.StatusCode
+      "HasMSSQL" = "No"
     }
     $vmList += $vmObj
   }
   Write-Progress -Id 2 -Activity "Getting VM info for: $($vm.Name)" -Completed
 
+  # Get a list of all VMs that have MSSQL in them.
+  $sqlVms = Get-AzSQLVM
+
+  # Loop through each SQL VM to and update VM status
+  $sqlVmNum=1
+  foreach ($sqlVm in $sqlVms) {
+    Write-Progress -Id 3 -Activity "Getting SQL VM info for: $($sqlVm.Name)" -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
+    $sqlVmNum++
+    if ($vmToUpdate = $vmList | Where-Object { $_.Name -eq $sqlVm.Name }) {
+      $vmToUpdate.HasMSSQL = "Yes"
+    } 
+  }
+  Write-Progress -Id 3 -Activity "Getting VM info for: $($vm.Name)" -Completed
 
   # Get all Azure SQL servers
   $sqlServers = Get-AzSqlServer
