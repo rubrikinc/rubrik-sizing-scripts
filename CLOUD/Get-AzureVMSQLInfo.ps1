@@ -52,6 +52,7 @@ Updated: 10/20/22
 Updated: 01/25/23 - Added support for Azure Mange Groups - Damani
 Updated: 07/18/23 - Fixed 25 subscription limit for -AllSubscriptions options - Damani
 Updated: 07/20/23 - Added support for Microsoft SQL in an Azure VM.
+                    Added support for Azure Files.
                     Improved status reporting
 
 
@@ -114,6 +115,7 @@ $date = Get-Date
 # Filenames of the CSVs to output
 $outputVmDisk = "azure_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
 Write-Host "Current identity:" -foregroundcolor green
 $context = Get-AzContext
@@ -122,6 +124,7 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 # Contains list of VMs and SQL DBs with capacity info
 $vmList = @()
 $sqlList = @()
+$azFSList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
     Write-Host "Gathering subscription information..." -ForegroundColor Green
@@ -324,6 +327,39 @@ foreach ($sub in $subs) {
     $sqlList += $sqlObj
   Write-Progress -Id 5 -Activity "Getting Azure Managed Instance info for: $($MI.ManagedInstanceName)" -Completed
 
+  # Get a list of all Azure Storage Accounts.
+  $azSAs = Get-AzStorageAccount
+
+  # Loop through each Azure Storage Account and gather statistics
+  $azSANum=1
+  foreach ($azSA in $azSAs) {
+    Write-Progress -Id 6 -Activity "Getting Storage Account info for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
+    $azSANum++
+    $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
+    $azFSs = Get-AzStorageShare -Context $azSAContext
+    $azFSNum = 1
+    # Loop through each Azure File Share and record capacities    
+    foreach ($azFS in $azFSs) {
+      Write-Progress -Id 7 -Activity "Getting Azure File Share info for: $($azFS.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
+      $azFSClient = $azFS.ShareClient
+      $azFSStats = $azFSClient.GetStatistics()
+      $azFSObj = [PSCustomObject] @{
+        "Name" = $azFS.Name
+        "Tenant" = $tenant.Name
+        "Region" = $azSA.PrimaryLocation
+        "ResourceGroup" = $azSA.ResourceGroupName
+        "QuotaGiB" = $azFS.Quota
+        "UsedCapacityBytes" = $azFSStats.Value.ShareUsageInBytes
+        "UsedCapacityGiB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0)
+        "UsedCapacityGB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3)        
+      }
+    $azFSList += $azFSObj
+    } #foreach ($azFS in $azFSs)
+  Write-Progress -Id 6 -Activity "Getting Storage Account info for: $($azSA.StorageAccountName)" -Completed
+  } # foreach ($azSA in $azSAs)
+} # foreach ($sub in $subs)
+Write-Progress -Id 1 -Activity "Getting info from subscription: $($sub.Name)" -Completed
+
 # Reset subscription context back to original.
 $setContext = Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
 
@@ -338,11 +374,13 @@ $elasticTotalGiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').Max
 $elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
 $MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
 $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+$azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
+$azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
+
 
 Write-Host
-Write-Host "Total # of Azure VMs: $($vmList.count)" -foregroundcolor green
-Write-Host "Total # of Managed Disks: $(($vmList.Disks | Measure-Object -Sum).sum)" -foregroundcolor green
-Write-Host "Total capacity of all disks: $VMtotalGiB GiB or $VMtotalGB GB" -foregroundcolor green
+Write-Host "Total # of Azure File Shares: $($azFSList.count)" -ForeGroundColor Green
+Write-Host "Total capacity of all Azure File shares: $azFSTotalGiB GiB or $azFSTotalGB GB" -ForeGroundColor Green
 
 Write-Host
 Write-Host "Total # of SQL DBs (independent): $(($sqlList.Database -ne '').count)" -foregroundcolor green
@@ -362,6 +400,8 @@ Write-Host "VM CSV file output to: $outputVmDisk" -foregroundcolor green
 $vmList | Export-CSV -path $outputVmDisk
 Write-Host "SQL CSV file output to: $outputSQL" -foregroundcolor green
 $sqlList | Export-CSV -path $outputSQL
+Write-Host "Azure File Share CSV file output to: $outputAzFS" -ForeGroundColor Green
+$azFSList | Export-CSV -path $outputAzFS
 
 if ($azConfig.Value -eq $true) {
   Update-AzConfig -DisplayBreakingChangeWarning $true  | Out-Null
