@@ -266,7 +266,8 @@ foreach ($sub in $subs) {
         if ($sqlDB.SkuName -eq 'ElasticPool')
         {
           # Get Elastic Pool info for the current DB
-          $pool = Get-AzSqlElasticPool -servername $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName
+          # Loop through the pools on the current database.
+          foreach ($pool in $pools) {
           # Check if the current Elastic Pool already exists in the SQL list
           $poolName = $sqlList | Where-Object -Property 'ElasticPool' -eq $pool.ElasticPoolName
           # If Elastic Pool does not exist then add it
@@ -289,6 +290,7 @@ foreach ($sub in $subs) {
             }
             $sqlList += $sqlObj
           }
+          } #foreach ($pool in $pools)
         } else {
           $sqlObj = [PSCustomObject] @{
             "Database" = $sqlDB.DatabaseName
