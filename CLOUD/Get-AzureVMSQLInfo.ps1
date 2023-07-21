@@ -377,6 +377,9 @@ $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSi
 $azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
 $azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
 
+Write-Host
+Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
+Write-Host
 
 Write-Host
 Write-Host "Total # of Azure File Shares: $($azFSList.count)" -ForeGroundColor Green
