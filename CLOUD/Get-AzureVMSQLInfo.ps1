@@ -12,6 +12,7 @@ If no subscription is specified then it will gather info against the current sub
 
 This script requires the Azure Powershell module. That module can be installed by running  `Install-Module Az`
 If not already done use the `Connect-AzAccount` command to connect to a specific Azure Tenant to report on.
+This script works on one Azure Tenant per run.
 
 The script gathers all Azure VMs and associated Managed Disk information.
 The script will try to determine if MS SQL is running in the Azure VMs. This depends on the Azure SQL Server
