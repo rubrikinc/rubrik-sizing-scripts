@@ -141,6 +141,7 @@ switch ($PSCmdlet.ParameterSetName) {
     Write-Host "Gathering subscription information..." -ForegroundColor Green
     $subs = @()
     foreach ($subscription in $Subscriptions.split(',')) {
+      write-host "Getting for subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
       } catch {
@@ -310,6 +311,7 @@ foreach ($sub in $subs) {
       if ($sqlDB.SkuName -ne 'System') {
         # If SQL DB is in an Elastic Pool, count the max capacity of Elastic Pool and not the DB
         if ($sqlDB.SkuName -eq 'ElasticPool') {
+          # Get Elastic Pool information for the current DB
           try {
             $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
           }
