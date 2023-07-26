@@ -354,7 +354,9 @@ foreach ($sub in $subs) {
       $azFSStats = $azFSClient.GetStatistics()
       $azFSObj = [PSCustomObject] @{
         "Name" = $azFS.Name
+        "StorageAccount" = $azSA.StorageAccountName
         "Tenant" = $tenant.Name
+        "Subscription" = $sub.Name
         "Region" = $azSA.PrimaryLocation
         "ResourceGroup" = $azSA.ResourceGroupName
         "QuotaGiB" = $azFS.Quota
