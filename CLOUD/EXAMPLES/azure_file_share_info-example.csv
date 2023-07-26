@@ -1,4 +1,4 @@
-"Name","Tenant","Region","ResourceGroup","QuotaGiB","UsedCapacityBytes","UsedCapacityGiB","UsedCapacityGB"
-"azure-fs-1","tenant-1","eastus","cloud-shell-storage-eastus","6","5368709120","5","5.369"
-"azure-fs-2","tenant-1","westus2","resource-group-1","5120","1288764574208","1200","1288.765"
-"azure-fs-3","tenant-1","westus2","resource-group-1","5120","10346496","0","0.01"
+"Name","StorageAccount","Tenant","Subscription","Region","ResourceGroup","QuotaGiB","UsedCapacityBytes","UsedCapacityGiB","UsedCapacityGB"
+"azure-file-share-1","storage-account-1","tenant-1","subscription-1","eastus2","resoruce-group-1","5120","0","0","0"
+"azure-file-share-2","storage-account-2","tenant-1","subscription-1","westus","cloud-shell-storage-westus","6","5368709120","5","5.369"
+"azure-file-share-3","storage-account-3","tenant-1","subscription-2","westus","cloud-shell-storage-westus","6","5368709120","5","5.369"
