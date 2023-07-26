@@ -141,25 +141,50 @@ switch ($PSCmdlet.ParameterSetName) {
     Write-Host "Gathering subscription information..." -ForegroundColor Green
     $subs = @()
     foreach ($subscription in $Subscriptions.split(',')) {
-      write-host "Getting for sub: $($subscription)"
-      $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription")
+      try {
+        $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
+      } catch {
+        Write-Error "Unable to get subscription information for subscription: $($subscription)"
+        $_
+        Continue
+      }
     }
   }
   'AllSubscriptions' {
     Write-Host "Gathering subscription information..." -ForegroundColor Green
-    $subs =  Get-AzSubscription
+    try {
+      $subs =  Get-AzSubscription -ErrorAction Stop
+    } catch {
+      Write-Error "Unable to get subscription information from Tenant: $($context.Tenant.Id)"
+      $_
+      Write-Host "Exiting..." -ForegroundColor Green
+      exit      
+    }
   } 
   'CurrentSubscription' {
     # If no subscription is specified, only use the current subscription
     Write-Host "Gathering subscription information..." -ForegroundColor Green
-    $subs = Get-AzSubscription -SubscriptionName $context.subscription.name
+    try {
+      $subs = Get-AzSubscription -SubscriptionName $context.Subscription.Name -ErrorAction Stop
+    } catch {
+      Write-Error "Unable to get subscription information from current subscription: $($context.Subscription.Name)"
+      $_
+      Write-Host "Exiting..." -ForegroundColor Green
+      exit
+    }
   }
   'ManagementGroups' {
     # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
     Write-Host "Gathering subscription information..." -ForegroundColor Green
     $subs = @()
     foreach ($managementGroup in $ManagementGroups) {
-      $subs = $subs + $(Get-AzSubscription -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name)
+      try {
+        $subs = $subs + $(Get-AzSubscription -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
+      } catch {
+        Write-Error "Unable to gather subscriptions from Management Group: $($managementGroup)"
+        $_
+        Continue
+      }
     }
   }
 }
@@ -174,25 +199,31 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name | Out-Null
+    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
     Write-Error $_
-    break
+    Continue
   }
 
   #Get tenant name for subscription
   try {
-    $tenant = Get-AzTenant -TenantId $($sub.TenantId)
+    $tenant = Get-AzTenant -TenantId $($sub.TenantId) -ErrorAction Stop
   } catch {
     Write-Error "Error getting tenant information for: $($sub.TenantId))"
     Write-Error $_
-    break
+    Continue
   }
   $processedSubs++
 
   # Get a list of all VMs in the current subscription
-  $vms = Get-AzVM
+  try {
+    $vms = Get-AzVM -ErrorAction Stop
+  } catch {
+    Write-Error "Unable to get VMs for Subscription: $($sub.Name)"
+    $_
+    Continue
+  }
 
   # Loop through each VM to get all disk info
   $vmNum=1
@@ -231,7 +262,13 @@ foreach ($sub in $subs) {
   Write-Progress -Id 2 -Activity "Getting VM info for: $($vm.Name)" -Completed
 
   # Get a list of all VMs that have MSSQL in them.
+  try {
   $sqlVms = Get-AzSQLVM
+  } catch {
+    Write-Error "Unable to collect SQL VM information for subscription: $($sub.Name)"
+    $_
+    Continue
+  }
 
   # Loop through each SQL VM to and update VM status
   $sqlVmNum=1
@@ -245,7 +282,13 @@ foreach ($sub in $subs) {
   Write-Progress -Id 3 -Activity "Getting VM info for: $($vm.Name)" -Completed
   
   # Get all Azure SQL servers
-  $sqlServers = Get-AzSqlServer
+  try {
+    $sqlServers = Get-AzSqlServer -ErrorAction Stop
+  } catch {
+    Write-Error "Unable to collect Azure SQL Server information for subscription: $($sub.Name)"
+    $_
+    Continue    
+  }
 
   # Loop through each SQL server to get size info
   $sqlServerNum=1
@@ -253,15 +296,28 @@ foreach ($sub in $subs) {
     Write-Progress -Id 4 -Activity "Getting Azure SQL info for SQL Server: $($sqlServer.ServerName)" -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1 -Status "Azure SQL Server $($sqlServerNum) of $($sqlServers.Count)"
     $sqlServerNum++
     # Get all SQL DBs on the current SQL server
-    $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName
+    try {
+      $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName -ErrorAction Stop
+    }
+    catch {
+      Write-Error "Unable to collect Azure SQL Server database information for Azure SQL Database server: $($sqlServer.ServerName)"
+      $_
+      Continue    
+    }
     # Loop through each SQL DB on the current SQL server to gather size info
     foreach ($sqlDB in $sqlDBs) {
       # Only count SQL DBs that are not SYSTEM DBs
       if ($sqlDB.SkuName -ne 'System') {
         # If SQL DB is in an Elastic Pool, count the max capacity of Elastic Pool and not the DB
         if ($sqlDB.SkuName -eq 'ElasticPool') {
-          # Get Elastic Pool info for the current DB
-          $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName
+          try {
+            $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+          }
+          catch {
+            Write-Error "Unable to collect Azure SQL Server Elastic Pool information for Azure SQL Database server: $($sqlServer.ServerName)"
+            $_
+            Continue    
+          }
           # Loop through the pools on the current database.
           foreach ($pool in $pools) {
             # Check if the current Elastic Pool already exists in the SQL list
@@ -310,7 +366,13 @@ foreach ($sub in $subs) {
   Write-Progress -Id 4 -Activity "Getting Azure SQL info for SQL Server: $($sqlServer.ServerName)" -Completed
 
   # Get all Azure Managed Instances
-  $sqlManagedInstances = Get-AzSqlInstance
+  try {
+    $sqlManagedInstances = Get-AzSqlInstance -ErrorAction Stop
+  } catch {
+    Write-Error "Unable to collect Azure Manged Instance information for subscription: $($sub.Name)"
+    $_
+    Continue    
+  }
 
   # Loop through each SQL Managed Instances to get size info
   $managedInstanceNum=1
@@ -337,7 +399,13 @@ foreach ($sub in $subs) {
   Write-Progress -Id 5 -Activity "Getting Azure Managed Instance info for: $($MI.ManagedInstanceName)" -Completed
 
   # Get a list of all Azure Storage Accounts.
-  $azSAs = Get-AzStorageAccount
+  try {
+    $azSAs = Get-AzStorageAccount -ErrorAction Stop
+  } catch {
+    Write-Error "Unable to collect Azure Storage Account information for subscription: $($sub.Name)"
+    $_
+    Continue    
+  }
 
   # Loop through each Azure Storage Account and gather statistics
   $azSANum=1
@@ -345,7 +413,14 @@ foreach ($sub in $subs) {
     Write-Progress -Id 6 -Activity "Getting Storage Account info for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
     $azSANum++
     $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
-    $azFSs = Get-AzStorageShare -Context $azSAContext
+    try {
+      $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Stop
+    }
+    catch {
+      Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName)"
+      $_
+      Continue
+    }
     $azFSNum = 1
     # Loop through each Azure File Share and record capacities    
     foreach ($azFS in $azFSs) {
@@ -374,7 +449,12 @@ Write-Progress -Id 1 -Activity "Getting info from subscription: $($sub.Name)" -C
 
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 # Reset subscription context back to original.
-Set-AzContext -SubscriptionName $context.subscription.Name | Out-Null
+try {
+  Set-AzContext -SubscriptionName $context.subscription.Name -ErrorAction Stop | Out-Null
+} catch {
+  Write-Error "Unable to reset AzContext back to original context."
+  $_
+}
 
 $VMtotalGiB = ($vmList.SizeGiB | Measure-Object -Sum).sum
 $VMtotalGB = ($vmList.SizeGB | Measure-Object -Sum).sum
@@ -423,5 +503,10 @@ Write-Host "Azure File Share CSV file output to: $outputAzFS" -ForeGroundColor G
 $azFSList | Export-CSV -path $outputAzFS
 
 if ($azConfig.Value -eq $true) {
-  Update-AzConfig -DisplayBreakingChangeWarning $true  | Out-Null
+  try {
+    Update-AzConfig -DisplayBreakingChangeWarning $true  -ErrorAction Stop | Out-Null
+  } catch {
+    Write-Error "Unable to rest display of breaking changes."
+    $_
+  }
 }
