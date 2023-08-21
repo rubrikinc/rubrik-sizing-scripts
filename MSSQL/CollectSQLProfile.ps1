@@ -17,6 +17,7 @@
     Name:       MSSQL Database Sizing Scripts for Rubrik
     Author:     Mike Fal, Chris Lumnah    
 #>
+#requires -Modules SqlServer
 [cmdletbinding()]
 param(
     [Parameter(ParameterSetName='List Of Instances')]
@@ -32,9 +33,8 @@ param(
     $Credential = [System.Management.Automation.PSCredential]::Empty
 )
 BEGIN{
+    Import-Module SqlServer
     if(Get-Module -ListAvailable SqlServer){Import-Module SqlServer}
-    # else{Import-Module SQLPS -DisableNameChecking}
-
     $queries = Get-ChildItem $QueryPath -Filter "*.sql"
     $queries | ForEach-Object {$_ | Add-Member -MemberType NoteProperty -Name FileName -Value "$($_.Name.Replace('.sql',''))-$(Get-Date -Format 'yyyyMMddHHmm').csv"}
     $header = $true
@@ -46,28 +46,30 @@ BEGIN{
 }
 PROCESS{
     foreach($i in $SQLInstance){
-        $svr = new-object "Microsoft.SqlServer.Management.Smo.Server" $i;
+        # $svr = new-object "Microsoft.SqlServer.Management.Smo.Server" $i;
         if (![string]::IsNullOrEmpty($Credential.UserName)){
-            $svr.ConnectionContext.LoginSecure = $false
-            $svr.ConnectionContext.set_Login($Credential.UserName)
-            $svr.ConnectionContext.set_SecurePassword($Credential.Password)
+            $TestSQLConnection = Get-SQLInstance -ServerInstance $i -Credential $Credential  -TrustServerCertificate -ErrorAction SilentlyContinue
+        }else{  
+            $TestSQLConnection = Get-SQLInstance -ServerInstance $i  -TrustServerCertificate -ErrorAction SilentlyContinue
         }
-        $svr.ConnectionContext.connectTimeout = 4
-        if ([string]::IsNullOrEmpty($svr.Edition)){
+        
+        if ([string]::IsNullOrEmpty($TestSQLConnection.DisplayName)){
             Write-Warning "!!!!!!! Can not connect to the SQL Service on: $i !!!!!!!"
             $i | Out-File -FilePath (Join-Path -Path $OutPath -ChildPath "SizingQuery-ServerWeCouldNotConnectTo.txt") -Append
             continue
         }
+        
         if($Anonymize){
             $serverid = [guid]::NewGuid()
         }
+        
         foreach($q in $queries){
             $sql = (Get-Content $q) -join "`n"
             if($Anonymize){$sql = $sql.Replace("@@SERVERNAME","'$serverid'")}
             $OutFile = Join-Path -Path $OutPath -ChildPath $q.filename
 
             Write-Verbose "Collecting data from $i"
-            $output = Invoke-SqlCmd -ServerInstance "$i" -Database master -Query "$sql" -Credential $Credential
+            $output = Invoke-SqlCmd -ServerInstance "$i" -Database master -Query "$sql" -Credential $Credential -TrustServerCertificate
 
             if($header -eq $true){
                 $output | ConvertTo-Csv -Delimiter '|' -NoTypeInformation | Out-File $OutFile -Append
@@ -78,6 +80,6 @@ PROCESS{
             $output = ""
         }
         $header = $false
-    }
+    }   
 }
 END{}
