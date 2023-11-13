@@ -1,4 +1,5 @@
-#requires -modules GoogleCloud
+#requires -Version 7.0
+#requires -Modules GoogleCloud
 
 # https://build.rubrik.com
 
