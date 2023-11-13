@@ -587,6 +587,9 @@ foreach ($sub in $subs) {
       $azFSObj = [PSCustomObject] @{
         "Name" = $azFS.Name
         "StorageAccount" = $azSA.StorageAccountName
+            "StorageAccountType" = $azSA.Kind
+            "StorageAccountSkuName" = $azSA.Sku.Name
+            "StorageAccountAccessTier" = $azSA.AccessTier
         "Tenant" = $tenant.Name
         "Subscription" = $sub.Name
         "Region" = $azSA.PrimaryLocation
