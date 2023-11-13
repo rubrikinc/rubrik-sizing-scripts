@@ -736,52 +736,6 @@ try {
   $_
 }
 
-$VMtotalGiB = ($vmList.SizeGiB | Measure-Object -Sum).sum
-$VMtotalGB = ($vmList.SizeGB | Measure-Object -Sum).sum
-
-$sqlTotalGiB = ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
-$sqlTotalGB = ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
-$DBtotalGiB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
-$DBtotalGB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGB | Measure-Object -Sum).sum
-$elasticTotalGiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
-$elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
-$MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
-$MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
-$azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
-$azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
-
-Write-Host
-Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
-Write-Host
-Write-Host "Total # of Azure VMs: $($vmList.count)" -ForeGroundColor Green
-Write-Host "Total # of Managed Disks: $(($vmList.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
-Write-Host "Total capacity of all disks: $VMtotalGiB GiB or $VMtotalGB GB" -ForeGroundColor Green
-
-Write-Host
-Write-Host "Total # of Azure File Shares: $($azFSList.count)" -ForeGroundColor Green
-Write-Host "Total capacity of all Azure File shares: $azFSTotalGiB GiB or $azFSTotalGB GB" -ForeGroundColor Green
-
-Write-Host
-Write-Host "Total # of SQL DBs (independent): $(($sqlList.Database -ne '').count)" -ForeGroundColor Green
-Write-Host "Total # of SQL Elastic Pools: $(($sqlList.ElasticPool -ne '').count)" -ForeGroundColor Green
-Write-Host "Total # of SQL Managed Instances: $(($sqlList.ManagedInstance -ne '').count)" -ForeGroundColor Green
-Write-Host "Total capacity of all SQL DBs (independent): $DBtotalGiB GiB or $DBtotalGB GB" -ForeGroundColor Green
-Write-Host "Total capacity of all SQL Elastic Pools: $elasticTotalGiB GiB or $elasticTotalGB GB" -ForeGroundColor Green
-Write-Host "Total capacity of all SQL Managed Instances: $MITotalGiB GiB or $MITotalGB GB" -ForeGroundColor Green
-
-Write-Host
-Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $($sqlList.count)" -ForeGroundColor Green
-Write-Host "Total capacity of all SQL: $sqlTotalGiB GiB or $sqlTotalGB GB" -ForeGroundColor Green
-
-# Export to CSV
-Write-Host ""
-Write-Host "VM CSV file output to: $outputVmDisk" -ForeGroundColor Green
-$vmList | Export-CSV -path $outputVmDisk
-Write-Host "Azure SQL/MI CSV file output to: $outputSQL" -ForeGroundColor Green
-$sqlList | Export-CSV -path $outputSQL
-Write-Host "Azure File Share CSV file output to: $outputAzFS" -ForeGroundColor Green
-$azFSList | Export-CSV -path $outputAzFS
-
 if ($azConfig.Value -eq $true) {
   try {
     Update-AzConfig -DisplayBreakingChangeWarning $true  -ErrorAction Stop | Out-Null
