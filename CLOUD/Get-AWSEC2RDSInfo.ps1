@@ -1,4 +1,5 @@
-#requires -modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement
+#requires -Version 7.0
+#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch
 
 # https://build.rubrik.com
 
@@ -27,13 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    "Install-Module AWS.Tools.Common" 
-    "Install-Module AWS.Tools.EC2" 
-    "Install-Module AWS.Tools.S3"
-    "Install-Module AWS.Tools.RDS"
-    "Install-Module AWS.Tools.SecurityToken"
-    "Install-Module AWS.Tools.Organizations"
-    "Install-Module AWS.Tools.IdentityManagement"
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -93,7 +88,7 @@
     tested ahs been the GovCloud partition. 
 
   .PARAMETER DefaultProfile
-    Collect dat from the account the account listed in the 'default' profile or what ever credentials were specified when
+    Collect data from the account the account listed in the 'default' profile or what ever credentials were specified when
     running the 'Set-AWSCredential' command.
 
   .PARAMETER UserSpecifiedProfileNames
