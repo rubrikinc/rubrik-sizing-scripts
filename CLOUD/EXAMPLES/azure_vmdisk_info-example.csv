@@ -3,4 +3,4 @@
 "azure-vm-2","2","286","307.09","subscription-1","tenant-1","centralus","resource-group-1","1764c58f-3b92-4407-9f4e-249fa80e29ff","Standard_D16lds_v5","OK","No"
 "azure-vm-3","2","912","979.253","subscription-1","tenant-1","centralus","resource-group-1","3453ff2c-7d13-4fc3-bbe2-883aa3f3d700","Standard_D16s_v5","OK","No"
 "azure-sql-vm-1","3","2175","2335.388","subscription-1","tenant-1","centralus","resource-group-1","4cf4a4e4-d86d-48c5-911e-56f5b0c4ff33","Standard_E8bds_v5","OK","Yes"
-"azure-sql-vm-2,"2","383","411.243","subscription-1","tenant-1","centralus","resource-group-1","d4f93fd6-c4e4-4205-9df1-7c65581aece1","Standard_D4s_v3","OK","No"
+"azure-sql-vm-2","2","383","411.243","subscription-1","tenant-1","centralus","resource-group-1","d4f93fd6-c4e4-4205-9df1-7c65581aece1","Standard_D4s_v3","OK","No"
