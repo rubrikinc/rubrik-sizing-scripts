@@ -584,6 +584,7 @@ foreach ($sub in $subs) {
     # Loop through each Azure File Share and record capacities    
     foreach ($azFS in $azFSs) {
       Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFS.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
+          $azFSNum++
       $azFSClient = $azFS.ShareClient
       $azFSStats = $azFSClient.GetStatistics()
       $azFSObj = [PSCustomObject] @{
