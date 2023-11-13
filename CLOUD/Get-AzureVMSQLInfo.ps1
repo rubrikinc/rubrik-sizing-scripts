@@ -42,6 +42,10 @@ Flag to find all subscriptions in the tenant and download data.
 A comme separated list of Azure Management Groups to gather data from.
 
 .PARAMETER CurrentSubscription
+.PARAMETER GetContainerDetails
+Performs a deep introspection of each container in blob storage and calculates various statistics. Using this parameter 
+may take a long time when large blob stores are located.
+
 .PARAMETER SkipAzureVMandManagedDisks
 Do not collect data on Azure VMs or Managed Disks.
 
@@ -98,6 +102,8 @@ Runs the script against Azure Management Groups 'Group1' and 'Group2'.
 Runs the script against all subscriptions in the that the user has access to but skips the collection of Azure Storage Account data.
 
 .EXAMPLE
+./Get-AzureVMSQLInfo.ps1 -Subscriptions "sub1" -GetContainerDetails
+Runs the script against the subscription "sub1" and does a deeper inspection of Azure blob storage
 
 .LINK
 https://build.rubrik.com
@@ -110,6 +116,9 @@ https://github.com/stevenctong/rubrik
 param (
   [CmdletBinding(DefaultParameterSetName = 'AllSubscriptions')]
 
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$GetContainerDetails,
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureVMandManagedDisks,
@@ -153,6 +162,7 @@ $date = Get-Date
 $outputVmDisk = "azure_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzSA = "azure_storage_account_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputAzCon = "azure_container_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -163,6 +173,7 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 $vmList = @()
 $sqlList = @()
 $azSAList = @()
+$azConList = @()
 $azFSList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
@@ -492,6 +503,71 @@ foreach ($sub in $subs) {
         "FileCountInFileShares" = ($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1
       }
       $azSAList += $azSAObj
+      
+      if ($GetContainerDetails -eq $true) {
+        # Loop through each Azure Container and record capacities    
+        try {
+          $azCons = Get-AzStorageContainer -Context $azSAContext -ErrorAction Stop
+        }
+        catch {
+          Write-Error "Error getting Azure Container information from: $($azSA.StorageAccountName) storage account."
+          $_
+          $azCons = @()
+        }
+        $azConNum = 1
+        foreach ($azCon in $azCons) {
+          Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 -Status "Azure Container $($azConNum) of $($azCons.Count)"
+          $azConNum++
+          $azConBlobs = Get-AzStorageBlob -Container $($azCon.Name) -Context $azSAContext
+          $lengthHotTier = 0
+          $lengthCoolTier = 0
+          $lengthArchiveTier = 0
+          $lengthUnknownTier = 0
+          $lengthAllTiers = 0
+          $azConBlobs | ForEach-Object {if ($_.AccessTier -Eq "Hot" -and $_.SnapshotTime -eq $null) {$lengthHotTier = $lengthHotTier + $_.Length}}
+          $azConBlobs | ForEach-Object {if ($_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null) {$lengthCoolTier = $lengthCoolTier + $_.Length}}
+          $azConBlobs | ForEach-Object {if ($_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null) {$lengthArchiveTier = $lengthArchiveTier + $_.Length}}
+          $azConBlobs | ForEach-Object {if ($_.AccessTier -ne "Hot" -and `
+                                              $_.AccessTier -ne "Cool" -and `
+                                              $_.AccessTier -ne "Archive" -and `
+                                              $_.SnapshotTime -eq $null) 
+                                            {$lengthUnknownTier = $lengthUnknownTier + $_.Length}}
+          $azConBlobs | ForEach-Object {if ($_.SnapshotTime -eq $null) {$lengthAllTiers = $lengthAllTiers + $_.Length}}
+          $azConObj = [PSCustomObject] @{
+            "Name" = $azCon.Name
+            "StorageAccount" = $azSA.StorageAccountName
+            "StorageAccountType" = $azSA.Kind
+            "StorageAccountSkuName" = $azSA.Sku.Name
+            "StorageAccountAccessTier" = $azSA.AccessTier
+            "Tenant" = $tenant.Name
+            "Subscription" = $sub.Name
+            "Region" = $azSA.PrimaryLocation
+            "ResourceGroup" = $azSA.ResourceGroupName
+            "UsedCapacityHotTierBytes" = $lengthHotTier
+            "UsedCapacityHotTierGiB" = [math]::round($($lengthHotTier / 1073741824), 0)
+            "UsedCapacityHotTierGB" = [math]::round($($lengthHotTier / 1000000000), 3)        
+            "HotTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Hot" -and $_.SnapshotTime -eq $null}).Count
+            "UsedCapacityCoolTierBytes" = $lengthCoolTier
+            "UsedCapacityCoolTierGiB" = [math]::round($($lengthCoolTier / 1073741824), 0)
+            "UsedCapacityCoolTierGB" = [math]::round($($lengthCoolTier / 1000000000), 3)        
+            "CoolTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null}).Count
+            "UsedCapacityArchiveTierBytes" = $lengthArchiveTier
+            "UsedCapacityArchiveTierGiB" = [math]::round($($lengthArchiveTier / 1073741824), 0)
+            "UsedCapacityArchiveTierGB" = [math]::round($($lengthArchiveTier / 1000000000), 3)        
+            "ArchiveTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null}).Count
+            "UsedCapacityUnknownTierBytes" = $lengthUnknownTier
+            "UsedCapacityUnknownTierGiB" = [math]::round($($lengthUnknownTier / 1073741824), 0)
+            "UsedCapacityUnknownTierGB" = [math]::round($($lengthUnknownTier / 1000000000), 3)
+            "UnknownTierBlobCount" = ($azConBlobs| Where-Object {$_.SnapshotTime -eq $null}).Count
+            "UsedCapacityAllTiersBytes" = $lengthAllTiers
+            "UsedCapacityAllTiersGiB" = [math]::round($($lengthAllTiers / 1073741824), 0)
+            "UsedCapacityAllTiersGB" = [math]::round($($lengthAllTiers / 1000000000), 3)
+            "AllTiersBlobCount" = ($azConBlobs | Where-Object {$_.SnapshotTime -eq $null}).Count
+        }      
+        $azConList += $azConObj
+        } #foreach ($azCon in $azCons)
+        Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -Completed
+      } #if ($GetContainerDetails -eq $true)
       
       if ($SkipAzureFiles -ne $true) {
         # Loop through each Azure File Share and record capacities    
