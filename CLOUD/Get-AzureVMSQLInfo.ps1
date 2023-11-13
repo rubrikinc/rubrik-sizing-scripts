@@ -572,6 +572,7 @@ foreach ($sub in $subs) {
       
       if ($SkipAzureFiles -ne $true) {
         # Loop through each Azure File Share and record capacities    
+          $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Stop | Where-Object -Property IsSnapshot -eq $false
     }
     catch {
       Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName)"
