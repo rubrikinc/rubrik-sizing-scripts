@@ -164,6 +164,7 @@ $outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzSA = "azure_storage_account_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzCon = "azure_container_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
 $context = Get-AzContext
