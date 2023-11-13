@@ -42,7 +42,17 @@ Flag to find all subscriptions in the tenant and download data.
 A comme separated list of Azure Management Groups to gather data from.
 
 .PARAMETER CurrentSubscription
-Flog to only gather information from the current subscription.
+.PARAMETER SkipAzureVMandManagedDisks
+Do not collect data on Azure VMs or Managed Disks.
+
+.PARAMETER SkipAzureSQLandMI
+Do not collect data on Azure SQL or Azure Managed Instances
+
+.PARAMETER SkipAzureStorageAccounts
+Do not collect data on Azure Storage Accounts. This includes not collecting data on Azure Blob storage and Azure Files.
+
+.PARAMETER SkipAzureFiles
+Do not collect data on Azure Files.
 
 .NOTES
 Written by Steven Tong for community usage
@@ -83,6 +93,11 @@ Runs the script against all subscriptions in the tenant.
 ./Get-AzureVMSQLInfo.ps1 -ManagementGroups "Group1,Group2"
 Runs the script against Azure Management Groups 'Group1' and 'Group2'.
 
+.EXAMPLE
+./Get-AzureVMSQLInfo.ps1 -SkipAzureStorageAccounts
+Runs the script against all subscriptions in the that the user has access to but skips the collection of Azure Storage Account data.
+
+.EXAMPLE
 
 .LINK
 https://build.rubrik.com
@@ -95,6 +110,18 @@ https://github.com/stevenctong/rubrik
 param (
   [CmdletBinding(DefaultParameterSetName = 'AllSubscriptions')]
 
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureVMandManagedDisks,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureSQLandMI,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureStorageAccounts,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureFiles,
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -217,6 +244,7 @@ foreach ($sub in $subs) {
   }
   $processedSubs++
 
+  if ($SkipAzureVMandManagedDisks -ne $true) {
   # Get a list of all VMs in the current subscription
   try {
     $vms = Get-AzVM -ErrorAction Stop
@@ -281,7 +309,9 @@ foreach ($sub in $subs) {
     } 
   }
   Write-Progress -Id 3 -Activity "Getting VM information for: $($vm.Name)" -Completed
+  } #if ($SkipAzureVMandManagedDisks -ne $true) 
   
+  if ($SkipAzureSQLandMI -ne $true) {
   # Get all Azure SQL servers
   try {
     $sqlServers = Get-AzSqlServer -ErrorAction Stop
@@ -399,7 +429,9 @@ foreach ($sub in $subs) {
     $sqlList += $sqlObj
   } # foreach ($MI in $sqlManagedInstances)
   Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
+  } #if ($SkipAzureSQLandMI -ne $true)
 
+  if ($SkipAzureStorageAccounts -ne $true) {
   # Get a list of all Azure Storage Accounts.
   try {
     $azSAs = Get-AzStorageAccount -ErrorAction Stop
@@ -415,8 +447,8 @@ foreach ($sub in $subs) {
     Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
     $azSANum++
     $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
-    try {
-      $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Stop
+      if ($SkipAzureFiles -ne $true) {
+        # Loop through each Azure File Share and record capacities    
     }
     catch {
       Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName)"
@@ -444,12 +476,129 @@ foreach ($sub in $subs) {
     $azFSList += $azFSObj
     } #foreach ($azFS in $azFSs)
     Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFS.Name)" -Completed
+      } #if ($SkipAzureFiles -ne $true)
   } # foreach ($azSA in $azSAs)
   Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -Completed
+  } # if ($SkipAzureStorageAccounts -ne $true)
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -Completed
 
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
+
+if ($SkipAzureVMandManagedDisks -ne $true) {
+
+  $VMtotalGiB = ($vmList.SizeGiB | Measure-Object -Sum).sum
+  $VMtotalGB = ($vmList.SizeGB | Measure-Object -Sum).sum
+
+  $sqlTotalGiB = ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
+  $sqlTotalGB = ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
+
+  Write-Host
+  Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
+  Write-Host
+  Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.count)" -ForeGroundColor Green
+  Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
+  Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB" -ForeGroundColor Green
+  $outputFileObj = [PSCustomObject] @{ 
+    "Files" = "Azure VM and Managed Disk CSV file output saved to: $outputVmDisk"
+  }
+  $outputFiles += $outputFileObj
+  $vmList | Export-CSV -path $outputVmDisk
+
+} #if ($SkipAzureVMandManagedDisks -ne $true)
+
+if ($SkipAzureSQLandMI -ne $true) {
+  $DBtotalGiB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $DBtotalGB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $elasticTotalGiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  Write-Host
+  Write-Host "Total # of SQL DBs (independent): $('{0:N0}' -f ($sqlList | Where-Object -Property 'Database' -ne '').Count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL Elastic Pools: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ElasticPool' -ne '').Count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL DBs (independent): $('{0:N0}' -f $DBtotalGiB) GiB or $('{0:N0}' -f $DBtotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL Elastic Pools: $('{0:N0}' -f $elasticTotalGiB) GiB or $('{0:N0}' -f $elasticTotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL Managed Instances: $('{0:N0}' -f $MITotalGiB) GiB or $('{0:N0}' -f $MITotalGB) GB" -ForeGroundColor Green
+  Write-Host
+  Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB" -ForeGroundColor Green
+  $outputFileObj = [PSCustomObject] @{ 
+    "Files" = "Azure SQL/MI CSV file output saved to: $outputSQL"
+  }
+  $outputFiles += $outputFileObj
+  $sqlList | Export-CSV -path $outputSQL
+} #if ($SkipAzureSQLandMI -ne $true)
+
+if ($SkipAzureStorageAccounts -ne $true) {
+  $azSATotalGiB = ($azSAList.UsedCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalGB = ($azSAList.UsedCapacityGB | Measure-Object -Sum).sum
+  $azSATotalBlobGiB = ($azSAList.UsedBlobCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalBlobGB = ($azSAList.UsedBlobCapacityGB | Measure-Object -Sum).sum
+  $azSATotalBlobObjects = ($azSAList.BlobCount | Measure-Object -Sum).sum
+  $azSATotalBlobContainers = ($azSAList.BlobContainerCount | Measure-Object -Sum).sum
+  $azSATotalFileGiB = ($azSAList.UsedFileShareCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalFileGB = ($azSAList.UsedFileShareCapacityGB | Measure-Object -Sum).sum
+  $azSATotalFileObjects = ($azSAList.FileCountInFileShares | Measure-Object -Sum).sum
+  $azSATotalFileShares = ($azSAList.FileShareCount | Measure-Object -Sum).sum
+  Write-Host
+  Write-Host "Totals based on querying storage account metrics:"
+  Write-Host "Total # of Azure Storage Accounts: $('{0:N0}' -f $azSAList.count)" -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure Storage Accounts: $('{0:N0}' -f $azSATotalGiB) GiB or $('{0:N0}' -f $azSATotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure Blob storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalBlobGiB) GiB or $('{0:N0}' -f $azSATotalBlobGB) GB" -ForeGroundColor Green
+  Write-Host "Total number blobs is $('{0:N0}' -f $azSATotalBlobObjects) in $('{0:N0}' -f $azSATotalBlobContainers) containers." -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB" -ForeGroundColor Green
+  Write-Host "Total number files is $('{0:N0}' -f $azSATotalFileObjects) in $('{0:N0}' -f $azSATotalFileShares) Azure File Shares." -ForeGroundColor Green
+
+  $outputFileObj = [PSCustomObject] @{ 
+    "Files" = "Azure Storage Account CSV file output saved to: $outputAzSA"
+  }
+  $outputFiles += $outputFileObj
+  $azSAList | Export-CSV -path $outputAzSA
+
+  if ($GetContainerDetails -eq $true) {
+    $azConTotalGiB = ($azConList.UsedCapacityAllTiersGiB | Measure-Object -Sum).sum
+    $azConTotalGB = ($azConList.UsedCapacityAllTiersGB | Measure-Object -Sum).sum
+    $azConTotalGiB = ($azConList.UsedCapacityGiB | Measure-Object -Sum).sum
+    $azConTotalGB = ($azConList.UsedCapacityGB | Measure-Object -Sum).sum
+    Write-Host
+    Write-Host "Totals based on traversing each blob store container and calculating statistics:"
+    Write-Host "NOTE: The totals may be different than those gathered from Storage Account metrics if"
+    Write-Host "some containers could not be accessed. There are also differences in the way these two metrics"
+    Write-Host "are calculated by Azure."
+    Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
+    Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB" -ForeGroundColor Green
+    $outputFileObj = [PSCustomObject] @{ 
+      "Files" = "Azure Container CSV file output saved to: $outputAzCon"
+    }
+    $outputFiles += $outputFileObj
+    $azConList | Export-CSV -path $outputAzCon
+  }
+
+  if ($SkipAzureFiles -ne $true) {
+    $azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
+    $azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
+    Write-Host
+    Write-Host "Totals based on traversing each Azure File Share adn calculating statistics:"
+    Write-Host "Note: The totals may be different than those gathered from Storage Account metrics if"
+    Write-Host "the Azure File Share could not be accessed. There are also differences in the way these two metrics"
+    Write-Host "are calculated by Azure."
+    Write-Host "Total # of Azure File Shares: $('{0:N0}' -f $azFSList.count)" -ForeGroundColor Green
+    Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB" -ForeGroundColor Green
+    $outputFileObj = [PSCustomObject] @{ 
+      "Files" = "Azure File Share CSV file output saved to: $outputAzFS"
+    }
+    $outputFiles += $outputFileObj
+    $azFSList | Export-CSV -path $outputAzFS
+  }
+} #if ($SkipAzureStorageAccounts -ne $true)
+
+Write-Host
+Write-Host "Output files are:"
+$outputFiles.Files
+Write-Host
+
 # Reset subscription context back to original.
 try {
   Set-AzContext -SubscriptionName $context.subscription.Name -ErrorAction Stop | Out-Null
