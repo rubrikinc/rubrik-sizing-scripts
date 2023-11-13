@@ -152,6 +152,7 @@ $date = Get-Date
 # Filenames of the CSVs to output
 $outputVmDisk = "azure_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputAzSA = "azure_storage_account_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -161,6 +162,7 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 # Contains list of VMs and SQL DBs with capacity info
 $vmList = @()
 $sqlList = @()
+$azSAList = @()
 $azFSList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
@@ -447,6 +449,50 @@ foreach ($sub in $subs) {
     Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
     $azSANum++
     $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
+      $azSAResourceId = "/subscriptions/$($sub.Id)/resourceGroups/$($azSA.ResourceGroupName)/providers/Microsoft.Storage/storageAccounts/$($azSA.StorageAccountName)"
+      $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $azSAResourceId `
+        -MetricName UsedCapacity `
+        -AggregationType Average `
+        -StartTime (Get-Date).AddDays(-1)).Data.Average
+      $metrics = @("BlobCapacity", "ContainerCount", "BlobCount")
+      $azSABlob = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId "$($azSAResourceId)/blobServices/default" `
+        -MetricNames $metrics `
+        -AggregationType Average `
+        -StartTime (Get-Date).AddDays(-1))
+      $metrics = @("FileCapacity", "FileShareCount", "FileCount")
+      $azSAFile = Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId "$($azSAResourceId)/fileServices/default" `
+        -MetricNames $metrics `
+        -AggregationType Average `
+        -StartTime (Get-Date).AddDays(-1)
+
+      $azSAObj = [PSCustomObject] @{
+        "StorageAccount" = $azSA.StorageAccountName
+        "StorageAccountType" = $azSA.Kind
+        "StorageAccountSkuName" = $azSA.Sku.Name
+        "StorageAccountAccessTier" = $azSA.AccessTier
+        "Tenant" = $tenant.Name
+        "Subscription" = $sub.Name
+        "Region" = $azSA.PrimaryLocation
+        "ResourceGroup" = $azSA.ResourceGroupName
+        "UsedCapacityBytes" = $azSAUsedCapacity | Select-Object -Last 1
+        "UsedCapacityGiB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1073741824), 0)
+        "UsedCapacityGB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1000000000), 3)      
+        "UsedBlobCapacityBytes" = ($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1
+        "UsedBlobCapacityGiB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
+        "UsedBlobCapacityGB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
+        "BlobContainerCount" = ($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1
+        "BlobCount" = ($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1
+        "UsedFileShareCapacityBytes" = ($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1
+        "UsedFileShareCapacityGiB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
+        "UsedFileShareCapacityGB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
+        "FileShareCount" = ($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1
+        "FileCountInFileShares" = ($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1
+      }
+      $azSAList += $azSAObj
+      
       if ($SkipAzureFiles -ne $true) {
         # Loop through each Azure File Share and record capacities    
     }
