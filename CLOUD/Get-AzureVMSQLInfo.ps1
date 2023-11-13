@@ -123,7 +123,7 @@ param (
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureFiles,
   [Parameter(ParameterSetName='CurrentSubscription',
-    Mandatory=$false)]
+    Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [switch]$CurrentSubscription,
   [Parameter(ParameterSetName='Subscriptions',
@@ -132,7 +132,7 @@ param (
   [string]$Subscriptions = '',
   # Choose to get information for all Azure VMs and/or SQL
   [Parameter(ParameterSetName='AllSubscriptions',
-    Mandatory=$true)]
+    Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$AllSubscriptions,
   [Parameter(ParameterSetName='ManagementGroups',
