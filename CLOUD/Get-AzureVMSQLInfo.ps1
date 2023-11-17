@@ -757,7 +757,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
     $azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
     $azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
     Write-Host
-    Write-Host "Totals based on traversing each Azure File Share adn calculating statistics:"
+    Write-Host "Totals based on traversing each Azure File Share and calculating statistics:"
     Write-Host "Note: The totals may be different than those gathered from Storage Account metrics if"
     Write-Host "the Azure File Share could not be accessed. There are also differences in the way these two metrics"
     Write-Host "are calculated by Azure."
