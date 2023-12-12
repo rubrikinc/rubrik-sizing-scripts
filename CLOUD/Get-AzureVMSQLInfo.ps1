@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor
+#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources
 
 <#
 .SYNOPSIS
@@ -220,6 +220,7 @@ $context = Get-AzContext
 $context | Select-Object -Property Account,Environment,Tenant |  format-table
 
 # Arrays for collecting data.
+$azTags = @()
 $vmList = @()
 $sqlList = @()
 $azSAList = @()
@@ -280,6 +281,28 @@ switch ($PSCmdlet.ParameterSetName) {
   }
 }
 
+# Get tag keys from all specified subscriptions
+
+$subNum=1
+$processedSubs=0
+Write-Host "Found $($subs.Count) subscriptions to get tags from." -ForeGroundColor Green
+foreach ($sub in $subs) {
+  Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  $subNum++
+
+  try {
+    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
+  } catch {
+    Write-Error "Error switching to subscription: $($sub.Name)"
+    Write-Error $_
+    Continue
+  }
+
+  $azTags += $(Get-AzTag).Name
+} # foreach ($sub in $subs)
+Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -Completed
+
+$uniqueAzTags = $azTags | Sort-Object -Unique
 
 # Get Azure information for all specified subscriptions
 $subNum=1
@@ -335,21 +358,50 @@ foreach ($sub in $subs) {
         $diskNum += 1
         $diskSizeGiB += [int]$dataDisk.DiskSizeGB
       }
-      $vmObj = [PSCustomObject] @{
-        "Name" = $vm.name
-        "Disks" = $diskNum
-        "SizeGiB" = $diskSizeGiB
-        "SizeGB" = [math]::round($($diskSizeGiB * 1.073741824), 3)
-        "Subscription" = $sub.Name
-        "Tenant" = $tenant.Name
-        "Region" = $vm.Location
-        "ResourceGroup" = $vm.ResourceGroupName
-        "vmID" = $vm.vmID
-        "InstanceType" = $vm.HardwareProfile.vmSize
-        "Status" = $vm.StatusCode
-        "HasMSSQL" = "No"
+      # $vmObj = [PSCustomObject] @{
+      #   "Name" = $vm.name
+      #   "Disks" = $diskNum
+      #   "SizeGiB" = $diskSizeGiB
+      #   "SizeGB" = [math]::round($($diskSizeGiB * 1.073741824), 3)
+      #   "Subscription" = $sub.Name
+      #   "Tenant" = $tenant.Name
+      #   "Region" = $vm.Location
+      #   "ResourceGroup" = $vm.ResourceGroupName
+      #   "vmID" = $vm.vmID
+      #   "InstanceType" = $vm.HardwareProfile.vmSize
+      #   "Status" = $vm.StatusCode
+      #   "HasMSSQL" = "No"
+      # }
+
+      $vmObj = [ordered] @{}
+      $vmObj.Add("Name",$vm.Name)
+      $vmObj.Add("Disks",$diskNum)
+      $vmObj.Add("SizeGiB",$diskSizeGiB)
+      $vmObj.Add("SizeGB",[math]::round($($diskSizeGiB * 1.073741824), 3))
+      $vmObj.Add("Subscription",$sub.Name)
+      $vmObj.Add("Tenant",$tenant.Name)
+      $vmObj.Add("Region",$vm.Location)
+      $vmObj.Add("ResourceGroup",$vm.ResourceGroupName)
+      $vmObj.Add("vmID",$vm.vmID)
+      $vmObj.Add("InstanceType",$vm.HardwareProfile.vmSize)
+      $vmObj.Add("Status",$vm.StatusCode)
+      $vmObj.Add("HasMSSQL","No")      
+      
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($vm.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($vm.Tags[$_]) {
+                $vmObj.Add("$_ (Tag)",$vm.Tags[$_])
+            }
+            else {
+                $vmObj.Add("$_ (Tag)","-")
+            }
+        }
+      } else {
+          $uniqueAzTags | Foreach-Object { $vmObj.Add("$_ (Tag)","-") }
       }
-      $vmList += $vmObj
+
+      $vmList += New-Object -TypeName PSObject -Property $vmObj
     }
     Write-Progress -Id 2 -Activity "Getting VM information for: $($vm.Name)" -Completed
 
@@ -419,41 +471,97 @@ foreach ($sub in $subs) {
               $poolName = $sqlList | Where-Object -Property 'ElasticPool' -eq $pool.ElasticPoolName
               # If Elastic Pool does not exist then add it
               if ($null -eq $poolName) {
-                $sqlObj = [PSCustomObject] @{
-                  "Database" = ""
-                  "Server" = ""
-                  "ElasticPool" = $pool.ElasticPoolName
-                  "ManagedInstance" = ""
-                  "MaxSizeGiB" = [math]::round($($pool.MaxSizeBytes / 1073741824), 0)
-                  "MaxSizeGB" = [math]::round($($pool.MaxSizeBytes / 1000000000), 3)
-                  "Subscription" = $sub.Name
-                  "Tenant" = $tenant.Name
-                  "Region" = $pool.Location
-                  "ResourceGroup" = $pool.ResourceGroupName
-                  "DatabaseID" = ""
-                  "InstanceType" = $pool.SkuName
-                  "Status" = $pool.Status
+                # $sqlObj = [PSCustomObject] @{
+                #   "Database" = ""
+                #   "Server" = ""
+                #   "ElasticPool" = $pool.ElasticPoolName
+                #   "ManagedInstance" = ""
+                #   "MaxSizeGiB" = [math]::round($($pool.MaxSizeBytes / 1073741824), 0)
+                #   "MaxSizeGB" = [math]::round($($pool.MaxSizeBytes / 1000000000), 3)
+                #   "Subscription" = $sub.Name
+                #   "Tenant" = $tenant.Name
+                #   "Region" = $pool.Location
+                #   "ResourceGroup" = $pool.ResourceGroupName
+                #   "DatabaseID" = ""
+                #   "InstanceType" = $pool.SkuName
+                #   "Status" = $pool.Status
+                # }
+                $sqlObj = [ordered] @{}
+                $sqlObj.Add("Database","")
+                $sqlObj.Add("Server","")
+                $sqlObj.Add("ElasticPool",$pool.ElasticPoolName)
+                $sqlObj.Add("ManagedInstance","")
+                $sqlObj.Add("MaxSizeGiB",[math]::round($($pool.MaxSizeBytes / 1073741824), 0))
+                $sqlObj.Add("MaxSizeGB",[math]::round($($pool.MaxSizeBytes / 1000000000), 3))
+                $sqlObj.Add("Subscription",$sub.Name)
+                $sqlObj.Add("Tenant",$tenant.Name)
+                $sqlObj.Add("Region",$pool.Location)
+                $sqlObj.Add("ResourceGroup",$pool.ResourceGroupName)
+                $sqlObj.Add("DatabaseID","")
+                $sqlObj.Add("InstanceType",$pool.SkuName)
+                $sqlObj.Add("Status",$pool.Status)
+
+                # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+                if ($pool.Tags.Count -ne 0) {
+                  $uniqueAzTags | Foreach-Object {
+                      if ($pool.Tags[$_]) {
+                          $sqlObj.Add("$_ (Tag)",$pool.Tags[$_])
+                      }
+                      else {
+                          $sqlObj.Add("$_ (Tag)","-")
+                      }
+                  }
+                } else {
+                    $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
                 }
-                $sqlList += $sqlObj
+                $sqlList += New-Object -TypeName PSObject -Property $sqlObj
               }
             } #foreach ($pool in $pools)
           } else {
-            $sqlObj = [PSCustomObject] @{
-              "Database" = $sqlDB.DatabaseName
-              "Server" = $sqlDB.ServerName
-              "ElasticPool" = ""
-              "ManagedInstance" = ""
-              "MaxSizeGiB" = [math]::round($($sqlDB.MaxSizeBytes / 1073741824), 0)
-              "MaxSizeGB" = [math]::round($($sqlDB.MaxSizeBytes / 1000000000), 3)
-              "Subscription" = $sub.Name
-              "Tenant" = $tenant.Name
-              "Region" = $sqlDB.Location
-              "ResourceGroup" = $sqlDB.ResourceGroupName
-              "DatabaseID" = $sqlDB.DatabaseId
-              "InstanceType" = $sqlDB.SkuName
-              "Status" = $sqlDB.Status
+            # $sqlObj = [PSCustomObject] @{
+            #   "Database" = $sqlDB.DatabaseName
+            #   "Server" = $sqlDB.ServerName
+            #   "ElasticPool" = ""
+            #   "ManagedInstance" = ""
+            #   "MaxSizeGiB" = [math]::round($($sqlDB.MaxSizeBytes / 1073741824), 0)
+            #   "MaxSizeGB" = [math]::round($($sqlDB.MaxSizeBytes / 1000000000), 3)
+            #   "Subscription" = $sub.Name
+            #   "Tenant" = $tenant.Name
+            #   "Region" = $sqlDB.Location
+            #   "ResourceGroup" = $sqlDB.ResourceGroupName
+            #   "DatabaseID" = $sqlDB.DatabaseId
+            #   "InstanceType" = $sqlDB.SkuName
+            #   "Status" = $sqlDB.Status
+            # }
+            $sqlObj = [ordered] @{}
+            $sqlObj.Add("Database",$sqlDB.DatabaseName)
+            $sqlObj.Add("Server",$sqlDB.ServerName)
+            $sqlObj.Add("ElasticPool","")
+            $sqlObj.Add("ManagedInstance","")
+            $sqlObj.Add("MaxSizeGiB",[math]::round($($sqlDB.MaxSizeBytes / 1073741824), 0))
+            $sqlObj.Add("MaxSizeGB",[math]::round($($sqlDB.MaxSizeBytes / 1000000000), 3))
+            $sqlObj.Add("Subscription",$sub.Name)
+            $sqlObj.Add("Tenant",$tenant.Name)
+            $sqlObj.Add("Region",$sqlDB.Location)
+            $sqlObj.Add("ResourceGroup",$sqlDB.ResourceGroupName)
+            $sqlObj.Add("DatabaseID",$sqlDB.DatabaseId)
+            $sqlObj.Add("InstanceType",$sqlDB.SkuName)
+            $sqlObj.Add("Status",$sqlDB.Status)
+
+            # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+            if ($sqlDB.Tags.Count -ne 0) {
+              $uniqueAzTags | Foreach-Object {
+                  if ($sqlDB.Tags[$_]) {
+                      $sqlObj.Add("$_ (Tag)",$sqlDB.Tags[$_])
+                  }
+                  else {
+                      $sqlObj.Add("$_ (Tag)","-")
+                  }
+              }
+            } else {
+                $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
             }
-            $sqlList += $sqlObj
+            $sqlList += New-Object -TypeName PSObject -Property $sqlObj
           }  # else not an Elastic Pool but normal SQL DB
         }  # if ($sqlDB.SkuName -ne 'System')
       }  # foreach ($sqlDB in $sqlDBs)
@@ -474,22 +582,49 @@ foreach ($sub in $subs) {
     foreach ($MI in $sqlManagedInstances) {
       Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
       $managedInstanceNum++
-      $sqlObj = [PSCustomObject] @{
-        "Database" = ""
-        "Server" = ""
-        "ElasticPool" = ""
-        "ManagedInstance" = $MI.ManagedInstanceName
-        "MaxSizeGiB" = $MI.StorageSizeInGB
-        "MaxSizeGB" = [math]::round($($MI.StorageSizeInGB * 1.073741824), 3)
-        "Subscription" = $sub.Name
-        "Tenant" = $tenant.Name
-        "Region" = $MI.Location
-        "ResourceGroup" = $MI.ResourceGroupName
-        "DatabaseID" = ""
-        "InstanceType" = $MI.Sku.Name
-        "Status" = $MI.Status
+      # $sqlObj = [PSCustomObject] @{
+      #   "Database" = ""
+      #   "Server" = ""
+      #   "ElasticPool" = ""
+      #   "ManagedInstance" = $MI.ManagedInstanceName
+      #   "MaxSizeGiB" = $MI.StorageSizeInGB
+      #   "MaxSizeGB" = [math]::round($($MI.StorageSizeInGB * 1.073741824), 3)
+      #   "Subscription" = $sub.Name
+      #   "Tenant" = $tenant.Name
+      #   "Region" = $MI.Location
+      #   "ResourceGroup" = $MI.ResourceGroupName
+      #   "DatabaseID" = ""
+      #   "InstanceType" = $MI.Sku.Name
+      #   "Status" = $MI.Status
+      # }
+      $sqlObj = [ordered] @{}
+      $sqlObj.Add("Database","")
+      $sqlObj.Add("Server","")
+      $sqlObj.Add("ElasticPool","")
+      $sqlObj.Add("ManagedInstance",$MI.ManagedInstanceName)
+      $sqlObj.Add("MaxSizeGiB",$MI.StorageSizeInGB)
+      $sqlObj.Add("MaxSizeGB",[math]::round($($MI.StorageSizeInGB * 1.073741824), 3))
+      $sqlObj.Add("Subscription",$sub.Name)
+      $sqlObj.Add("Tenant",$tenant.Name)
+      $sqlObj.Add("Region",$MI.Location)
+      $sqlObj.Add("ResourceGroup",$MI.ResourceGroupName)
+      $sqlObj.Add("DatabaseID","")
+      $sqlObj.Add("InstanceType",$MI.Sku.Name)
+      $sqlObj.Add("Status",$MI.Status)
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($MI.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($MI.Tags[$_]) {
+                $sqlObj.Add("$_ (Tag)",$MI.Tags[$_])
+            }
+            else {
+                $sqlObj.Add("$_ (Tag)","-")
+            }
+        }
+      } else {
+          $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
       }
-      $sqlList += $sqlObj
+      $sqlList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
@@ -529,30 +664,65 @@ foreach ($sub in $subs) {
         -AggregationType Average `
         -StartTime (Get-Date).AddDays(-1)
 
-      $azSAObj = [PSCustomObject] @{
-        "StorageAccount" = $azSA.StorageAccountName
-        "StorageAccountType" = $azSA.Kind
-        "StorageAccountSkuName" = $azSA.Sku.Name
-        "StorageAccountAccessTier" = $azSA.AccessTier
-        "Tenant" = $tenant.Name
-        "Subscription" = $sub.Name
-        "Region" = $azSA.PrimaryLocation
-        "ResourceGroup" = $azSA.ResourceGroupName
-        "UsedCapacityBytes" = $azSAUsedCapacity | Select-Object -Last 1
-        "UsedCapacityGiB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1073741824), 0)
-        "UsedCapacityGB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1000000000), 3)      
-        "UsedBlobCapacityBytes" = ($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1
-        "UsedBlobCapacityGiB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
-        "UsedBlobCapacityGB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
-        "BlobContainerCount" = ($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1
-        "BlobCount" = ($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1
-        "UsedFileShareCapacityBytes" = ($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1
-        "UsedFileShareCapacityGiB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
-        "UsedFileShareCapacityGB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
-        "FileShareCount" = ($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1
-        "FileCountInFileShares" = ($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1
+      # $azSAObj = [PSCustomObject] @{
+      #   "StorageAccount" = $azSA.StorageAccountName
+      #   "StorageAccountType" = $azSA.Kind
+      #   "StorageAccountSkuName" = $azSA.Sku.Name
+      #   "StorageAccountAccessTier" = $azSA.AccessTier
+      #   "Tenant" = $tenant.Name
+      #   "Subscription" = $sub.Name
+      #   "Region" = $azSA.PrimaryLocation
+      #   "ResourceGroup" = $azSA.ResourceGroupName
+      #   "UsedCapacityBytes" = $azSAUsedCapacity | Select-Object -Last 1
+      #   "UsedCapacityGiB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1073741824), 0)
+      #   "UsedCapacityGB" = [math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1000000000), 3)      
+      #   "UsedBlobCapacityBytes" = ($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1
+      #   "UsedBlobCapacityGiB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
+      #   "UsedBlobCapacityGB" = [math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
+      #   "BlobContainerCount" = ($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1
+      #   "BlobCount" = ($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1
+      #   "UsedFileShareCapacityBytes" = ($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1
+      #   "UsedFileShareCapacityGiB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0)
+      #   "UsedFileShareCapacityGB" = [math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3)      
+      #   "FileShareCount" = ($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1
+      #   "FileCountInFileShares" = ($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1
+      # }
+      $azSAObj = [ordered] @{}
+      $azSAObj.Add("StorageAccount",$azSA.StorageAccountName)
+      $azSAObj.Add("StorageAccountType",$azSA.Kind)
+      $azSAObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
+      $azSAObj.Add("StorageAccountAccessTier",$azSA.AccessTier)
+      $azSAObj.Add("Tenant",$tenant.Name)
+      $azSAObj.Add("Subscription",$sub.Name)
+      $azSAObj.Add("Region",$azSA.PrimaryLocation)
+      $azSAObj.Add("ResourceGroup",$azSA.ResourceGroupName)
+      $azSAObj.Add("UsedCapacityBytes",($azSAUsedCapacity | Select-Object -Last 1))
+      $azSAObj.Add("UsedCapacityGiB",[math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1073741824), 0))
+      $azSAObj.Add("UsedCapacityGB",[math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1000000000), 3))    
+      $azSAObj.Add("UsedBlobCapacityBytes",(($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("UsedBlobCapacityGiB",[math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0))
+      $azSAObj.Add("UsedBlobCapacityGB",[math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3))    
+      $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("UsedFileShareCapacityBytes",(($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0))
+      $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3))    
+      $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($azSA.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($azSA.Tags[$_]) {
+                $azSAObj.Add("$_ (Tag)",$azSA.Tags[$_])
+            }
+            else {
+                $azSAObj.Add("$_ (Tag)","-")
+            }
+        }
+      } else {
+          $uniqueAzTags | Foreach-Object { $azSAObj.Add("$_ (Tag)","-") }
       }
-      $azSAList += $azSAObj
+      $azSAList += New-Object -TypeName PSObject -Property $azSAObj
       
       if ($GetContainerDetails -eq $true) {
         # Loop through each Azure Container and record capacities    
@@ -583,38 +753,80 @@ foreach ($sub in $subs) {
                                               $_.SnapshotTime -eq $null) 
                                             {$lengthUnknownTier = $lengthUnknownTier + $_.Length}}
           $azConBlobs | ForEach-Object {if ($_.SnapshotTime -eq $null) {$lengthAllTiers = $lengthAllTiers + $_.Length}}
-          $azConObj = [PSCustomObject] @{
-            "Name" = $azCon.Name
-            "StorageAccount" = $azSA.StorageAccountName
-            "StorageAccountType" = $azSA.Kind
-            "StorageAccountSkuName" = $azSA.Sku.Name
-            "StorageAccountAccessTier" = $azSA.AccessTier
-            "Tenant" = $tenant.Name
-            "Subscription" = $sub.Name
-            "Region" = $azSA.PrimaryLocation
-            "ResourceGroup" = $azSA.ResourceGroupName
-            "UsedCapacityHotTierBytes" = $lengthHotTier
-            "UsedCapacityHotTierGiB" = [math]::round($($lengthHotTier / 1073741824), 0)
-            "UsedCapacityHotTierGB" = [math]::round($($lengthHotTier / 1000000000), 3)        
-            "HotTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Hot" -and $_.SnapshotTime -eq $null}).Count
-            "UsedCapacityCoolTierBytes" = $lengthCoolTier
-            "UsedCapacityCoolTierGiB" = [math]::round($($lengthCoolTier / 1073741824), 0)
-            "UsedCapacityCoolTierGB" = [math]::round($($lengthCoolTier / 1000000000), 3)        
-            "CoolTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null}).Count
-            "UsedCapacityArchiveTierBytes" = $lengthArchiveTier
-            "UsedCapacityArchiveTierGiB" = [math]::round($($lengthArchiveTier / 1073741824), 0)
-            "UsedCapacityArchiveTierGB" = [math]::round($($lengthArchiveTier / 1000000000), 3)        
-            "ArchiveTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null}).Count
-            "UsedCapacityUnknownTierBytes" = $lengthUnknownTier
-            "UsedCapacityUnknownTierGiB" = [math]::round($($lengthUnknownTier / 1073741824), 0)
-            "UsedCapacityUnknownTierGB" = [math]::round($($lengthUnknownTier / 1000000000), 3)
-            "UnknownTierBlobCount" = ($azConBlobs| Where-Object {$_.SnapshotTime -eq $null}).Count
-            "UsedCapacityAllTiersBytes" = $lengthAllTiers
-            "UsedCapacityAllTiersGiB" = [math]::round($($lengthAllTiers / 1073741824), 0)
-            "UsedCapacityAllTiersGB" = [math]::round($($lengthAllTiers / 1000000000), 3)
-            "AllTiersBlobCount" = ($azConBlobs | Where-Object {$_.SnapshotTime -eq $null}).Count
-        }      
-        $azConList += $azConObj
+          # $azConObj = [PSCustomObject] @{
+          #   "Name" = $azCon.Name
+          #   "StorageAccount" = $azSA.StorageAccountName
+          #   "StorageAccountType" = $azSA.Kind
+          #   "StorageAccountSkuName" = $azSA.Sku.Name
+          #   "StorageAccountAccessTier" = $azSA.AccessTier
+          #   "Tenant" = $tenant.Name
+          #   "Subscription" = $sub.Name
+          #   "Region" = $azSA.PrimaryLocation
+          #   "ResourceGroup" = $azSA.ResourceGroupName
+          #   "UsedCapacityHotTierBytes" = $lengthHotTier
+          #   "UsedCapacityHotTierGiB" = [math]::round($($lengthHotTier / 1073741824), 0)
+          #   "UsedCapacityHotTierGB" = [math]::round($($lengthHotTier / 1000000000), 3)        
+          #   "HotTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Hot" -and $_.SnapshotTime -eq $null}).Count
+          #   "UsedCapacityCoolTierBytes" = $lengthCoolTier
+          #   "UsedCapacityCoolTierGiB" = [math]::round($($lengthCoolTier / 1073741824), 0)
+          #   "UsedCapacityCoolTierGB" = [math]::round($($lengthCoolTier / 1000000000), 3)        
+          #   "CoolTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null}).Count
+          #   "UsedCapacityArchiveTierBytes" = $lengthArchiveTier
+          #   "UsedCapacityArchiveTierGiB" = [math]::round($($lengthArchiveTier / 1073741824), 0)
+          #   "UsedCapacityArchiveTierGB" = [math]::round($($lengthArchiveTier / 1000000000), 3)        
+          #   "ArchiveTierBlobCount" = @($azConBlobs | Where-Object {$_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null}).Count
+          #   "UsedCapacityUnknownTierBytes" = $lengthUnknownTier
+          #   "UsedCapacityUnknownTierGiB" = [math]::round($($lengthUnknownTier / 1073741824), 0)
+          #   "UsedCapacityUnknownTierGB" = [math]::round($($lengthUnknownTier / 1000000000), 3)
+          #   "UnknownTierBlobCount" = ($azConBlobs| Where-Object {$_.SnapshotTime -eq $null}).Count
+          #   "UsedCapacityAllTiersBytes" = $lengthAllTiers
+          #   "UsedCapacityAllTiersGiB" = [math]::round($($lengthAllTiers / 1073741824), 0)
+          #   "UsedCapacityAllTiersGB" = [math]::round($($lengthAllTiers / 1000000000), 3)
+          #   "AllTiersBlobCount" = ($azConBlobs | Where-Object {$_.SnapshotTime -eq $null}).Count
+          # }             
+          $azConObj = [PSCustomObject] @{}        
+          $azConObj.Add("Name",$azCon.Name)
+          $azConObj.Add("StorageAccount",$azSA.StorageAccountName)
+          $azConObj.Add("StorageAccountType",$azSA.Kind)
+          $azConObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
+          $azConObj.Add("StorageAccountAccessTier",$azSA.AccessTier)
+          $azConObj.Add("Tenant",$tenant.Name)
+          $azConObj.Add("Subscription",$sub.Name)
+          $azConObj.Add("Region",$azSA.PrimaryLocation)
+          $azConObj.Add("ResourceGroup",$azSA.ResourceGroupName)
+          $azConObj.Add("UsedCapacityHotTierBytes",$lengthHotTier)
+          $azConObj.Add("UsedCapacityHotTierGiB",[math]::round($($lengthHotTier / 1073741824), 0))
+          $azConObj.Add("UsedCapacityHotTierGB",[math]::round($($lengthHotTier / 1000000000), 3))      
+          $azConObj.Add("HotTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Hot" -and $_.SnapshotTime -eq $null}).Count)
+          $azConObj.Add("UsedCapacityCoolTierBytes",$lengthCoolTier)
+          $azConObj.Add("UsedCapacityCoolTierGiB",[math]::round($($lengthCoolTier / 1073741824), 0))
+          $azConObj.Add("UsedCapacityCoolTierGB",[math]::round($($lengthCoolTier / 1000000000), 3))      
+          $azConObj.Add("CoolTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null}).Count)
+          $azConObj.Add("UsedCapacityArchiveTierBytes",$lengthArchiveTier)
+          $azConObj.Add("UsedCapacityArchiveTierGiB",[math]::round($($lengthArchiveTier / 1073741824), 0))
+          $azConObj.Add("UsedCapacityArchiveTierGB",[math]::round($($lengthArchiveTier / 1000000000), 3))      
+          $azConObj.Add("ArchiveTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null}).Count)
+          $azConObj.Add("UsedCapacityUnknownTierBytes",$lengthUnknownTier)
+          $azConObj.Add("UsedCapacityUnknownTierGiB",[math]::round($($lengthUnknownTier / 1073741824), 0))
+          $azConObj.Add("UsedCapacityUnknownTierGB",[math]::round($($lengthUnknownTier / 1000000000), 3))
+          $azConObj.Add("UnknownTierBlobCount",($azConBlobs| Where-Object {$_.SnapshotTime -eq $null}).Count)
+          $azConObj.Add("UsedCapacityAllTiersBytes",$lengthAllTiers)
+          $azConObj.Add("UsedCapacityAllTiersGiB",[math]::round($($lengthAllTiers / 1073741824), 0))
+          $azConObj.Add("UsedCapacityAllTiersGB",[math]::round($($lengthAllTiers / 1000000000), 3))
+          # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+          if ($azCon.Tags.Count -ne 0) {
+            $uniqueAzTags | Foreach-Object {
+                if ($azCon.Tags[$_]) {
+                    $azConObj.Add("$_ (Tag)",$azCon.Tags[$_])
+                }
+                else {
+                    $azConObj.Add("$_ (Tag)","-")
+                }
+            }
+          } else {
+              $uniqueAzTags | Foreach-Object { $azConObj.Add("$_ (Tag)","-") }
+          }
+          $azConList += New-Object -TypeName PSObject -Property $azConObj
         } #foreach ($azCon in $azCons)
         Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -Completed
       } #if ($GetContainerDetails -eq $true)
@@ -635,22 +847,49 @@ foreach ($sub in $subs) {
           $azFSNum++
           $azFSClient = $azFS.ShareClient
           $azFSStats = $azFSClient.GetStatistics()
-          $azFSObj = [PSCustomObject] @{
-            "Name" = $azFS.Name
-            "StorageAccount" = $azSA.StorageAccountName
-            "StorageAccountType" = $azSA.Kind
-            "StorageAccountSkuName" = $azSA.Sku.Name
-            "StorageAccountAccessTier" = $azSA.AccessTier
-            "Tenant" = $tenant.Name
-            "Subscription" = $sub.Name
-            "Region" = $azSA.PrimaryLocation
-            "ResourceGroup" = $azSA.ResourceGroupName
-            "QuotaGiB" = $azFS.Quota
-            "UsedCapacityBytes" = $azFSStats.Value.ShareUsageInBytes
-            "UsedCapacityGiB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0)
-            "UsedCapacityGB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3)        
+          # $azFSObj = [PSCustomObject] @{
+          #   "Name" = $azFS.Name
+          #   "StorageAccount" = $azSA.StorageAccountName
+          #   "StorageAccountType" = $azSA.Kind
+          #   "StorageAccountSkuName" = $azSA.Sku.Name
+          #   "StorageAccountAccessTier" = $azSA.AccessTier
+          #   "Tenant" = $tenant.Name
+          #   "Subscription" = $sub.Name
+          #   "Region" = $azSA.PrimaryLocation
+          #   "ResourceGroup" = $azSA.ResourceGroupName
+          #   "QuotaGiB" = $azFS.Quota
+          #   "UsedCapacityBytes" = $azFSStats.Value.ShareUsageInBytes
+          #   "UsedCapacityGiB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0)
+          #   "UsedCapacityGB" = [math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3)        
+          # }
+          $azFSObj = [ordered] @{}
+          $azFSObj.Add("Name",$azFS.Name)
+          $azFSObj.Add("StorageAccount",$azSA.StorageAccountName)
+          $azFSObj.Add("StorageAccountType",$azSA.Kind)
+          $azFSObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
+          $azFSObj.Add("StorageAccountAccessTier",$azSA.AccessTier)
+          $azFSObj.Add("Tenant",$tenant.Name)
+          $azFSObj.Add("Subscription",$sub.Name)
+          $azFSObj.Add("Region",$azSA.PrimaryLocation)
+          $azFSObj.Add("ResourceGroup",$azSA.ResourceGroupName)
+          $azFSObj.Add("QuotaGiB",$azFS.Quota)
+          $azFSObj.Add("UsedCapacityBytes",$azFSStats.Value.ShareUsageInBytes)
+          $azFSObj.Add("UsedCapacityGiB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0))
+          $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3))      
+          # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+          if ($azFS.Tags.Count -ne 0) {
+            $uniqueAzTags | Foreach-Object {
+                if ($azFS.Tags[$_]) {
+                    $azFSObj.Add("$_ (Tag)",$azFS.Tags[$_])
+                }
+                else {
+                    $azFSObj.Add("$_ (Tag)","-")
+                }
+            }
+          } else {
+              $uniqueAzTags | Foreach-Object { $azFSObj.Add("$_ (Tag)","-") }
           }
-        $azFSList += $azFSObj
+          $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
         Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFS.Name)" -Completed
       } #if ($SkipAzureFiles -ne $true)
