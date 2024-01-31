@@ -58,14 +58,8 @@ One or more CSV files will be saved to the same directory where the script ran w
 Please copy/paste the console output and send it along with the CSV files to the person that asked you to run
 this script.
 
-.PARAMETER Subscriptions
-A comma separated list of subscriptions to gather data from.
-
 .PARAMETER AllSubscriptions
 Flag (default) to find all subscriptions that the user has access to and gather data.
-
-.PARAMETER ManagementGroups
-A comma separated list of Azure Management Groups to gather data from.
 
 .PARAMETER CurrentSubscription
 Flag to only gather information from the current subscription.
@@ -75,9 +69,14 @@ Performs a deep introspection of each container in blob storage and calculates v
 may take a long time when large blob stores are located.
 
 
+.PARAMETER ManagementGroups
+A comma separated list of Azure Management Groups to gather data from.
+
 .PARAMETER SkipAzureBackup
 Do not collect data on Azure Backup Vaults, Policies, or Items.
 
+.PARAMETER SkipAzureFiles
+Do not collect data on Azure Files.
 
 .PARAMETER SkipAzureSQLandMI
 Do not collect data on Azure SQL or Azure Managed Instances
@@ -85,8 +84,11 @@ Do not collect data on Azure SQL or Azure Managed Instances
 .PARAMETER SkipAzureStorageAccounts
 Do not collect data on Azure Storage Accounts. This includes not collecting data on Azure Blob storage and Azure Files.
 
-.PARAMETER SkipAzureFiles
-Do not collect data on Azure Files.
+.PARAMETER SkipAzureVMandManagedDisks
+Do not collect data on Azure VMs or Managed Disks.
+
+.PARAMETER Subscriptions
+A comma separated list of subscriptions to gather data from.
 
 .NOTES
 Written by Steven Tong for community usage
@@ -105,7 +107,7 @@ Updated by DamaniN: 11/3/23 -   Updated install/deployment documentation - Daman
                                 Added support for Azure Blob stores
                                 Added parameters to skip the collection of various Azure services
 Updated by DamaniN: 1/31/24 -   Added support for Azure Backup Vaults, Policies, and Items
-
+                                
 If you run this script and get an error message similar to this:
 
 ./Get-AzureVMSQLInfo.ps1: The script "Get-AzureVMSQLInfo.ps1" cannot be run because the following
@@ -115,19 +117,19 @@ Install the missing module by using the Install-Module command in the instructio
 
 If you run  this script and get an error message similar to this:
 
- Write-Error: Error getting Azure File Storage information from: mystorageaccount storage account.
+  Write-Error: Error getting Azure File Storage information from: mystorageaccount storage account.
 
-Get-AzStorageShare: Get-AzureVMSQLInfo.ps1:604:20                     
-Line |                                                                                                                  
- 604 |  …    $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Sto …                                
-     | This request is not authorized to perform this operation. RequestId:12345678-90ab-cdef-1234-567890abcdef 
-     | Time:2023-11-13T06:31:07.0875480Z Status: 403 (This request is not authorized to perform this operation.)
-     | ErrorCode: AuthorizationFailure  Content: <?xml version="1.0"
-     | encoding="utf-8"?><Error><Code>AuthorizationFailure</Code><Message>This request is not authorized to perform
-     | this operation. RequestId:12345678-90ab-cdef-1234-567890abcdef Time:2023-11-13T06:31:07.0875480Z</Message></Error> 
-     | Headers: Server: Microsoft-HTTPAPI/2.0 x-ms-request-id: 12345678-90ab-cdef-1234-567890abcdef x-ms-client-request-id: 
-     | 12345678-90ab-cdef-fedc-ba-0987654321 x-ms-error-code: AuthorizationFailure Date: Mon, 13 Nov 2023 06:31:06 GMT 
-     | Content-Length: 246 Content-Type: application/xml
+  Get-AzStorageShare: Get-AzureVMSQLInfo.ps1:604:20                     
+  Line |                                                                                                                  
+  604 |  …    $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Sto …                                
+      | This request is not authorized to perform this operation. RequestId:12345678-90ab-cdef-1234-567890abcdef 
+      | Time:2023-11-13T06:31:07.0875480Z Status: 403 (This request is not authorized to perform this operation.)
+      | ErrorCode: AuthorizationFailure  Content: <?xml version="1.0"
+      | encoding="utf-8"?><Error><Code>AuthorizationFailure</Code><Message>This request is not authorized to perform
+      | this operation. RequestId:12345678-90ab-cdef-1234-567890abcdef Time:2023-11-13T06:31:07.0875480Z</Message></Error> 
+      | Headers: Server: Microsoft-HTTPAPI/2.0 x-ms-request-id: 12345678-90ab-cdef-1234-567890abcdef x-ms-client-request-id: 
+      | 12345678-90ab-cdef-fedc-ba-0987654321 x-ms-error-code: AuthorizationFailure Date: Mon, 13 Nov 2023 06:31:06 GMT 
+      | Content-Length: 246 Content-Type: application/xml
 
 It may mean that where the script is running that it cannot read from the Azure File Share due to the network ACLs. The 
 Azure File Share may not have public access or may only be accessible via a private endpoint. If this error only
@@ -240,7 +242,7 @@ $context = Get-AzContext
 $context | Select-Object -Property Account,Environment,Tenant |  format-table
 
 # Arrays for collecting data.
-$azTags = @()
+$azLabels = @()
 $vmList = @()
 $sqlList = @()
 $azSAList = @()
@@ -258,10 +260,10 @@ $azVaultAzureFilesItems = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
-    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    Write-Host "Finding specified subscription(s)..." -ForegroundColor Green
     $subs = @()
     foreach ($subscription in $Subscriptions.split(',')) {
-      Write-Host "Getting for subscription information for: $($subscription)..."
+      Write-Host "Getting subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
       } catch {
@@ -272,7 +274,7 @@ switch ($PSCmdlet.ParameterSetName) {
     }
   }
   'AllSubscriptions' {
-    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    Write-Host "Finding all subscription(s)..." -ForegroundColor Green
     try {
       $subs =  Get-AzSubscription -ErrorAction Stop
     } catch {
@@ -284,7 +286,7 @@ switch ($PSCmdlet.ParameterSetName) {
   } 
   'CurrentSubscription' {
     # If no subscription is specified, only use the current subscription
-    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    Write-Host "Gathering subscription information for $($context.Subscription.Name) ..." -ForegroundColor Green
     try {
       $subs = Get-AzSubscription -SubscriptionName $context.Subscription.Name -ErrorAction Stop
     } catch {
@@ -296,7 +298,7 @@ switch ($PSCmdlet.ParameterSetName) {
   }
   'ManagementGroups' {
     # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
-    Write-Host "Gathering subscription information..." -ForegroundColor Green
+    Write-Host "Gathering subscription information from Management Groups..." -ForegroundColor Green
     $subs = @()
     foreach ($managementGroup in $ManagementGroups) {
       try {
@@ -310,13 +312,13 @@ switch ($PSCmdlet.ParameterSetName) {
   }
 }
 
-# Get tag keys from all specified subscriptions
+# Get label keys from all specified subscriptions
 
 $subNum=1
 $processedSubs=0
-Write-Host "Found $($subs.Count) subscriptions to get tags from." -ForeGroundColor Green
+Write-Host "Getting label information from $($subs.Count) subscription(s)..." -ForeGroundColor Green
 foreach ($sub in $subs) {
-  Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  Write-Progress -Id 1 -Activity "Getting label information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
   $subNum++
 
   try {
@@ -327,16 +329,16 @@ foreach ($sub in $subs) {
     Continue
   }
 
-  $azTags += $(Get-AzTag).Name
+  $azLabels += $(Get-AzTag).Name
 } # foreach ($sub in $subs)
-Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -Completed
+Write-Progress -Id 1 -Activity "Getting label information from subscription: $($sub.Name)" -Completed
 
-$uniqueAzTags = $azTags | Sort-Object -Unique
+$uniqueAzLabels = $azLabels | Sort-Object -Unique
 
 # Get Azure information for all specified subscriptions
 $subNum=1
 $processedSubs=0
-Write-Host "Found $($subs.Count) subscriptions to process." -ForeGroundColor Green
+Write-Host "Processing $($subs.Count) subscription(s)..." -ForeGroundColor Green
 foreach ($sub in $subs) {
   Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
   $subNum++
@@ -416,18 +418,18 @@ foreach ($sub in $subs) {
       $vmObj.Add("Status",$vm.StatusCode)
       $vmObj.Add("HasMSSQL","No")      
       
-      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($vm.Tags.Count -ne 0) {
-        $uniqueAzTags | Foreach-Object {
-            if ($vm.Tags[$_]) {
-                $vmObj.Add("$_ (Tag)",$vm.Tags[$_])
+      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($vm.Labels.Count -ne 0) {
+        $uniqueAzLabels | Foreach-Object {
+            if ($vm.Labels[$_]) {
+                $vmObj.Add("$_ (Label)",$vm.Labels[$_])
             }
             else {
-                $vmObj.Add("$_ (Tag)","-")
+                $vmObj.Add("$_ (Label)","-")
             }
         }
       } else {
-          $uniqueAzTags | Foreach-Object { $vmObj.Add("$_ (Tag)","-") }
+          $uniqueAzLabels | Foreach-Object { $vmObj.Add("$_ (Label)","-") }
       }
 
       $vmList += New-Object -TypeName PSObject -Property $vmObj
@@ -438,7 +440,7 @@ foreach ($sub in $subs) {
     try {
       $sqlVms = Get-AzSQLVM
     } catch {
-      Write-Error "Unable to collect SQL VM information for subscription: $($sub.Name)"
+      Write-Error "Unable to collect SQL VM information for subscription: $($sub.Name) under tenant $($tenant.Name)"
       $_
       Continue
     }
@@ -460,7 +462,7 @@ foreach ($sub in $subs) {
     try {
       $sqlServers = Get-AzSqlServer -ErrorAction Stop
     } catch {
-      Write-Error "Unable to collect Azure SQL Server information for subscription: $($sub.Name)"
+      Write-Error "Unable to collect Azure SQL Server information for subscription: $($sub.Name) under tenant $($tenant.Name)"
       $_
       Continue    
     }
@@ -475,7 +477,7 @@ foreach ($sub in $subs) {
         $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName -ErrorAction Stop
       }
       catch {
-        Write-Error "Unable to collect Azure SQL Server database information for Azure SQL Database server: $($sqlServer.ServerName)"
+        Write-Error "Unable to collect Azure SQL Server database information for Azure SQL Database server: $($sqlServer.ServerName) in subscription $($sub.Name) under tenant $($tenant.Name)"
         $_
         Continue    
       }
@@ -490,7 +492,7 @@ foreach ($sub in $subs) {
               $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
             }
             catch {
-              Write-Error "Unable to collect Azure SQL Server Elastic Pool information for Azure SQL Database server: $($sqlServer.ServerName)"
+              Write-Error "Unable to collect Azure SQL Server Elastic Pool information for Azure SQL Database server: $($sqlServer.ServerName) in subscription $($sub.Name) under tenant $($tenant.Name)"
               $_
               Continue    
             }
@@ -530,18 +532,18 @@ foreach ($sub in $subs) {
                 $sqlObj.Add("InstanceType",$pool.SkuName)
                 $sqlObj.Add("Status",$pool.Status)
 
-                # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-                if ($pool.Tags.Count -ne 0) {
-                  $uniqueAzTags | Foreach-Object {
-                      if ($pool.Tags[$_]) {
-                          $sqlObj.Add("$_ (Tag)",$pool.Tags[$_])
+                # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+                if ($pool.Labels.Count -ne 0) {
+                  $uniqueAzLabels | Foreach-Object {
+                      if ($pool.Labels[$_]) {
+                          $sqlObj.Add("$_ (Label)",$pool.Labels[$_])
                       }
                       else {
-                          $sqlObj.Add("$_ (Tag)","-")
+                          $sqlObj.Add("$_ (Label)","-")
                       }
                   }
                 } else {
-                    $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
+                    $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
                 }
                 $sqlList += New-Object -TypeName PSObject -Property $sqlObj
               }
@@ -577,18 +579,18 @@ foreach ($sub in $subs) {
             $sqlObj.Add("InstanceType",$sqlDB.SkuName)
             $sqlObj.Add("Status",$sqlDB.Status)
 
-            # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-            if ($sqlDB.Tags.Count -ne 0) {
-              $uniqueAzTags | Foreach-Object {
-                  if ($sqlDB.Tags[$_]) {
-                      $sqlObj.Add("$_ (Tag)",$sqlDB.Tags[$_])
+            # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+            if ($sqlDB.Labels.Count -ne 0) {
+              $uniqueAzLabels | Foreach-Object {
+                  if ($sqlDB.Labels[$_]) {
+                      $sqlObj.Add("$_ (Label)",$sqlDB.Labels[$_])
                   }
                   else {
-                      $sqlObj.Add("$_ (Tag)","-")
+                      $sqlObj.Add("$_ (Label)","-")
                   }
               }
             } else {
-                $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
+                $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
             }
             $sqlList += New-Object -TypeName PSObject -Property $sqlObj
           }  # else not an Elastic Pool but normal SQL DB
@@ -601,7 +603,7 @@ foreach ($sub in $subs) {
     try {
       $sqlManagedInstances = Get-AzSqlInstance -ErrorAction Stop
     } catch {
-      Write-Error "Unable to collect Azure Manged Instance information for subscription: $($sub.Name)"
+      Write-Error "Unable to collect Azure Manged Instance information for subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
       $_
       Continue    
     }
@@ -640,18 +642,18 @@ foreach ($sub in $subs) {
       $sqlObj.Add("DatabaseID","")
       $sqlObj.Add("InstanceType",$MI.Sku.Name)
       $sqlObj.Add("Status",$MI.Status)
-      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($MI.Tags.Count -ne 0) {
-        $uniqueAzTags | Foreach-Object {
-            if ($MI.Tags[$_]) {
-                $sqlObj.Add("$_ (Tag)",$MI.Tags[$_])
+      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($MI.Labels.Count -ne 0) {
+        $uniqueAzLabels | Foreach-Object {
+            if ($MI.Labels[$_]) {
+                $sqlObj.Add("$_ (Label)",$MI.Labels[$_])
             }
             else {
-                $sqlObj.Add("$_ (Tag)","-")
+                $sqlObj.Add("$_ (Label)","-")
             }
         }
       } else {
-          $uniqueAzTags | Foreach-Object { $sqlObj.Add("$_ (Tag)","-") }
+          $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
       }
       $sqlList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
@@ -738,18 +740,18 @@ foreach ($sub in $subs) {
       $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3))    
       $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
       $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
-      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($azSA.Tags.Count -ne 0) {
-        $uniqueAzTags | Foreach-Object {
-            if ($azSA.Tags[$_]) {
-                $azSAObj.Add("$_ (Tag)",$azSA.Tags[$_])
+      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($azSA.Labels.Count -ne 0) {
+        $uniqueAzLabels | Foreach-Object {
+            if ($azSA.Labels[$_]) {
+                $azSAObj.Add("$_ (Label)",$azSA.Labels[$_])
             }
             else {
-                $azSAObj.Add("$_ (Tag)","-")
+                $azSAObj.Add("$_ (Label)","-")
             }
         }
       } else {
-          $uniqueAzTags | Foreach-Object { $azSAObj.Add("$_ (Tag)","-") }
+          $uniqueAzLabels | Foreach-Object { $azSAObj.Add("$_ (Label)","-") }
       }
       $azSAList += New-Object -TypeName PSObject -Property $azSAObj
       
@@ -759,7 +761,7 @@ foreach ($sub in $subs) {
           $azCons = Get-AzStorageContainer -Context $azSAContext -ErrorAction Stop
         }
         catch {
-          Write-Error "Error getting Azure Container information from: $($azSA.StorageAccountName) storage account."
+          Write-Error "Error getting Azure Container information from: $($azSA.StorageAccountName) storage account in subscription $($sub.Name) under tenant $($tenant.Name)."
           $_
           $azCons = @()
         }
@@ -842,18 +844,18 @@ foreach ($sub in $subs) {
           $azConObj.Add("UsedCapacityAllTiersBytes",$lengthAllTiers)
           $azConObj.Add("UsedCapacityAllTiersGiB",[math]::round($($lengthAllTiers / 1073741824), 0))
           $azConObj.Add("UsedCapacityAllTiersGB",[math]::round($($lengthAllTiers / 1000000000), 3))
-          # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-          if ($azCon.Tags.Count -ne 0) {
-            $uniqueAzTags | Foreach-Object {
-                if ($azCon.Tags[$_]) {
-                    $azConObj.Add("$_ (Tag)",$azCon.Tags[$_])
+          # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+          if ($azCon.Labels.Count -ne 0) {
+            $uniqueAzLabels | Foreach-Object {
+                if ($azCon.Labels[$_]) {
+                    $azConObj.Add("$_ (Label)",$azCon.Labels[$_])
                 }
                 else {
-                    $azConObj.Add("$_ (Tag)","-")
+                    $azConObj.Add("$_ (Label)","-")
                 }
             }
           } else {
-              $uniqueAzTags | Foreach-Object { $azConObj.Add("$_ (Tag)","-") }
+              $uniqueAzLabels | Foreach-Object { $azConObj.Add("$_ (Label)","-") }
           }
           $azConList += New-Object -TypeName PSObject -Property $azConObj
         } #foreach ($azCon in $azCons)
@@ -866,7 +868,7 @@ foreach ($sub in $subs) {
           $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Stop | Where-Object -Property IsSnapshot -eq $false
         }
         catch {
-          Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName) storage account."
+          Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName) storage account in subscription $($sub.Name) under tenant $($tenant.Name)."
           $_
           $azFSs = @()
         }    
@@ -905,18 +907,18 @@ foreach ($sub in $subs) {
           $azFSObj.Add("UsedCapacityBytes",$azFSStats.Value.ShareUsageInBytes)
           $azFSObj.Add("UsedCapacityGiB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0))
           $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3))      
-          # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-          if ($azFS.Tags.Count -ne 0) {
-            $uniqueAzTags | Foreach-Object {
-                if ($azFS.Tags[$_]) {
-                    $azFSObj.Add("$_ (Tag)",$azFS.Tags[$_])
+          # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+          if ($azFS.Labels.Count -ne 0) {
+            $uniqueAzLabels | Foreach-Object {
+                if ($azFS.Labels[$_]) {
+                    $azFSObj.Add("$_ (Label)",$azFS.Labels[$_])
                 }
                 else {
-                    $azFSObj.Add("$_ (Tag)","-")
+                    $azFSObj.Add("$_ (Label)","-")
                 }
             }
           } else {
-              $uniqueAzTags | Foreach-Object { $azFSObj.Add("$_ (Tag)","-") }
+              $uniqueAzLabels | Foreach-Object { $azFSObj.Add("$_ (Label)","-") }
           }
           $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
