@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources
+#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
 
 <#
 .SYNOPSIS
@@ -32,7 +32,7 @@ To prepare to run this script from a local system do the following:
   
   2. Install the Azure Powershell modules that are required by this script by running the command:
 
-      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor"
+      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices"
   
   3. Verify that the Azure AD account that will be used to run this script has the "Reader" and "Reader and Data Access"
       roles on each subscription to be scanned. 
@@ -74,8 +74,10 @@ Flag to only gather information from the current subscription.
 Performs a deep introspection of each container in blob storage and calculates various statistics. Using this parameter 
 may take a long time when large blob stores are located.
 
-.PARAMETER SkipAzureVMandManagedDisks
-Do not collect data on Azure VMs or Managed Disks.
+
+.PARAMETER SkipAzureBackup
+Do not collect data on Azure Backup Vaults, Policies, or Items.
+
 
 .PARAMETER SkipAzureSQLandMI
 Do not collect data on Azure SQL or Azure Managed Instances
@@ -102,6 +104,7 @@ Updated by DamaniN: 07/20/23 -  Added support for Microsoft SQL in an Azure VM.
 Updated by DamaniN: 11/3/23 -   Updated install/deployment documentation - Damani
                                 Added support for Azure Blob stores
                                 Added parameters to skip the collection of various Azure services
+Updated by DamaniN: 1/31/24 -   Added support for Azure Backup Vaults, Policies, and Items
 
 If you run this script and get an error message similar to this:
 
@@ -171,7 +174,10 @@ param (
   [switch]$GetContainerDetails,
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [switch]$SkipAzureVMandManagedDisks,
+  [switch]$SkipAzureBackup,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureFiles,
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureSQLandMI,
@@ -180,7 +186,7 @@ param (
   [switch]$SkipAzureStorageAccounts,
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [switch]$SkipAzureFiles,
+  [switch]$SkipAzureVMandManagedDisks,
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -208,11 +214,25 @@ Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 $date = Get-Date
 
 # Filenames of the CSVs to output
-$outputVmDisk = "azure_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputSQL = "azure_sql_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputAzSA = "azure_storage_account_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputAzCon = "azure_container_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputAzFS = "azure_file_share_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$fileDate = $date.ToString("yyyy-MM-dd_HHmm")
+$outputVmDisk = "azure_vmdisk_info-$($fileDate).csv"
+$outputSQL = "azure_sql_info-$($fileDate).csv"
+$outputAzSA = "azure_storage_account_info-$($fileDate).csv"
+$outputAzCon = "azure_container_info-$($fileDate).csv"
+$outputAzFS = "azure_file_share_info-$($fileDate).csv"
+$outputAzVaults = "azure_backup_vault_info-$($fileDate).csv"
+$outputAzVaultVMPolicies = "azure_backup_vault_VM_policies-$($fileDate).csv"
+$outputAzVaultVMPoliciesJSON = "azure_backup_vault_VM_policies-$($fileDate).json"
+$outputAzVaultVMSQLPolicies = "azure_backup_vault_VM_SQL_policies-$($fileDate).csv"
+$outputAzVaultVMSQLPoliciesJSON = "azure_backup_vault_VM_SQL_policies-$($fileDate).json"
+$outputAzVaultAzureSQLDatabasePolicies = "azure_backup_vault_Azure_SQL_Database_Policies-$($fileDate).csv"
+$outputAzVaultAzureSQLDatabasePoliciesJSON = "azure_backup_vault_Azure_SQL_Database_Policies-$($fileDate).json"
+$outputAzVaultAzureFilesPolicies = "azure_backup_vault_Azure_Files_Policies-$($fileDate).csv"
+$outputAzVaultAzureFilesPoliciesJSON = "azure_backup_vault_Azure_Files_Policies-$($fileDate).json"
+$outputAzVaultVMItems = "azure_backup_vault_VM_items-$($fileDate).csv"
+$outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
+$outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
+$outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -226,6 +246,15 @@ $sqlList = @()
 $azSAList = @()
 $azConList = @()
 $azFSList = @()
+$azVaultList = @()
+$azVaultVMPoliciesList = @()
+$azVaultVMSQLPoliciesList = @()
+$azVaultAzureSQLDatabasePoliciesList = @()
+$azVaultAzureFilesPoliciesList = @()
+$azVaultVMItems = @()
+$azVaultVMSQLItems = @()
+$azVaultAzureSQLDatabaseItems = @()
+$azVaultAzureFilesItems = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -896,6 +925,109 @@ foreach ($sub in $subs) {
     } # foreach ($azSA in $azSAs)
     Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -Completed
   } # if ($SkipAzureStorageAccounts -ne $true)
+
+  if ($SkipAzureBackup -ne $true) {
+    # Get a list of all Azure Storage Accounts.
+    try {
+      $azVaults = Get-AzRecoveryServicesVault -ErrorAction Stop
+    } catch {
+      Write-Error "Unable to collect Azure Backup information for subscription: $($sub.Name) under tenant $($tenant.Name)"
+      $_
+      Continue    
+    }
+
+    #Loop over all vaults in the subscription and get Azure Backup Details
+    $azVaultNum=1
+    foreach ($azVault in $azVaults) {
+      Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
+      $azVaultNum++
+      $azVaultVMPolicies = @()
+      $azVaultVMSQLPolicies = @()
+      $azVaultAzureSQLDatabasePolicies = @()
+      $azVaultAzureFilesPolicies = @()
+      $azVaultVMPolicyObj = [ordered] @{}
+      $azVaultVMPolicyObj.Add("Name",$azVault.Name)
+      $azVaultVMPolicyObj.Add("Type",$azVault.Type)
+      $azVaultVMPolicyObj.Add("Tenant",$tenant.Name)
+      $azVaultVMPolicyObj.Add("Subscription",$sub.Name)
+      $azVaultVMPolicyObj.Add("Region",$azVault.Location)
+      $azVaultVMPolicyObj.Add("ResourceGroup",$azVault.ResourceGroupName)
+      $azVaultVMPolicyObj.Add("ProvisioningState",$azVault.Properties.ProvisioningState)
+      $azVaultVMPolicyObj.Add("CrossSubscriptionRestoreState",$azVault.Properties.RestoreSettings.CrossSubscriptionRestoreSettings.CrossSubscriptionRestoreState)
+      $azVaultVMPolicyObj.Add("ImmutabilitySettings",$azVault.Properties.ImmutabilitySettings)
+      $azVaultList += New-Object -TypeName PSObject -Property $azVaultVMPolicyObj
+
+      Set-AzRecoveryServicesVaultContext  -Vault $azVault
+      #Get Azure Backup policies for VMs and SQL in a VM
+      $azVaultVMPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureVM
+      $azVaultVMPoliciesList += $azVaultVMPolicies | Select-Object -Property `
+        @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+        @{Name = "Subscription"; Expression = {$sub.Name}}, `
+        @{Name = "Region"; Expression = {$azVault.Location}}, `
+        @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+        *
+
+      $azVaultVMSQLPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType MSSQL
+      $azVaultVMSQLPoliciesList += $azVaultVMSQLPolicies | Select-Object -Property `
+      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+      @{Name = "Subscription"; Expression = {$sub.Name}}, `
+      @{Name = "Region"; Expression = {$azVault.Location}}, `
+      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+      *
+
+      $azVaultAzureSQLDatabasePolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureSQLDatabase
+      $azVaultAzureSQLDatabasePoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+      @{Name = "Subscription"; Expression = {$sub.Name}}, `
+      @{Name = "Region"; Expression = {$azVault.Location}}, `
+      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+      *
+
+      $azVaultAzureFilesPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureFiles
+      $azVaultAzureFilesPoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+      @{Name = "Subscription"; Expression = {$sub.Name}}, `
+      @{Name = "Region"; Expression = {$azVault.Location}}, `
+      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+      *
+
+      #For each policy, get the items currently protected by the policy
+      foreach ($policy in $azVaultVMPolicies) {
+          $azVaultVMItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$sub.Name}}, `
+          @{Name = "Region"; Expression = {$azVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+          *
+      }
+      foreach ($policy in $azVaultVMSQLPolicies) {
+          $azVaultVMSQLItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$sub.Name}}, `
+          @{Name = "Region"; Expression = {$azVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+          *
+      }
+      foreach ($policy in $azVaultAzureSQLDatabasePolicies) {
+          $AzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$sub.Name}}, `
+          @{Name = "Region"; Expression = {$azVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+          *
+      }
+      foreach ($policy in $azVaultAzureFilesPolicies) {
+          $AzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$sub.Name}}, `
+          @{Name = "Region"; Expression = {$azVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+          *
+      }
+
+    } # foreach ($azVault in $azVaults)
+    Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
+  } # if ($SkipAzureBackup -ne $true)
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -Completed
 
@@ -915,10 +1047,7 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.count)" -ForeGroundColor Green
   Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
   Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB" -ForeGroundColor Green
-  $outputFileObj = [PSCustomObject] @{ 
-    "Files" = "Azure VM and Managed Disk CSV file output saved to: $outputVmDisk"
-  }
-  $outputFiles += $outputFileObj
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
   $vmList | Export-CSV -path $outputVmDisk
 
 } #if ($SkipAzureVMandManagedDisks -ne $true)
@@ -940,10 +1069,7 @@ if ($SkipAzureSQLandMI -ne $true) {
   Write-Host
   Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB" -ForeGroundColor Green
-  $outputFileObj = [PSCustomObject] @{ 
-    "Files" = "Azure SQL/MI CSV file output saved to: $outputSQL"
-  }
-  $outputFiles += $outputFileObj
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL/MI CSV file."}
   $sqlList | Export-CSV -path $outputSQL
 } #if ($SkipAzureSQLandMI -ne $true)
 
@@ -967,10 +1093,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
   Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB" -ForeGroundColor Green
   Write-Host "Total number files is $('{0:N0}' -f $azSATotalFileObjects) in $('{0:N0}' -f $azSATotalFileShares) Azure File Shares." -ForeGroundColor Green
 
-  $outputFileObj = [PSCustomObject] @{ 
-    "Files" = "Azure Storage Account CSV file output saved to: $outputAzSA"
-  }
-  $outputFiles += $outputFileObj
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzSA - Azure Storage Account CSV file."}
   $azSAList | Export-CSV -path $outputAzSA
 
   if ($GetContainerDetails -eq $true) {
@@ -985,10 +1108,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB" -ForeGroundColor Green
-    $outputFileObj = [PSCustomObject] @{ 
-      "Files" = "Azure Container CSV file output saved to: $outputAzCon"
-    }
-    $outputFiles += $outputFileObj
+    $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
     $azConList | Export-CSV -path $outputAzCon
   }
 
@@ -1002,13 +1122,53 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure File Shares: $('{0:N0}' -f $azFSList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB" -ForeGroundColor Green
-    $outputFileObj = [PSCustomObject] @{ 
-      "Files" = "Azure File Share CSV file output saved to: $outputAzFS"
-    }
-    $outputFiles += $outputFileObj
+    $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzFS - Azure File Share CSV file."}
     $azFSList | Export-CSV -path $outputAzFS
   }
 } #if ($SkipAzureStorageAccounts -ne $true)
+
+if ($SkipAzureBackup -ne $true) {
+  
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaults - Azure Backup Vault CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPolicies - Azure Backup Vault VM policies CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPoliciesJSON - Azure Backup Vault VM policies JSON file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLPolicies - Azure Backup Vault VM SQL policies CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLPoliciesJSON - Azure Backup Vault VM SQL policies JSON file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabasePolicies - Azure Backup Vault Azure SQL Database policies CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabasePoliciesJSON - Azure Backup Vault Azure SQL Database policies JSON file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesPolicies - Azure Backup Vault Azure Files CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesPoliciesJSON - Azure Backup Vault Azure Files JSON file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMItems - Azure Backup Vault VM items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMItems - Azure Backup Vault VM SQL items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabaseItems - Azure Backup Vault Azure SQL Database items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesItems - Azure Backup Vault Azure Files items CSV file."}
+
+  Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)"
+  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)"
+  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines with SQL databases: $('{0:N0}' -f $azVaultVMSQLPoliciesList.Count)"
+  Write-Host "Total # of Azure Backup Vault policies for Azure SQL databases: $('{0:N0}' -f $azVaultAzureSQLDatabasePoliciesList.Count)"
+  Write-Host "Total # of Azure Backup Vault policies for Azure Files: $('{0:N0}' -f $azVaultAzureFilesPoliciesList.Count)"
+  Write-Host "Total # of Azure VMs protected by Azure Backup : $('{0:N0}' -f $azVaultVMItems.Count)"
+  Write-Host "Total # of Azure VMs with MS SQL protected by Azure Backup : $('{0:N0}' -f $azVaultVMSQLItems.Count)"
+  Write-Host "Total # of Azure SQL databases protected by Azure Backup : $('{0:N0}' -f $azVaultAzureSQLDatabaseItems.Count)"
+  Write-Host "Total # of Azure Files shares protected by Azure Backup : $('{0:N0}' -f $azVaultAzureFilesItems.Count)"
+
+
+  $azVaultList | Export-Csv -Path $outputAzVaults
+  #$azVaultVMPoliciesList | Export-Csv -Path $outputAzVaultVMPolicies
+  $azVaultVMPoliciesList  | ConvertTo-Json -Depth 10 > $outputAzVaultVMPoliciesJSON
+  #$azVaultVMSQLPoliciesList | Export-Csv -Path $outputAzVaultVMSQLPolicies
+  $azVaultVMSQLPoliciesList | ConvertTo-Json -Depth 10 > $outputAzVaultVMSQLPoliciesJSON
+  #$azVaultAzureSQLDatabasePoliciesList | Export-Csv -Path $outputAzVaultAzureSQLDatabasePolicies
+  $azVaultAzureSQLDatabasePoliciesList | ConvertTo-Json -Depth 10 > $outputAzVaultAzureSQLDatabasePoliciesJSON
+  #$azVaultAzureFilesPoliciesList | Export-Csv -Path $outputAzVaultAzureFilesPolicies
+  $azVaultAzureFilesPoliciesList | ConvertTo-Json -Depth 10 > $outputAzVaultAzureFilesPoliciesJSON
+  $azVaultVMItems | Export-Csv -Path $outputAzVaultVMItems
+  $azVaultVMSQLItems | Export-Csv -Path $outputAzVaultVMSQLItem
+  $azVaultAzureSQLDatabaseItems | Export-Csv -Path $outputAzVaultAzureSQLDatabaseItems
+  $azVaultAzureFilesItems | Export-Csv -Path $outputAzVaultAzureFilesItems
+
+} # if ($SkipAzureBackup -ne $true)
 
 Write-Host
 Write-Host "Output files are:"

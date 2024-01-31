@@ -1,3 +1,4 @@
 settings.json
 **/.DS_Store
 *.csv
+CLOUD/*.json
