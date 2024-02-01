@@ -1,0 +1,4 @@
+"Name","Type","Tenant","Subscription","Region","ResourceGroup","ProvisioningState","CrossSubscriptionRestoreState","ImmutabilitySettings"
+"Vault-1","Microsoft.RecoveryServices/vaults","Tenant-1","subscription-1","eastus","Site-recovery-vault-RG","Succeeded","Enabled",
+"Vault-2","Microsoft.RecoveryServices/vaults","Tenant-1","subscription-1","centralus","Site-recovery-vault-RG","Succeeded","Enabled",
+"Vault-3","Microsoft.RecoveryServices/vaults","Tenant-2","subscription-2","westus","Site-recovery-vault-RG-2","Succeeded","Enabled",

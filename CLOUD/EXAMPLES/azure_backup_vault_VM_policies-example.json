@@ -1,0 +1,90 @@
+[
+  {
+    "Tenant": "Tenant-1",
+    "Subscription": "subscription-1",
+    "Region": "eastus",
+    "ResourceGroup": "ResourceGroup-1",
+    "SnapshotRetentionInDays": 2,
+    "ProtectedItemsCount": 0,
+    "AzureBackupRGName": null,
+    "AzureBackupRGNameSuffix": null,
+    "PolicySubType": 1,
+    "TieringPolicy": null,
+    "SchedulePolicy": {
+      "ScheduleRunFrequency": 1,
+      "ScheduleRunDays": null,
+      "ScheduleRunTimes": [
+        "2023-06-30T07:00:00Z"
+      ],
+      "ScheduleInterval": null,
+      "ScheduleWindowStartTime": null,
+      "ScheduleWindowDuration": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "RetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2023-06-30T07:00:00Z"
+        ],
+        "BackupManagementType": "AzureIaasVM"
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": "AzureIaasVM"
+    },
+    "Name": "DefaultPolicy",
+    "WorkloadType": 1,
+    "Id": "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/ResourceGroup-1/providers/Microsoft.RecoveryServices/vaults/Site-recovery-vault-eastus/backupPolicies/DefaultPolicy",
+    "BackupManagementType": 1
+  },
+  {
+    "Tenant": "Tenant-1",
+    "Subscription": "subscription-1",
+    "Region": "eastus",
+    "ResourceGroup": "ResourceGroup-1",
+    "SnapshotRetentionInDays": 2,
+    "ProtectedItemsCount": 0,
+    "AzureBackupRGName": null,
+    "AzureBackupRGNameSuffix": null,
+    "PolicySubType": 2,
+    "TieringPolicy": null,
+    "SchedulePolicy": {
+      "ScheduleRunFrequency": 3,
+      "HourlySchedule": {
+        "Interval": 4,
+        "WindowStartTime": "2023-06-30T08:00:00Z",
+        "WindowDuration": 12
+      },
+      "DailySchedule": null,
+      "WeeklySchedule": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "RetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2023-06-30T08:00:00Z"
+        ],
+        "BackupManagementType": "AzureIaasVM"
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": "AzureIaasVM"
+    },
+    "Name": "EnhancedPolicy",
+    "WorkloadType": 1,
+    "Id": "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/ResourceGroup-1/providers/Microsoft.RecoveryServices/vaults/Site-recovery-vault-eastus/backupPolicies/EnhancedPolicy",
+    "BackupManagementType": 1
+  }
+  ]
