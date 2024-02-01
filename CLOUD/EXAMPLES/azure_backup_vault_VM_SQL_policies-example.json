@@ -1,0 +1,106 @@
+[
+  {
+    "Tenant": "Tenant-1",
+    "Subscription": "subscription-1",
+    "Region": "eastus",
+    "ResourceGroup": "ResourceGroup-1",
+    "ProtectedItemsCount": 0,
+    "IsCompression": false,
+    "IsDifferentialBackupEnabled": false,
+    "IsLogBackupEnabled": true,
+    "FullBackupSchedulePolicy": {
+      "ScheduleRunFrequency": 1,
+      "ScheduleRunDays": null,
+      "ScheduleRunTimes": [
+        "2023-06-30T07:00:00Z"
+      ],
+      "ScheduleInterval": null,
+      "ScheduleWindowStartTime": null,
+      "ScheduleWindowDuration": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "DifferentialBackupSchedulePolicy": null,
+    "LogBackupSchedulePolicy": {
+      "ScheduleFrequencyInMins": 60
+    },
+    "FullBackupRetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2023-06-30T07:00:00Z"
+        ],
+        "BackupManagementType": ""
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": ""
+    },
+    "DifferentialBackupRetentionPolicy": null,
+    "LogBackupRetentionPolicy": {
+      "RetentionDurationType": 1,
+      "RetentionCount": 30
+    },
+    "FullBackupTieringPolicy": null,
+    "Name": "HourlyLogBackup",
+    "WorkloadType": 4,
+    "Id": "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/ResourceGroup-1/providers/Microsoft.RecoveryServices/vaults/vault-1/backupPolicies/HourlyLogBackup",
+    "BackupManagementType": 6
+  },
+  {
+    "Tenant": "Tenant-1",
+    "Subscription": "subscription-1",
+    "Region": "centralus",
+    "ResourceGroup": "EngResourceGroupWestUS2",
+    "ProtectedItemsCount": 0,
+    "IsCompression": false,
+    "IsDifferentialBackupEnabled": false,
+    "IsLogBackupEnabled": true,
+    "FullBackupSchedulePolicy": {
+      "ScheduleRunFrequency": 1,
+      "ScheduleRunDays": null,
+      "ScheduleRunTimes": [
+        "2021-03-10T06:00:00Z"
+      ],
+      "ScheduleInterval": null,
+      "ScheduleWindowStartTime": null,
+      "ScheduleWindowDuration": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "DifferentialBackupSchedulePolicy": null,
+    "LogBackupSchedulePolicy": {
+      "ScheduleFrequencyInMins": 60
+    },
+    "FullBackupRetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2021-03-10T06:00:00Z"
+        ],
+        "BackupManagementType": ""
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": ""
+    },
+    "DifferentialBackupRetentionPolicy": null,
+    "LogBackupRetentionPolicy": {
+      "RetentionDurationType": 1,
+      "RetentionCount": 30
+    },
+    "FullBackupTieringPolicy": null,
+    "Name": "HourlyLogBackup",
+    "WorkloadType": 4,
+    "Id": "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/EngResourceGroupWestUS2/providers/Microsoft.RecoveryServices/vaults/vault-2/backupPolicies/HourlyLogBackup",
+    "BackupManagementType": 6
+  }
+]

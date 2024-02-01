@@ -43,24 +43,29 @@
     This includes any cross account roles that are used to query multiple accounts:
 
     {
-      "Version": "2012-10-17",
-      "Statement": [
-          {
-              "Sid": "VisualEditor0",
-              "Effect": "Allow",
-              "Action": [
-                  "sts:AssumeRole",
-                  "organizations:ListAccounts",
-                  "ec2:DescribeInstances",
-                  "ec2:DescribeVolumes",
-                  "rds:DescribeDBInstances",
-                  "iam:ListAccountAliases"
-              ],
-              "Resource": "*"
-          }
-      ]
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "VisualEditor0",
+                "Effect": "Allow",
+                "Action": [
+                    "cloudwatch:GetMetricStatistics",
+                    "cloudwatch:ListMetrics",
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeRegions",
+                    "ec2:DescribeVolumes",
+                    "iam:ListAccountAliases",
+                    "organizations:ListAccounts",
+                    "rds:DescribeDBInstances",
+                    "s3:GetBucketLocation",
+                    "s3:ListAllMyBuckets",
+                    "sts:AssumeRole"
+                ],
+                "Resource": "*"
+            }
+        ]
     }
-
+    
   .NOTES
     Written by Steven Tong for community usage
     GitHub: stevenctong
