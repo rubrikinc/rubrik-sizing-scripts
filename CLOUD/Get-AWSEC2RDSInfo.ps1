@@ -377,6 +377,7 @@ function getAWSData($cred) {
         "Region" = $awsRegion
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
+        "ProductCode" = $ec2.ProductCodes.ProductCodeType
       }
 
       $ec2List.Add($ec2obj) | Out-Null
