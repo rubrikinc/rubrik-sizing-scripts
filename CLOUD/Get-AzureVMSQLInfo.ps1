@@ -639,6 +639,7 @@ foreach ($sub in $subs) {
       $azSAObj = [ordered] @{}
       $azSAObj.Add("StorageAccount",$azSA.StorageAccountName)
       $azSAObj.Add("StorageAccountType",$azSA.Kind)
+      $azSAObj.Add("HNSEnabled(ADLSGen2)",$azSA.EnableHierarchicalNamespace)
       $azSAObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
       $azSAObj.Add("StorageAccountAccessTier",$azSA.AccessTier)
       $azSAObj.Add("Tenant",$tenant.Name)
@@ -706,6 +707,7 @@ foreach ($sub in $subs) {
           $azConObj.Add("Name",$azCon.Name)
           $azConObj.Add("StorageAccount",$azSA.StorageAccountName)
           $azConObj.Add("StorageAccountType",$azSA.Kind)
+          $azConObj.Add("HNSEnabled(ADLSGen2)",$azSA.EnableHierarchicalNamespace)
           $azConObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
           $azConObj.Add("StorageAccountAccessTier",$azSA.AccessTier)
           $azConObj.Add("Tenant",$tenant.Name)
