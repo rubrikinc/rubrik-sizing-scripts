@@ -1,3 +1,3 @@
-VM,NumDisks,SizeGiB,SizeGB,Project,Status
-gcp-native-instance-1,1,10,10.737,se-lab-185822,RUNNING
-gcp-native-instance-1-fqts6,1,10,10.737,se-lab-185822,TERMINATED
+VM,NumDisks,SizeGiB,SizeTiB,SizeGB,SizeTB,Project,Status
+gcp-native-instance-1,1,10,0.0097656,10.737,0.0107370,se-lab-185822,RUNNING
+gcp-native-instance-1-fqts6,1,10,0.0097656,10.737,0.0107370,se-lab-185822,TERMINATED

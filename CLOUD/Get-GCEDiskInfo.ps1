@@ -139,7 +139,9 @@ foreach ($i in $vmHash.getEnumerator())
       "VM" = $i.value.VM
       "NumDisks" = $i.value.NumDisks
       "SizeGiB" = $i.value.DiskSizeGb
+      "SizeTiB" = [math]::round($($i.value.DiskSizeGb / 1024), 7)
       "SizeGB" = [math]::round($($i.value.DiskSizeGb * 1.073741824), 3)
+      "SizeTB" = [math]::round($($i.value.DiskSizeGb * 0.001073741824), 7)
       "Project" = $i.value.Project
       "Status" = $i.value.Status
   }
@@ -149,11 +151,13 @@ foreach ($i in $vmHash.getEnumerator())
 
 $totalGiB = ($vmList.sizeGiB | Measure -Sum).sum
 $totalGB = ($vmList.sizeGB | Measure -Sum).sum
+$totalTiB = ($vmList.sizeTiB | Measure -Sum).sum
+$totalTB = ($vmList.sizeTB | Measure -Sum).sum
 
 Write-Host
 Write-Host "Total # of GCE VMs: $($vmList.count)" -foregroundcolor green
 Write-Host "Total # of disks: $(($vmList.numDisks | Measure -Sum).sum)" -foregroundcolor green
-Write-Host "Total capacity of all disks: $totalGiB GiB or $totalGB GB" -foregroundcolor green
+Write-Host "Total capacity of all disks: $totalGiB GiB or $totalGB GB or $totalTiB TiB or $totalTB TB" -foregroundcolor green
 
 # Export to CSV
 Write-Host ""

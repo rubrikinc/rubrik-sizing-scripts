@@ -324,14 +324,20 @@ function getAWSData($cred) {
         if ($($bytesStorage.Value) -eq $null) {
           $bytesStorageSize = 0
           $s3SizeGB = 0
+          $s3SizeTB = 0
           $s3SizeGiB = 0
+          $s3SizeTiB = 0
         } else {
           $bytesStorageSize = $($bytesStorage.Value)
           $s3SizeGB = $($bytesStorage.Value) / 1073741824
+          $s3SizeTB = $s3SizeGB / 1000
           $s3SizeGiB = $s3SizeGB / 1.073741824
+          $s3SizeTiB = $s3SizeGiB / 1024
         }
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGB") -NotePropertyValue $([math]::round($s3SizeGB, 3))
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($s3SizeTB, 7))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGiB") -NotePropertyValue $([math]::round($s3SizeGiB, 3))
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($s3SizeTiB, 7))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize
       }
       foreach ($numObjStorage in $numObjStorages.GetEnumerator()) {
@@ -373,7 +379,9 @@ function getAWSData($cred) {
         "Name" = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
         "Volumes" = $volumes.count
         "SizeGiB" = $volSize
+        "SizeTiB" = [math]::round($($volSize / 1024), 7)
         "SizeGB" = [math]::round($($volSize * 1.073741824), 3)
+        "SizeTB" = [math]::round($($volSize * 0.001073741824), 7)
         "Region" = $awsRegion
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
@@ -402,7 +410,9 @@ function getAWSData($cred) {
         "VolumeId" = $ec2UnattachedVolume.VolumeId
         "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
         "SizeGiB" = $ec2UnattachedVolume.Size
+        "SizeTiB" = [math]::round($($ec2UnattachedVolume.Size / 1024), 7)
         "SizeGB" = [math]::round($($ec2UnattachedVolume.Size * 1.073741824), 3)
+        "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 7)
         "Region" = $awsRegion
         "VolumeType" = $ec2UnattachedVolume.VolumeType
       }
@@ -426,7 +436,9 @@ function getAWSData($cred) {
         "RDSInstance" = $rds.DBInstanceIdentifier
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
         "SizeGiB" = $rds.AllocatedStorage
+        "SizeTiB" = [math]::round($($rds.AllocatedStorage / 1024), 7)
         "SizeGB" = [math]::round($($rds.AllocatedStorage * 1.073741824), 3)
+        "SizeTB" = [math]::round($($rds.AllocatedStorage * 0.001073741824), 7)
         "Region" = $awsRegion
         "InstanceType" = $rds.DBInstanceClass
         "Platform" = $rds.Engine
@@ -548,30 +560,38 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedAccounts') {
 } 
 
 $ec2TotalGiB = ($ec2list.sizeGiB | Measure-Object -Sum).sum
+$ec2TotalTiB = ($ec2list.sizeTiB | Measure-Object -Sum).sum 
 $ec2TotalGB = ($ec2list.sizeGB | Measure-Object -Sum).sum
+$ec2TotalTB = ($ec2list.sizeTB | Measure-Object -Sum).sum
 
 $ec2UnVolTotalGiB = ($ec2UnattachedVolList.sizeGiB | Measure-Object -Sum).sum
+$ec2UnVolTotalTiB = ($ec2UnattachedVolList.sizeTiB | Measure-Object -Sum).sum
 $ec2UnVolTotalGB = ($ec2UnattachedVolList.sizeGB | Measure-Object -Sum).sum
+$ec2UnVolTotalTB = ($ec2UnattachedVolList.sizeTB | Measure-Object -Sum).sum
 
 $rdsTotalGiB = ($rdsList.sizeGiB | Measure-Object -Sum).sum
+$rdsTotalTiB = ($rdsList.sizeTiB | Measure-Object -Sum).sum 
 $rdsTotalGB = ($rdsList.sizeGB | Measure-Object -Sum).sum
+$rdsTotalTB = ($rdsList.sizeTB | Measure-Object -Sum).sum
 
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
 $s3ByteProps = $s3Props | Select-String -Pattern "_SizeBytes"
 $s3GBProps = $s3Props | Select-String -Pattern "_SizeGB"
+$s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
 $s3GiBProps = $s3Props | Select-String -Pattern "_SizeGiB"
+$s3TiBProps = $s3Props | Select-String -Pattern "_SizeTiB"
 $s3ListAg = $s3List | Select-Object $s3Props
-$s3TotalGBs = @{}
+$s3TotalTBs = @{}
 
-foreach ($s3GBProp in $s3GBProps) {
-  $s3TotalGBs.Add($s3GBProp, ($s3ListAg.$s3GBProp | Measure-Object -Sum).Sum)
+foreach ($s3TBProp in $s3TBProps) {
+  $s3TotalTBs.Add($s3TBProp, ($s3ListAg.$s3TBProp | Measure-Object -Sum).Sum)
 }
 
-$s3TotalGBsFormatted  = $s3TotalGBs.GetEnumerator() |
+$s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   ForEach-Object {
     [PSCustomObject]@{
       StorageType = $_.Key
-      Size_GB = "{0:n0}" -f $_.Value
+      Size_TB = "{0:n7}" -f $_.Value
     }
   }
 
@@ -590,19 +610,19 @@ $s3ListAg | Export-CSV -path $outputS3
 Write-Host
 Write-Host "Total # of EC2 instances: $($ec2list.count)"  -ForegroundColor Green
 Write-Host "Total # of volumes: $(($ec2list.volumes | Measure-Object -Sum).sum)"  -ForegroundColor Green
-Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB"  -ForegroundColor Green
+Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB or $ec2TotalTiB TiB or $ec2TotalTB TB"  -ForegroundColor Green
 Write-Host
 
 Write-Host
 Write-Host "Total # of EC2 unattached volumes: $($ec2UnattachedVolList.count)"  -ForegroundColor Green
-Write-Host "Total capacity of all unattached volumes: $ec2UnVolTotalGiB GiB or $ec2UnVolTotalGB GB"  -ForegroundColor Green
+Write-Host "Total capacity of all unattached volumes: $ec2UnVolTotalGiB GiB or $ec2UnVolTotalGB GB or $ec2UnVolTotalTiB TiB or $ec2UnVolTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
-Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB"  -ForegroundColor Green
+Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
-Write-Output $s3TotalGBsFormatted 
+Write-Output $s3TotalTBsFormatted
 
