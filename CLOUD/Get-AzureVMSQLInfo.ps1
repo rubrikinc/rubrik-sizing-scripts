@@ -208,7 +208,7 @@ param (
 
 )
 
-Import-Module Az.Accounts, Az.Compute, Az.Sql
+Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
 
 function Get-AzureFileSAs {
   param (
