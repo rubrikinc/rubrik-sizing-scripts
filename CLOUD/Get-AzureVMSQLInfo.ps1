@@ -208,7 +208,19 @@ param (
 
 )
 
-Import-Module Az.Accounts, Az.Compute, Az.Sql, Az.Storage
+Import-Module Az.Accounts, Az.Compute, Az.Sql
+
+function Get-AzureFileSAs {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$StorageAccount
+  )
+
+  return ($StorageAccount.Kind -in @('StorageV2', 'Storage') -and 
+            $StorageAccount.Sku.Name -notin @('Premium_LRS', 'Premium_ZRS')) -or
+           ($StorageAccount.Kind -eq 'FileStorage' -and 
+            $StorageAccount.Sku.Name -in @('Premium_LRS', 'Premium_ZRS'))
+}
 
 $azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
@@ -617,7 +629,7 @@ foreach ($sub in $subs) {
       Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
       $azSANum++
       $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
-      $azSAPSObject = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
+      $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
       $azSAResourceId = "/subscriptions/$($sub.Id)/resourceGroups/$($azSA.ResourceGroupName)/providers/Microsoft.Storage/storageAccounts/$($azSA.StorageAccountName)"
       $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId $azSAResourceId `
@@ -755,12 +767,20 @@ foreach ($sub in $subs) {
       if ($SkipAzureFiles -ne $true) {
         # Loop through each Azure File Share and record quotas and capacities
         try {
-          $azFSs = Get-AzRmStorageShare -StorageAccount $azSAPSObject
-          $azFSDetails = foreach ($azFS in $azFSs) {
-            $stgAcctName = $azFS.StorageAccountName
-            $rgName = $azFS.ResourceGroupName
-            $shareName = $azFS.Name
-            Get-AzRmStorageShare -ResourceGroupName $rgName -StorageAccountName $stgAcctName -Name $shareName -GetShareUsage
+          # Select only those Storage Accounts that support Azure Files to query.
+          foreach ($azSAPSObject in $azSAPSObjects) {
+            if (Get-AzureFileSAs -StorageAccount $azSAPSObject) {
+              $azFSs = Get-AzRmStorageShare -StorageAccount $azSAPSObject
+              $azFSDetails = foreach ($azFS in $azFSs) {
+                $stgAcctName = $azFS.StorageAccountName
+                $rgName = $azFS.ResourceGroupName
+                $shareName = $azFS.Name
+                Get-AzRmStorageShare -ResourceGroupName $rgName -StorageAccountName $stgAcctName -Name $shareName -GetShareUsage
+              }
+            }
+            else {
+              Write-Output "Skipping File Share query for $($azSAPSObject.StorageAccountName) because it does not support Azure Files."
+            }            
           }
         }
         catch {
