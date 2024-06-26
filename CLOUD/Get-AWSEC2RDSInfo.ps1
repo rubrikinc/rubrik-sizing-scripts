@@ -453,12 +453,12 @@ function getAWSData($cred) {
     Write-Host "Getting EFS info for region: $awsRegion"  -ForegroundColor Green
     $efsListFromAPI = $null
     $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion
-    Write-Host "Found" $efsListFromAPI.Count "EFSs."  -ForegroundColor Green
+    Write-Host "Found" $efsListFromAPI.Count "EFS filesystems."  -ForegroundColor Green
 
     $counter = 0
     foreach ($efs in $efsListFromAPI) {
       $counter++
-      Write-Progress -Activity 'Processing EFSs:' -Status $$efs.FileSystemId -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
+      Write-Progress -Activity 'Processing EFS file systems:' -Status $$efs.FileSystemId -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
       $efsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -665,8 +665,8 @@ Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
 
 Write-Host
-Write-Host "Total # of EFSs: $($efsList.count)"  -ForegroundColor Green
-Write-Host "Total provisioned capacity of all EFSs: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
+Write-Host "Total # of EFS filesystems: $($efsList.count)"  -ForegroundColor Green
+Write-Host "Total provisioned capacity of all EFS filesystems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
