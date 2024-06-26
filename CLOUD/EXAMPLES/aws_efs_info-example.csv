@@ -1,0 +1,2 @@
+"AwsAccountId","AwsAccountAlias","FileSystemId","FileSystemProtection","Name","SizeInBytes","SizeGiB","SizeTiB","SizeGB","SizeTB","NumberOfMountTargets","OwnerId","PerformanceMode","ProvisionedThroughputInMibps","DBInstanceIdentifier","Region","ThroughputMode"
+"000000000001","example-account","fs-0a111a11a11a111a1","ENABLED","efs-testing","112618481664","104.8841343","0.1024259","112.6184817","0.1126185","1","100000000001","generalPurpose","0",,"us-west-1","elastic"
