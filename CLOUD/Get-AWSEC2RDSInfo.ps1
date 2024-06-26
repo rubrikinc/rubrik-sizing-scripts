@@ -237,6 +237,7 @@ $outputEc2Instance = "aws_ec2_instance_info-$($date.ToString("yyyy-MM-dd_HHmm"))
 $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
 # Function to do the work
 
@@ -447,6 +448,39 @@ function getAWSData($cred) {
       $rdsList.Add($rdsObj) | Out-Null
     }
     Write-Progress -Activity 'Processing RDS databases:' -PercentComplete 100 -Completed
+
+    Write-Host "Getting EFS info for region: $awsRegion"  -ForegroundColor Green
+    $efsListFromAPI = $null
+    $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion
+    Write-Host "Found" $efsListFromAPI.Count "EFSs."  -ForegroundColor Green
+
+    $counter = 0
+    foreach ($efs in $efsListFromAPI) {
+      $counter++
+      Write-Progress -Activity 'Processing EFSs:' -Status $$efs.FileSystemId -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
+      $efsObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "FileSystemId" = $efs.FileSystemId
+        "FileSystemProtection" = $efs.FileSystemProtection.ReplicationOverwriteProtection.Value
+        "Name" = $efs.Name
+        "SizeInBytes" = $efs.SizeInBytes.Value
+        "SizeGiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824), 7)
+        "SizeTiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824 / 1024), 7)
+        "SizeGB" = [math]::round($($efs.SizeInBytes.Value / 1000000000), 7)
+        "SizeTB" = [math]::round($($efs.SizeInBytes.Value / 1000000000000), 7)
+        "NumberOfMountTargets" = $efs.NumberOfMountTargets
+        "OwnerId" = $efs.OwnerId
+        "PerformanceMode" = $efs.PerformanceMode
+        "ProvisionedThroughputInMibps" = $efs.ProvisionedThroughputInMibps
+        "DBInstanceIdentifier" = $efs.DBInstanceIdentifier
+        "Region" = $awsRegion
+        "ThroughputMode" = $efs.ThroughputMode
+      }
+
+      $efsList.Add($efsObj) | Out-Null
+    }
+    Write-Progress -Activity 'Processing EFS:' -PercentComplete 100 -Completed
   }  
 }
 
@@ -456,6 +490,7 @@ $ec2List = New-Object collections.arraylist
 $ec2UnattachedVolList = New-Object collections.arraylist
 $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
+$efsList = New-Object collections.arraylist
 
 if ($Partition -eq 'GovCloud') {
   $queryRegion = $defaultGovCloudQueryRegion
@@ -595,6 +630,11 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
     }
   }
 
+$efsTotalGiB = ($efsList.sizeGiB | Measure-Object -Sum).sum
+$efsTotalTiB = ($efsList.sizeTiB | Measure-Object -Sum).sum 
+$efsTotalGB = ($efsList.sizeGB | Measure-Object -Sum).sum
+$efsTotalTB = ($efsList.sizeTB | Measure-Object -Sum).sum
+
 # Export to CSV
 Write-Host ""
 Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
@@ -605,6 +645,8 @@ Write-Host "CSV file output to: $outputRDS"  -ForegroundColor Green
 $rdsList | Export-CSV -path $outputRDS
 Write-Host "CSV file output to: $outputS3"  -ForegroundColor Green
 $s3ListAg | Export-CSV -path $outputS3
+Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
+$efsList | Export-CSV -path $outputEFS
 
 # Print Summary
 Write-Host
@@ -626,3 +668,6 @@ Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
 Write-Output $s3TotalTBsFormatted
 
+Write-Host
+Write-Host "Total # of EFSs: $($efsList.count)"  -ForegroundColor Green
+Write-Host "Total provisioned capacity of all EFSs: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
