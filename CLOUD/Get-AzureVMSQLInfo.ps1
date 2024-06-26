@@ -208,7 +208,19 @@ param (
 
 )
 
-Import-Module Az.Accounts, Az.Compute, Az.Sql
+Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
+
+function Get-AzureFileSAs {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$StorageAccount
+  )
+
+  return ($StorageAccount.Kind -in @('StorageV2', 'Storage') -and 
+            $StorageAccount.Sku.Name -notin @('Premium_LRS', 'Premium_ZRS')) -or
+           ($StorageAccount.Kind -eq 'FileStorage' -and 
+            $StorageAccount.Sku.Name -in @('Premium_LRS', 'Premium_ZRS'))
+}
 
 $azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
@@ -617,6 +629,7 @@ foreach ($sub in $subs) {
       Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
       $azSANum++
       $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
+      $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
       $azSAResourceId = "/subscriptions/$($sub.Id)/resourceGroups/$($azSA.ResourceGroupName)/providers/Microsoft.Storage/storageAccounts/$($azSA.StorageAccountName)"
       $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId $azSAResourceId `
@@ -752,23 +765,35 @@ foreach ($sub in $subs) {
       } #if ($GetContainerDetails -eq $true)
 
       if ($SkipAzureFiles -ne $true) {
-        # Loop through each Azure File Share and record capacities    
+        # Loop through each Azure File Share and record quotas and capacities
         try {
-          $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Stop | Where-Object -Property IsSnapshot -eq $false
+          # Select only those Storage Accounts that support Azure Files to query.
+          foreach ($azSAPSObject in $azSAPSObjects) {
+            if (Get-AzureFileSAs -StorageAccount $azSAPSObject) {
+              $azFSs = Get-AzRmStorageShare -StorageAccount $azSAPSObject
+              $azFSDetails = foreach ($azFS in $azFSs) {
+                $stgAcctName = $azFS.StorageAccountName
+                $rgName = $azFS.ResourceGroupName
+                $shareName = $azFS.Name
+                Get-AzRmStorageShare -ResourceGroupName $rgName -StorageAccountName $stgAcctName -Name $shareName -GetShareUsage
+              }
+            }
+            else {
+              Write-Output "Skipping File Share query for $($azSAPSObject.StorageAccountName) because it does not support Azure Files."
+            }            
+          }
         }
         catch {
           Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName) storage account in subscription $($sub.Name) under tenant $($tenant.Name)."
           $_
-          $azFSs = @()
+          $azFSDetails = @()
         }    
         $azFSNum = 1
-        foreach ($azFS in $azFSs) {
-          Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFS.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
+        foreach ($azFSi in $azFSDetails) {
+          Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
           $azFSNum++
-          $azFSClient = $azFS.ShareClient
-          $azFSStats = $azFSClient.GetStatistics()
           $azFSObj = [ordered] @{}
-          $azFSObj.Add("Name",$azFS.Name)
+          $azFSObj.Add("Name",$azFSi.Name)
           $azFSObj.Add("StorageAccount",$azSA.StorageAccountName)
           $azFSObj.Add("StorageAccountType",$azSA.Kind)
           $azFSObj.Add("StorageAccountSkuName",$azSA.Sku.Name)
@@ -777,15 +802,15 @@ foreach ($sub in $subs) {
           $azFSObj.Add("Subscription",$sub.Name)
           $azFSObj.Add("Region",$azSA.PrimaryLocation)
           $azFSObj.Add("ResourceGroup",$azSA.ResourceGroupName)
-          $azFSObj.Add("QuotaGiB",$azFS.Quota)
-          $azFSObj.Add("UsedCapacityBytes",$azFSStats.Value.ShareUsageInBytes)
-          $azFSObj.Add("UsedCapacityGiB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1073741824), 0))
-          $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSStats.Value.ShareUsageInBytes / 1000000000), 3))      
+          $azFSObj.Add("QuotaGiB",$azFSi.QuotaGiB)
+          $azFSObj.Add("UsedCapacityBytes",$azFSi.ShareUsageBytes)
+          $azFSObj.Add("UsedCapacityGiB",[math]::round($($azFSi.ShareUsageBytes / 1073741824), 0))
+          $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSi.ShareUsageBytes / 1000000000), 3))      
           # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-          if ($azFS.Labels.Count -ne 0) {
+          if ($azFSi.Labels.Count -ne 0) {
             $uniqueAzLabels | Foreach-Object {
-                if ($azFS.Labels[$_]) {
-                    $azFSObj.Add("$_ (Label)",$azFS.Labels[$_])
+                if ($azFSi.Labels[$_]) {
+                    $azFSObj.Add("$_ (Label)",$azFSi.Labels[$_])
                 }
                 else {
                     $azFSObj.Add("$_ (Label)","-")
@@ -796,7 +821,7 @@ foreach ($sub in $subs) {
           }
           $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
-        Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFS.Name)" -Completed
+        Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -Completed
       } #if ($SkipAzureFiles -ne $true)
     } # foreach ($azSA in $azSAs)
     Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -Completed
