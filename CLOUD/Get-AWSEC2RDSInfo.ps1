@@ -89,6 +89,10 @@
     Middle East: 'me-south-1'
     South America: 'sa-east-1'
 
+  .PARAMETER RegionToQuery
+    The AWS region to use for query. If not specified, the script will default to 'us-east-1' in commercial AWS and us-gov-east-1
+    in AWS GovCloud.
+
   .PARAMETER Partition
     The AWS partition other than the standard commercial partition to query. Currently the only non-commercial partition to be 
     tested ahs been the GovCloud partition. 
@@ -219,7 +223,10 @@ param (
   [Parameter(ParameterSetName='UserSpecifiedAccounts',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
-  [string]$UserSpecifiedAccounts
+  # Region to use to for querying AWS.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$RegionToQuery
 )
 
 # Print Powershell Version
@@ -493,7 +500,11 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 
-if ($Partition -eq 'GovCloud') {
+if ($RegionToQuery) {
+  $queryRegion = $RegionToQuery
+  write-host "Set region to query"
+}
+elseif ($Partition -eq 'GovCloud') {
   $queryRegion = $defaultGovCloudQueryRegion
 }
 else {
