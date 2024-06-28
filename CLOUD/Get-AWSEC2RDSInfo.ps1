@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem
+#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC
 
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -101,9 +101,6 @@
     Collect data from the account the account listed in the 'default' profile or what ever credentials were specified when
     running the 'Set-AWSCredential' command.
 
-  .PARAMETER UserSpecifiedProfileNames
-    A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
-
   .PARAMETER AllLocalProfiles
     When set all AWS accounts found in the local profiles will be queried. 
 
@@ -116,9 +113,23 @@
     is in to get a list of all AWS accounts to gather data on. This script will then query all of the accounts that were 
     found using the AWS cross account role that is specified.
 
+  .PARAMETER SSORegion
+    When set, the script will authenticate AWS using AWS SSO. -SSORegion is used to specify the region in which to authenticate
+    with AWS SSO. Also requires the 'SSORoleName' and 'SSOStartURL' parameters.
+
+  .PARAMETER SSORoleName
+    When set , the script will authenticate with AWS using AWS SSO. The script will use the SSO Role specified by -SSORoleName
+    to access the AWS accounts. Also requires the 'SSORegion' and 'SSOStartURL' parameters.
+
+  .PARAMETER SSOStartURL
+    When set, the script will authenticate with AWS using AWS SSO. The script will use the SSO URL specified by SSOStartURL
+    to access the AWS accounts. Also requires the 'SSORegion' and 'SSORoleName' parameters.
 
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
+
+  .PARAMETER UserSpecifiedProfileNames
+    A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
 
   .EXAMPLE  
     >>>
@@ -180,36 +191,23 @@
     [cloudshell-user@ip ~]$ pwsh
     PowerShell 7.3.3
 
-    A new PowerShell stable release is available: v7.3.4 
-    Upgrade now, or check out the release page at:       
-      https://aka.ms/PowerShell-Release?tag=v7.3.4       
-
     PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1  -UserSpecifiedAccounts "123456789012,098765432109,123456098765" -CrossAccountRoleName MyCrossAccountRole
+
+.EXAMPLE
+    >>>
+
+    Run the script in AWS CloudShell to get all AWS account details using AWS SSO.
+
+    [cloudshell-user@ip ~]$ pwsh
+    PowerShell 7.3.4
+
+    PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1 -SSORoleName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
 
 #>
 
 param (
   [CmdletBinding(DefaultParameterSetName = 'DefaultProfile')]
 
-  # Limit search for data to specific regions.
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [string]$Regions,
-  # Get data from AWS GovCloud region.
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [ValidateSet("GovCloud","")]
-  [string]$Partition,
-  # Choose to get info for only the default profile account (default option).
-  [Parameter(ParameterSetName='DefaultProfile',
-    Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [switch]$DefaultProfile,
-  # Choose to get info for only specific AWS accounts based on user supplied list of profiles
-  [Parameter(ParameterSetName='UserSpecifiedProfiles',
-    Mandatory=$true)]
-  [ValidateNotNullOrEmpty()]
-  [string]$UserSpecifiedProfileNames,
   # Choose to get info for all detected AWS accounts in locally defined profiles.
   [Parameter(ParameterSetName='AllLocalProfiles',
     Mandatory=$true)]
@@ -230,6 +228,21 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [switch]$DefaultProfile,
+  # Get Info from AWS SSO
+  [Parameter(ParameterSetName='AWSSSO',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$SSORoleName,
+  [Parameter(ParameterSetName='AWSSSO',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$SSOStartURL,
+  [Parameter(ParameterSetName='AWSSSO',
+    Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$SSORegion = "us-east-1",
+  # Choose to get info for only specific AWS accounts based on user supplied list of profiles
+  [Parameter(ParameterSetName='UserSpecifiedProfiles',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedProfileNames,
@@ -601,6 +614,71 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
       Write-Error "An error occurred:"
       Write-Error $_
       Write-Error "Unable to gather data from AWS account $($awsAccount.Id)."
+      continue
+    }
+    getAWSData $cred
+  }
+} 
+elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
+  $SSOOIDCClient = $(Register-SSOOIDCClient -ClientName $MyInvocation.MyCommand -ClientType 'public' -Region $SSORegion)
+  $DevAuth = $(Start-SSOOIDCDeviceAuthorization -ClientId $SSOOIDCClient.ClientId `
+                                                -ClientSecret $SSOOIDCClient.ClientSecret `
+                                                -StartUrl $SSOStartURL `
+                                                -Region $SSORegion)
+  $CodeExpiry = (Get-Date) + (New-TimeSpan -Seconds $DevAuth.ExpiresIn)
+  Set-Clipboard $DevAuth.VerificationUriComplete
+  Write-Host "Please visit the link below (also copied to the clipboard) and verify the user code is:"
+  Write-Host ""
+  Write-Host "URL: $($DevAuth.VerificationUriComplete)"
+  Write-Host ""
+  Write-Host "User Verification Code: $($DevAuth.UserCode)"
+  Write-Host ""
+  Write-Host "The authorization session will expire at: $($CodeExpiry)"
+  Write-Host "Please follow the instructions on the web page to authenticate."
+  Write-Host "Waiting for user to authenticate..."
+
+  while ((Get-Date) -le $CodeExpiry) {
+      Start-Sleep $DevAuth.Interval
+      try {
+          $Token = $(New-SSOOIDCToken -ClientId $SSOOIDCClient.ClientId `
+                                      -ClientSecret $SSOOIDCClient.ClientSecret `
+                                      -DeviceCode $DevAuth.DeviceCode `
+                                      -GrantType 'urn:ietf:params:oauth:grant-type:device_code' `
+                                      -Region $SSORegion)
+          break
+      }
+      catch [Amazon.SSOOIDC.Model.AuthorizationPendingException] {
+          continue #Awaiting auth to be given
+      }
+  }
+
+  if ($UserSpecifiedAccounts) {
+    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion | Where-Object {$_.AccountId -in $UserSpecifiedAccounts.split(',')}
+  } else {
+    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion
+  }
+
+  foreach ($awsAccount in $awsAccounts) {
+    Write-Host
+    Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
+    try {
+      $ssoCred = Get-SSORoleCredential -AccessToken $Token.AccessToken -AccountId $awsAccount.AccountId -RoleName $SSORoleName -region $SSORegion
+    } catch {
+      Write-Host ""
+      Write-Error "An error occurred:"
+      Write-Error $_
+      Write-Error "Unable to get SSO Credentials for AWS account $($awsAccount.AccountId) using SSO Role $($SSORoleName)."
+      continue
+    }
+    try {
+      $cred = Set-AWSCredential -AccessKey $ssoCred.AccessKeyId `
+                                -SecretKey $ssoCred.SecretAccessKey `
+                                -SessionToken $ssoCred.SessionToken
+    } catch {
+      Write-Host ""
+      Write-Error "An error occurred:"
+      Write-Error $_
+      Write-Error "Unable to get SSO session for AWS account $($awsAccount.Id)."
       continue
     }
     getAWSData $cred
