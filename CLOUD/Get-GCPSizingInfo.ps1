@@ -8,7 +8,7 @@
 Gets all GCE VMs with the # of attached disks and total sizes of all disks.
 
 .DESCRIPTION
-The 'Get-GCEDiskInfo.ps1' script gets all GCE VMs in the specified projects.
+The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs in the specified projects.
 For each GCE VM it grabs the total number of disks and total size (GiB) for all disks.
 A summary of the total # of VMs, # of disks, and capacity will be output to console.
 
@@ -38,13 +38,13 @@ Date: 11/9/21
 Updated: 2/24/22
 
 .EXAMPLE
-./Get-GCEDiskInfo.ps1
+./Get-GCPSizingInfo.ps1
 Get all GCE VMs and associated disk info and output to a CSV file.
 
-./Get-GCEDiskInfo.ps1 -projects 'projectA,projectB'
+./Get-GCPSizingInfo.ps1 -projects 'projectA,projectB'
 For a provided list of projects, get all GCE VMs and associated disk info and output to a CSV file.
 
-./Get-GCEDiskInfo.ps1 -projectFile 'projectFile.csv'
+./Get-GCPSizingInfo.ps1 -projectFile 'projectFile.csv'
 For a provided CSV list of projects, get all GCE VMs and associated disk info and output to a CSV file.
 #>
 

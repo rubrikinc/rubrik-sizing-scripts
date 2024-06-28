@@ -6,7 +6,7 @@
 Gets all Azure VM Managed Disk and/or Azure SQL information in the specified subscription(s).
 
 .DESCRIPTION
-The "Get-AzureVMSQLInfo.ps1" script collects metadata about resources in Azure that Rubrik supports. This includes
+The "Get-AzureSizingInfo.ps1" script collects metadata about resources in Azure that Rubrik supports. This includes
 but is not limited to: Azure VMs, Azure VMs with Microsoft SQL, Azure Managed Disks, Azure SQL, Azure Managed Instances, 
 Azure Storage Accounts, Azure Blob storage and Azure Files.
 
@@ -24,7 +24,7 @@ To prepare to run this script from the Azure Cloud Shell (preferred) system do t
   
   4. Open the Azure Cloud Shell
   
-  5. Upload the "Get-AzureVMSQLInfo.ps1" script using Azure Cloud Shell.
+  5. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
 
 To prepare to run this script from a local system do the following:
 
@@ -44,14 +44,14 @@ To prepare to run this script from a local system do the following:
 
   5. Run this script with the appropriate options. Example:
   
-      ".\Get-AzureVMSQLInfo.ps1"
+      ".\Get-AzureSizingInfo.ps1"
 
 To run the script in the Azure Cloud Shell or locally do the following:
 
   1. Run this script with the appropriate options. For example this command will collect data from all
       subscriptions that the user currently has access to:
 
-      ".\Get-AzureVMSQLInfo.ps1"
+      ".\Get-AzureSizingInfo.ps1"
 
 A summary of the information found by this script will be sent to console.
 One or more CSV files will be saved to the same directory where the script ran with the detailed information.
@@ -110,7 +110,7 @@ Updated by DamaniN: 1/31/24 -   Added support for Azure Backup Vaults, Policies,
                                 
 If you run this script and get an error message similar to this:
 
-./Get-AzureVMSQLInfo.ps1: The script "Get-AzureVMSQLInfo.ps1" cannot be run because the following
+./Get-AzureSizingInfo.ps1: The script "Get-AzureSizingInfo.ps1" cannot be run because the following
 modules that are specified by the "#requires" statements of the script are missing: Az.ResourceGraph.
 
 Install the missing module by using the Install-Module command in the instructions for local deployment.
@@ -119,7 +119,7 @@ If you run  this script and get an error message similar to this:
 
   Write-Error: Error getting Azure File Storage information from: mystorageaccount storage account.
 
-  Get-AzStorageShare: Get-AzureVMSQLInfo.ps1:604:20                     
+  Get-AzStorageShare: Get-AzureSizingInfo.ps1:604:20                     
   Line |                                                                                                                  
   604 |  …    $azFSs = Get-AzStorageShare -Context $azSAContext -ErrorAction Sto …                                
       | This request is not authorized to perform this operation. RequestId:12345678-90ab-cdef-1234-567890abcdef 
@@ -138,27 +138,27 @@ Azure File share need to be collected, either re-run the script from a system th
 Share, or enable public access to the Azure File Share.
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1
+./Get-AzureSizingInfo.ps1
 Runs the script against the all subscriptions that the user has access to.
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1 -Subscriptions "sub1,sub2"
+./Get-AzureSizingInfo.ps1 -Subscriptions "sub1,sub2"
 Runs the script against subscriptions "sub1" and "sub2".
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1 -CurrentSubscription
+./Get-AzureSizingInfo.ps1 -CurrentSubscription
 Runs the script against the default subscription for the currently logged in user. 
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1 -ManagementGroups "Group1,Group2"
+./Get-AzureSizingInfo.ps1 -ManagementGroups "Group1,Group2"
 Runs the script against Azure Management Groups "Group1" and "Group2".
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1 -SkipAzureStorageAccounts
+./Get-AzureSizingInfo.ps1 -SkipAzureStorageAccounts
 Runs the script against all subscriptions in the that the user has access to but skips the collection of Azure Storage Account data.
 
 .EXAMPLE
-./Get-AzureVMSQLInfo.ps1 -Subscriptions "sub1" -GetContainerDetails
+./Get-AzureSizingInfo.ps1 -Subscriptions "sub1" -GetContainerDetails
 Runs the script against the subscription "sub1" and does a deeper inspection of Azure blob storage
 
 .LINK
