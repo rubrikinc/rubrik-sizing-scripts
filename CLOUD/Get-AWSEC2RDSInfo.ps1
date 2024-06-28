@@ -107,10 +107,15 @@
   .PARAMETER AllLocalProfiles
     When set all AWS accounts found in the local profiles will be queried. 
 
+  .PARAMETER CrossAccountRole
+    When set, the script will query the AWS accounts specified in the 'UserSpecifiedAccounts' parameter using the cross account
+    role specified in the 'CrossAccountRoleName' parameter. Requires the 'UserSpecifiedAccounts' parameter to be set.
+
   .PARAMETER OrgCrossAccountRoleName
-    When set the AWS Organization that the default account or account specified by 'Set-AWSCredential' will be queried to find all
-    of the accounts in the organization. This script will then query all of the accounts that were found using the AWS cross
-    account role that is specified.
+    When set, the script will query the AWS Organization that the default profile or profile specified by 'Set-AWSCredential'
+    is in to get a list of all AWS accounts to gather data on. This script will then query all of the accounts that were 
+    found using the AWS cross account role that is specified.
+
 
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
@@ -215,7 +220,8 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$OrgCrossAccountRoleName = "OrganizationAccountAccessRole",
-  [Parameter(ParameterSetName='UserSpecifiedAccounts',
+  # Get info from a comma separated list of user supplied accounts
+  [Parameter(ParameterSetName='CrossAccountRole',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$CrossAccountRoleName,
@@ -558,7 +564,11 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     exit 1
   } 
   Write-Host "Source Profile/Credential is: $caller"
-  $awsAccounts = Get-ORGAccountList
+  if ($UserSpecifiedAccounts) {
+    $awsAccounts = Get-ORGAccountList | Where-Object {$_.ID -in $UserSpecifiedAccounts.split(',')}
+  } else {
+    $awsAccounts = Get-ORGAccountList
+  }
 
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
@@ -576,35 +586,35 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     getAWSData $cred
   }
 } 
-elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedAccounts') {
-# Verify that there is a credential/profile to work with.
-  try {
-    $caller = $(Get-STSCallerIdentity).arn
-  } catch {
-    Write-Error $_
-    Write-Error "Credential/profile be the source profile for the cross account role not set."
-    Write-Error "Run Set-AWSCredential to set."
-    exit 1
-  }
-  Write-Host "Source Profile/Credential is: $caller"
-  [string[]]$awsAccounts = $UserSpecifiedAccounts.split(',')
-
-  foreach ($awsAccount in $awsAccounts) {
-    Write-Host
-    Write-Host "Searching account: $awsAccount"
-    $roleArn = "arn:aws:iam::" + $awsAccount + ":role/" + $CrossAccountRoleName
+elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
+  # Verify that there is a credential/profile to work with.
     try {
-      $cred = (Use-STSRole -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name).Credentials
+      $caller = $(Get-STSCallerIdentity).arn
     } catch {
-      Write-Host ""
-      Write-Error "An error occurred:"
       Write-Error $_
-      Write-Error "Unable to gather data from AWS account $awsAccount."
-      continue
+      Write-Error "Credential/profile be the source profile for the cross account role not set."
+      Write-Error "Run Set-AWSCredential to set."
+      exit 1
     }
-    getAWSData $cred
+    Write-Host "Source Profile/Credential is: $caller"
+    [string[]]$awsAccounts = $UserSpecifiedAccounts.split(',')
+  
+    foreach ($awsAccount in $awsAccounts) {
+      Write-Host
+      Write-Host "Searching account: $awsAccount"
+      $roleArn = "arn:aws:iam::" + $awsAccount + ":role/" + $CrossAccountRoleName
+      try {
+        $cred = (Use-STSRole -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name).Credentials
+      } catch {
+        Write-Host ""
+        Write-Error "An error occurred:"
+        Write-Error $_
+        Write-Error "Unable to gather data from AWS account $awsAccount."
+        continue
+      }
+      getAWSData $cred
+    }
   }
-} 
 
 $ec2TotalGiB = ($ec2list.sizeGiB | Measure-Object -Sum).sum
 $ec2TotalTiB = ($ec2list.sizeTiB | Measure-Object -Sum).sum 
