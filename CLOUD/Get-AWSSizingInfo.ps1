@@ -8,7 +8,7 @@
     Gets all EC2 instances and RDS instances with the # of attached volumes and provisioned sizes.
 
   .DESCRIPTION
-    The 'Get-AWSEC2RDSInfo.ps1' script gets all EC2 instances, EC2 unattached volumes and RDS databases
+    The 'Get-AWSSizingInfo.ps1' script gets all EC2 instances, EC2 unattached volumes and RDS databases
     in the specified region(s). For each EC2 instance it grabs the total number of volumes and total 
     size for all volumes. For each EC2 unattached volume it grabs the size of the volume, ID and type.
     For each RDS instance it grabs the provisioned size, name, and type of database.
@@ -144,7 +144,7 @@
     Upgrade now, or check out the release page at:       
       https://aka.ms/PowerShell-Release?tag=v7.3.4       
 
-    PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1        
+    PS /home/cloudshell-user> ./Get-AWSSizingInfo.ps1        
 
   .EXAMPLE
     >>>
@@ -153,7 +153,7 @@
     AWS account specified by and searches all regions.
 
     PS > Set-AWSCredential -ProfileName MyAwsProfile
-    PS > ./Get-AWSEC2RDSInfo.ps1        
+    PS > ./Get-AWSSizingInfo.ps1        
 
   .EXAMPLE
     >>>
@@ -162,7 +162,7 @@
     account profiles "aws_account_profile1" and "aws_account_profile2". Limit the query to the "us-west-1" and 
     "us-west-2" regions. 
 
-    PS > ./Get-AWSEC2RDSInfo.ps1 -UserSpecifiedProfileNames "aws_account_profile1,aws_account_profile2" -Regions "us-west-1,us-west-2"
+    PS > ./Get-AWSSizingInfo.ps1 -UserSpecifiedProfileNames "aws_account_profile1,aws_account_profile2" -Regions "us-west-1,us-west-2"
 
   .EXAMPLE
     >>>
@@ -171,7 +171,7 @@
     AWS account profiles in the user environment. Limits the query to the "us-gov-east-1" region and 
     queries the AWS GovCloud partition.
 
-    PS> ./Get-AWSEC2RDSInfo.ps1 -AllLocalProfiles -Regions us-gov-east-1 -Partition GovCloud
+    PS> ./Get-AWSSizingInfo.ps1 -AllLocalProfiles -Regions us-gov-east-1 -Partition GovCloud
 
   .EXAMPLE
     >>>
@@ -180,7 +180,7 @@
     for a list of accounts and search all found accounts. 
 
     PS > Set-AWSCredential -ProfileName MyAwsSourceOrgProfile
-    PS > ./Get-AWSEC2RDSInfo.ps1 -OrgCrossAccountRoleName OrganizationAccountAccessRole
+    PS > ./Get-AWSSizingInfo.ps1 -OrgCrossAccountRoleName OrganizationAccountAccessRole
 
 .EXAMPLE
     >>>
@@ -191,7 +191,7 @@
     [cloudshell-user@ip ~]$ pwsh
     PowerShell 7.3.3
 
-    PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1  -UserSpecifiedAccounts "123456789012,098765432109,123456098765" -CrossAccountRoleName MyCrossAccountRole
+    PS /home/cloudshell-user> ./Get-AWSSizingInfo.ps1  -UserSpecifiedAccounts "123456789012,098765432109,123456098765" -CrossAccountRoleName MyCrossAccountRole
 
 .EXAMPLE
     >>>
@@ -201,7 +201,7 @@
     [cloudshell-user@ip ~]$ pwsh
     PowerShell 7.3.4
 
-    PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1 -SSORoleName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
+    PS /home/cloudshell-user> ./Get-AWSSizingInfo.ps1 -SSORoleName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
 
 #>
 
