@@ -225,10 +225,30 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$CrossAccountRoleName,
-  # Get info from a comma separated list of user supplied accounts
-  [Parameter(ParameterSetName='UserSpecifiedAccounts',
+  # Choose to get info for only the default profile account (default option).
+  [Parameter(ParameterSetName='DefaultProfile',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
+  [switch]$DefaultProfile,
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$UserSpecifiedProfileNames,
+  # Get info from a comma separated list of user supplied accounts when using a cross account role.
+  [Parameter(ParameterSetName='AWSSSO')]
+  [Parameter(ParameterSetName='CrossAccountRole',
+    Mandatory=$true)]
+  [Parameter(ParameterSetName='OrganizationAccountAccessRole')]
+  [ValidateNotNullOrEmpty()]
+  [string]$UserSpecifiedAccounts,
+  # Limit search for data to specific regions.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$Regions,
+  # Get data from AWS GovCloud region.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [ValidateSet("GovCloud","")]
+  [string]$Partition,
   # Region to use to for querying AWS.
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -466,7 +486,7 @@ function getAWSData($cred) {
     Write-Host "Getting EFS info for region: $awsRegion"  -ForegroundColor Green
     $efsListFromAPI = $null
     $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion
-    Write-Host "Found" $efsListFromAPI.Count "EFS filesystems."  -ForegroundColor Green
+    Write-Host "Found" $efsListFromAPI.Count "EFS file systems."  -ForegroundColor Green
 
     $counter = 0
     foreach ($efs in $efsListFromAPI) {
@@ -632,11 +652,7 @@ $rdsTotalGB = ($rdsList.sizeGB | Measure-Object -Sum).sum
 $rdsTotalTB = ($rdsList.sizeTB | Measure-Object -Sum).sum
 
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
-$s3ByteProps = $s3Props | Select-String -Pattern "_SizeBytes"
-$s3GBProps = $s3Props | Select-String -Pattern "_SizeGB"
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
-$s3GiBProps = $s3Props | Select-String -Pattern "_SizeGiB"
-$s3TiBProps = $s3Props | Select-String -Pattern "_SizeTiB"
 $s3ListAg = $s3List | Select-Object $s3Props
 $s3TotalTBs = @{}
 
@@ -686,8 +702,8 @@ Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
 
 Write-Host
-Write-Host "Total # of EFS filesystems: $($efsList.count)"  -ForegroundColor Green
-Write-Host "Total provisioned capacity of all EFS filesystems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
+Write-Host "Total # of EFS file systems: $($efsList.count)"  -ForegroundColor Green
+Write-Host "Total provisioned capacity of all EFS file systems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
