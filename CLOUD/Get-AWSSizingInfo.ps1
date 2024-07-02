@@ -567,9 +567,15 @@ function getAWSData($cred) {
       $fsxObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
-        "VolumeId" = $fsx.VolumeId
-        "Name" = $fsx.Name
+        "Region" = $awsRegion
         "FileSystemId" = $fsx.FileSystemId
+        "FileSystemDNSName" = $filesystem.DNSName
+        "FileSystemType" = $filesystem.FileSystemType
+        "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
+        "FileSystemOwnerId" = $filesystem.OwnerId
+        "FileSystemStorageType" = $filesystem.StorageType
+        "Name" = $fsx.Name
+        "VolumeId" = $fsx.VolumeId
         "VolumeType" = $fsx.VolumeType
         "LifeCycle" = $fsx.LifeCycle
         "StorageUsedBytes" = $maxStorageUsed
@@ -582,12 +588,6 @@ function getAWSData($cred) {
         "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 7)
         "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 7)
         "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
-        "FileSystemDNSName" = $filesystem.DNSName
-        "FileSystemType" = $filesystem.FileSystemType
-        "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
-        "FileSystemOwnerId" = $filesystem.OwnerId
-        "FileSystemStorageType" = $filesystem.StorageType
-        "Region" = $awsRegion
       }
 
       $fsxList.Add($fsxObj) | Out-Null
