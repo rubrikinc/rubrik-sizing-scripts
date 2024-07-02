@@ -285,6 +285,7 @@ $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("y
 $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
 # Function to do the work
 
@@ -528,6 +529,68 @@ function getAWSData($cred) {
       $efsList.Add($efsObj) | Out-Null
     }
     Write-Progress -Activity 'Processing EFS:' -PercentComplete 100 -Completed
+
+    Write-Host "Getting FSx info for region: $awsRegion"  -ForegroundColor Green
+    $fsxListFromAPI = $null
+    $fsxListFromAPI = Get-FSXVolume -Credential $cred -region $awsRegion
+    Write-Host "Found" $fsxListFromAPI.Count "FSx volumes."  -ForegroundColor Green
+
+    $counter = 0
+    foreach ($fsx in $fsxListFromAPI) {
+      $counter++
+      Write-Progress -Activity 'Processing FSx Volume:' -Status $fsx.VolumeId -PercentComplete (($counter / $fsxListFromAPI.Count) * 100)
+      $namespace = "AWS/FSx"
+      $metricName = "StorageUsed"
+      $dimensions = @(
+        @{
+          Name = "FileSystemId"
+          Value = $fsx.FileSystemId
+        }
+        @{
+            Name = "VolumeId"
+            Value = $fsx.VolumeId
+          }
+      )
+      $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum
+      $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+      $maxStorageUsed = $storageUsed.Maximum
+
+      $metricName = "StorageCapacity"
+      $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum
+      $storageCapacity = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+      $maxStorageCapacity = $storageCapacity.Maximum
+
+      $filesystem = Get-FSXFileSystem -Credential $cred -region $awsRegion -FileSystemId $fsx.FileSystemId
+
+      $fsxObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "VolumeId" = $fsx.VolumeId
+        "Name" = $fsx.Name
+        "FileSystemId" = $fsx.FileSystemId
+        "VolumeType" = $fsx.VolumeType
+        "LifeCycle" = $fsx.LifeCycle
+        "StorageUsedBytes" = $maxStorageUsed
+        "StorageUsedGiB" = [math]::round($($maxStorageUsed / 1073741824), 7)
+        "StorageUsedTiB" = [math]::round($($maxStorageUsed / 1073741824 / 1024), 7)
+        "StorageUsedGB" = [math]::round($($maxStorageUsed / 1000000000), 7)
+        "StorageUsedTB" = [math]::round($($maxStorageUsed / 1000000000000), 7)
+        "StorageCapacityBytes" = $maxStorageCapacity
+        "StorageCapacityGiB" = [math]::round($($maxStorageCapacity / 1073741824), 7)
+        "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 7)
+        "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 7)
+        "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
+        "FileSystemDNSName" = $filesystem.DNSName
+        "FileSystemType" = $filesystem.FileSystemType
+        "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
+        "FileSystemOwnerId" = $filesystem.OwnerId
+        "FileSystemStorageType" = $filesystem.StorageType
+        "Region" = $awsRegion
+      }
+
+      $fsxList.Add($fsxObj) | Out-Null
+    }
+    Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
   }  
 }
 
@@ -538,6 +601,7 @@ $ec2UnattachedVolList = New-Object collections.arraylist
 $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
+$fsxList = New-Object collections.arraylist
 
 if ($RegionToQuery) {
   $queryRegion = $RegionToQuery
@@ -751,6 +815,15 @@ $efsTotalTiB = ($efsList.sizeTiB | Measure-Object -Sum).sum
 $efsTotalGB = ($efsList.sizeGB | Measure-Object -Sum).sum
 $efsTotalTB = ($efsList.sizeTB | Measure-Object -Sum).sum
 
+$fsxTotalUsedGiB = ($fsxList.StorageUsedGiB | Measure-Object -Sum).sum
+$fsxTotalUsedTiB = ($fsxList.StorageUsedTiB | Measure-Object -Sum).sum 
+$fsxTotalUsedGB = ($fsxList.StorageUsedGB | Measure-Object -Sum).sum
+$fsxTotalUsedTB = ($fsxList.StorageUsedTB | Measure-Object -Sum).sum
+$fsxTotalCapacityGiB = ($fsxList.StorageCapacityGiB | Measure-Object -Sum).sum
+$fsxTotalCapacityTiB = ($fsxList.StorageCapacityTiB | Measure-Object -Sum).sum 
+$fsxTotalCapacityGB = ($fsxList.StorageCapacityGB | Measure-Object -Sum).sum
+$fsxTotalCapacityTB = ($fsxList.StorageCapacityTB | Measure-Object -Sum).sum
+
 # Export to CSV
 Write-Host ""
 Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
@@ -763,6 +836,8 @@ Write-Host "CSV file output to: $outputS3"  -ForegroundColor Green
 $s3ListAg | Export-CSV -path $outputS3
 Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
 $efsList | Export-CSV -path $outputEFS
+Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
+$fsxList | Export-CSV -path $outputFSX
 
 # Print Summary
 Write-Host
@@ -782,6 +857,11 @@ Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or
 Write-Host
 Write-Host "Total # of EFS file systems: $($efsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all EFS file systems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of FSx volumes: $($fsxList.count)"  -ForegroundColor Green
+Write-Host "Total used storage of all FSx volumes: $fsxTotalUsedGiB GiB or $fsxTotalUsedGB GB or $fsxTotalUsedTiB TiB or $fsxTotalUsedTB TB"  -ForegroundColor Green
+Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB or $fsxTotalCapacityGB GB or $fsxTotalCapacityTiB TiB or $fsxTotalCapacityTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
