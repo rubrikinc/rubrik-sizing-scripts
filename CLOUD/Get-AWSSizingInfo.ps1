@@ -60,7 +60,9 @@
                     "rds:DescribeDBInstances",
                     "s3:GetBucketLocation",
                     "s3:ListAllMyBuckets",
-                    "sts:AssumeRole"
+                    "sts:AssumeRole",
+                    "fsx:DescribeFileSystems",
+                    "fsx:DescribeVolumes"
                 ],
                 "Resource": "*"
             }
