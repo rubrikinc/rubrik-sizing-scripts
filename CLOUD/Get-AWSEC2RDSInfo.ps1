@@ -268,7 +268,10 @@ param (
 )
 
 # Print Powershell Version
-Write-Debug $PSVersionTable | Format-List
+Write-Debug "$($PSVersionTable | Out-String)"
+
+# Print Powershell CMDLet Parameter Set
+Write-Debug "$($PSCmdlet | Out-String)"
 
 # Set default regions for queries
 $defaultQueryRegion = "us-east-1"
