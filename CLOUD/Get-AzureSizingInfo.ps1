@@ -406,7 +406,9 @@ foreach ($sub in $subs) {
       $vmObj.Add("Name",$vm.Name)
       $vmObj.Add("Disks",$diskNum)
       $vmObj.Add("SizeGiB",$diskSizeGiB)
+      $vmObj.Add("SizeTiB",[math]::round($($diskSizeGiB / 1024), 7))
       $vmObj.Add("SizeGB",[math]::round($($diskSizeGiB * 1.073741824), 3))
+      $vmObj.Add("SizeTB",[math]::round($($diskSizeGiB * 0.001073741824), 7))
       $vmObj.Add("Subscription",$sub.Name)
       $vmObj.Add("Tenant",$tenant.Name)
       $vmObj.Add("Region",$vm.Location)
@@ -506,7 +508,9 @@ foreach ($sub in $subs) {
                 $sqlObj.Add("ElasticPool",$pool.ElasticPoolName)
                 $sqlObj.Add("ManagedInstance","")
                 $sqlObj.Add("MaxSizeGiB",[math]::round($($pool.MaxSizeBytes / 1073741824), 0))
+                $sqlObj.Add("MaxSizeTiB",[math]::round($($pool.MaxSizeBytes / 1073741824 / 1024), 4))
                 $sqlObj.Add("MaxSizeGB",[math]::round($($pool.MaxSizeBytes / 1000000000), 3))
+                $sqlObj.Add("MaxSizeTB",[math]::round($($pool.MaxSizeBytes / 1000000000000), 7))
                 $sqlObj.Add("Subscription",$sub.Name)
                 $sqlObj.Add("Tenant",$tenant.Name)
                 $sqlObj.Add("Region",$pool.Location)
@@ -538,7 +542,9 @@ foreach ($sub in $subs) {
             $sqlObj.Add("ElasticPool","")
             $sqlObj.Add("ManagedInstance","")
             $sqlObj.Add("MaxSizeGiB",[math]::round($($sqlDB.MaxSizeBytes / 1073741824), 0))
+            $sqlObj.Add("MaxSizeTiB",[math]::round($($sqlDB.MaxSizeBytes / 1073741824 / 1024), 4))
             $sqlObj.Add("MaxSizeGB",[math]::round($($sqlDB.MaxSizeBytes / 1000000000), 3))
+            $sqlObj.Add("MaxSizeTB",[math]::round($($sqlDB.MaxSizeBytes / 1000000000000), 7))
             $sqlObj.Add("Subscription",$sub.Name)
             $sqlObj.Add("Tenant",$tenant.Name)
             $sqlObj.Add("Region",$sqlDB.Location)
@@ -587,7 +593,9 @@ foreach ($sub in $subs) {
       $sqlObj.Add("ElasticPool","")
       $sqlObj.Add("ManagedInstance",$MI.ManagedInstanceName)
       $sqlObj.Add("MaxSizeGiB",$MI.StorageSizeInGB)
+      $sqlObj.Add("MaxSizeTiB",[math]::round($($MI.StorageSizeInGB / 1024), 7))
       $sqlObj.Add("MaxSizeGB",[math]::round($($MI.StorageSizeInGB * 1.073741824), 3))
+      $sqlObj.Add("MaxSizeTB",[math]::round($($MI.StorageSizeInGB * 0.001073741824), 7))
       $sqlObj.Add("Subscription",$sub.Name)
       $sqlObj.Add("Tenant",$tenant.Name)
       $sqlObj.Add("Region",$MI.Location)
@@ -648,6 +656,9 @@ foreach ($sub in $subs) {
         -MetricNames $metrics `
         -AggregationType Average `
         -StartTime (Get-Date).AddDays(-1)
+      $UsedCapacityBytes = ($azSAUsedCapacity | Select-Object -Last 1)
+      $UsedBlobCapacityBytes = (($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)
+      $UsedFileShareCapacityBytes = (($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)
 
       $azSAObj = [ordered] @{}
       $azSAObj.Add("StorageAccount",$azSA.StorageAccountName)
@@ -659,17 +670,23 @@ foreach ($sub in $subs) {
       $azSAObj.Add("Subscription",$sub.Name)
       $azSAObj.Add("Region",$azSA.PrimaryLocation)
       $azSAObj.Add("ResourceGroup",$azSA.ResourceGroupName)
-      $azSAObj.Add("UsedCapacityBytes",($azSAUsedCapacity | Select-Object -Last 1))
-      $azSAObj.Add("UsedCapacityGiB",[math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1073741824), 0))
-      $azSAObj.Add("UsedCapacityGB",[math]::round($([double](($azSAUsedCapacity | Select-Object -Last 1)) / 1000000000), 3))    
-      $azSAObj.Add("UsedBlobCapacityBytes",(($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("UsedBlobCapacityGiB",[math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0))
-      $azSAObj.Add("UsedBlobCapacityGB",[math]::round($([double]((($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3))    
+      $azSAObj.Add("UsedCapacityBytes",$UsedCapacityBytes)
+      $azSAObj.Add("UsedCapacityGiB",[math]::round($($UsedCapacityBytes / 1073741824), 0))
+      $azSAObj.Add("UsedCapacityTiB",[math]::round($($UsedCapacityBytes / 1073741824 / 1024), 4))
+      $azSAObj.Add("UsedCapacityGB",[math]::round($($UsedCapacityBytes / 1000000000), 3))
+      $azSAObj.Add("UsedCapacityTB",[math]::round($($UsedCapacityBytes / 1000000000000), 7))
+      $azSAObj.Add("UsedBlobCapacityBytes",$UsedBlobCapacityBytes)
+      $azSAObj.Add("UsedBlobCapacityGiB",[math]::round($($UsedBlobCapacityBytes / 1073741824), 0))
+      $azSAObj.Add("UsedBlobCapacityTiB",[math]::round($($UsedBlobCapacityBytes / 1073741824 / 1024), 4))
+      $azSAObj.Add("UsedBlobCapacityGB",[math]::round($($UsedBlobCapacityBytes / 1000000000), 3))
+      $azSAObj.Add("UsedBlobCapacityTB",[math]::round($($UsedBlobCapacityBytes / 1000000000000), 7))
       $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1))
       $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("UsedFileShareCapacityBytes",(($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1073741824), 0))
-      $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($([double]((($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)) / 1000000000), 3))    
+      $azSAObj.Add("UsedFileShareCapacityBytes",$UsedFileShareCapacityBytes)
+      $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824), 0))
+      $azSAObj.Add("UsedFileShareCapacityTiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824 / 1024), 4))
+      $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($($UsedFileShareCapacityBytes / 1000000000), 3))
+      $azSAObj.Add("UUsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 7))
       $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
       $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
@@ -729,23 +746,33 @@ foreach ($sub in $subs) {
           $azConObj.Add("ResourceGroup",$azSA.ResourceGroupName)
           $azConObj.Add("UsedCapacityHotTierBytes",$lengthHotTier)
           $azConObj.Add("UsedCapacityHotTierGiB",[math]::round($($lengthHotTier / 1073741824), 0))
-          $azConObj.Add("UsedCapacityHotTierGB",[math]::round($($lengthHotTier / 1000000000), 3))      
+          $azConObj.Add("UsedCapacityHotTierTiB",[math]::round($($lengthHotTier / 1073741824 / 1024), 4))
+          $azConObj.Add("UsedCapacityHotTierGB",[math]::round($($lengthHotTier / 1000000000), 3))
+          $azConObj.Add("UsedCapacityHotTierTB",[math]::round($($lengthHotTier / 1000000000000), 7))
           $azConObj.Add("HotTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Hot" -and $_.SnapshotTime -eq $null}).Count)
           $azConObj.Add("UsedCapacityCoolTierBytes",$lengthCoolTier)
           $azConObj.Add("UsedCapacityCoolTierGiB",[math]::round($($lengthCoolTier / 1073741824), 0))
-          $azConObj.Add("UsedCapacityCoolTierGB",[math]::round($($lengthCoolTier / 1000000000), 3))      
+          $azConObj.Add("UsedCapacityCoolTierTiB",[math]::round($($lengthCoolTier / 1073741824 / 1024), 4))
+          $azConObj.Add("UsedCapacityCoolTierGB",[math]::round($($lengthCoolTier / 1000000000), 3)) 
+          $azConObj.Add("UsedCapacityCoolTierTB",[math]::round($($lengthCoolTier / 1000000000000), 7))
           $azConObj.Add("CoolTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Cool" -and $_.SnapshotTime -eq $null}).Count)
           $azConObj.Add("UsedCapacityArchiveTierBytes",$lengthArchiveTier)
           $azConObj.Add("UsedCapacityArchiveTierGiB",[math]::round($($lengthArchiveTier / 1073741824), 0))
-          $azConObj.Add("UsedCapacityArchiveTierGB",[math]::round($($lengthArchiveTier / 1000000000), 3))      
+          $azConObj.Add("UsedCapacityArchiveTierTiB",[math]::round($($lengthArchiveTier / 1073741824 / 1024), 4))
+          $azConObj.Add("UsedCapacityArchiveTierGB",[math]::round($($lengthArchiveTier / 1000000000), 3)) 
+          $azConObj.Add("UsedCapacityArchiveTierTB",[math]::round($($lengthArchiveTier / 1000000000000), 7))
           $azConObj.Add("ArchiveTierBlobCount",@($azConBlobs | Where-Object {$_.AccessTier -eq "Archive" -and $_.SnapshotTime -eq $null}).Count)
           $azConObj.Add("UsedCapacityUnknownTierBytes",$lengthUnknownTier)
           $azConObj.Add("UsedCapacityUnknownTierGiB",[math]::round($($lengthUnknownTier / 1073741824), 0))
+          $azConObj.Add("UsedCapacityUnknownTierTiB",[math]::round($($lengthUnknownTier / 1073741824 / 1024), 4))
           $azConObj.Add("UsedCapacityUnknownTierGB",[math]::round($($lengthUnknownTier / 1000000000), 3))
+          $azConObj.Add("UsedCapacityUnknownTierTB",[math]::round($($lengthUnknownTier / 1000000000000), 7))
           $azConObj.Add("UnknownTierBlobCount",($azConBlobs| Where-Object {$_.SnapshotTime -eq $null}).Count)
           $azConObj.Add("UsedCapacityAllTiersBytes",$lengthAllTiers)
           $azConObj.Add("UsedCapacityAllTiersGiB",[math]::round($($lengthAllTiers / 1073741824), 0))
+          $azConObj.Add("UsedCapacityAllTiersTiB",[math]::round($($lengthAllTiers / 1073741824 / 1024), 4))
           $azConObj.Add("UsedCapacityAllTiersGB",[math]::round($($lengthAllTiers / 1000000000), 3))
+          $azConObj.Add("UsedCapacityAllTiersTB",[math]::round($($lengthAllTiers / 1000000000000), 7))
           # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
           if ($azCon.Labels.Count -ne 0) {
             $uniqueAzLabels | Foreach-Object {
@@ -803,9 +830,12 @@ foreach ($sub in $subs) {
           $azFSObj.Add("Region",$azSA.PrimaryLocation)
           $azFSObj.Add("ResourceGroup",$azSA.ResourceGroupName)
           $azFSObj.Add("QuotaGiB",$azFSi.QuotaGiB)
+          $azFSObj.Add("QuotaTiB",[math]::round($($azFSi.QuotaGiB / 1024), 3))
           $azFSObj.Add("UsedCapacityBytes",$azFSi.ShareUsageBytes)
           $azFSObj.Add("UsedCapacityGiB",[math]::round($($azFSi.ShareUsageBytes / 1073741824), 0))
-          $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSi.ShareUsageBytes / 1000000000), 3))      
+          $azFSObj.Add("UsedCapacityTiB",[math]::round($($azFSi.ShareUsageBytes / 1073741824 / 1024), 4))
+          $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSi.ShareUsageBytes / 1000000000), 3))
+          $azFSObj.Add("UsedCapacityTB",[math]::round($($azFSi.ShareUsageBytes / 1000000000000), 7))
           # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
           if ($azFSi.Labels.Count -ne 0) {
             $uniqueAzLabels | Foreach-Object {
@@ -937,17 +967,21 @@ Write-Host "Calculating results and saving data..." -ForegroundColor Green
 if ($SkipAzureVMandManagedDisks -ne $true) {
 
   $VMtotalGiB = ($vmList.SizeGiB | Measure-Object -Sum).sum
+  $VMtotalTiB = ($vmList.SizeTiB | Measure-Object -Sum).sum 
   $VMtotalGB = ($vmList.SizeGB | Measure-Object -Sum).sum
+  $VMtotalTB = ($vmList.SizeTB | Measure-Object -Sum).sum 
 
   $sqlTotalGiB = ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
+  $sqlTotalTiB = ($sqlList.MaxSizeTiB | Measure-Object -Sum).sum
   $sqlTotalGB = ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
+  $sqlTotalTB = ($sqlList.MaxSizeTB | Measure-Object -Sum).sum
 
   Write-Host
   Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
   Write-Host
   Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.count)" -ForeGroundColor Green
   Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
-  Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB or $VMtotalTiB TiB or $VMtotalTB TB" -ForeGroundColor Green
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
   $vmList | Export-CSV -path $outputVmDisk
 
@@ -955,43 +989,55 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
 
 if ($SkipAzureSQLandMI -ne $true) {
   $DBtotalGiB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $DBtotalTiB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeTiB | Measure-Object -Sum).sum
   $DBtotalGB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $DBtotalTB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeTB | Measure-Object -Sum).sum
   $elasticTotalGiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $elasticTotalTiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTiB | Measure-Object -Sum).sum
   $elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $elasticTotalTB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTB | Measure-Object -Sum).sum
   $MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $MITotalTiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTiB | Measure-Object -Sum).sum 
   $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $MITotalTB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTB | Measure-Object -Sum).sum
   Write-Host
   Write-Host "Total # of SQL DBs (independent): $('{0:N0}' -f ($sqlList | Where-Object -Property 'Database' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total # of SQL Elastic Pools: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ElasticPool' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
-  Write-Host "Total capacity of all SQL DBs (independent): $('{0:N0}' -f $DBtotalGiB) GiB or $('{0:N0}' -f $DBtotalGB) GB" -ForeGroundColor Green
-  Write-Host "Total capacity of all SQL Elastic Pools: $('{0:N0}' -f $elasticTotalGiB) GiB or $('{0:N0}' -f $elasticTotalGB) GB" -ForeGroundColor Green
-  Write-Host "Total capacity of all SQL Managed Instances: $('{0:N0}' -f $MITotalGiB) GiB or $('{0:N0}' -f $MITotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL DBs (independent): $('{0:N0}' -f $DBtotalGiB) GiB or $('{0:N0}' -f $DBtotalGB) GB or $DBtotalTiB TiB or $DBtotalTB TB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL Elastic Pools: $('{0:N0}' -f $elasticTotalGiB) GiB or $('{0:N0}' -f $elasticTotalGB) GB or $elasticTotalTiB TiB or $elasticTotalTB TB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL Managed Instances: $('{0:N0}' -f $MITotalGiB) GiB or $('{0:N0}' -f $MITotalGB) GB or $MITotalTiB TiB or $MITotalTB TB" -ForeGroundColor Green
   Write-Host
   Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
-  Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB or $sqlTotalTiB TiB or $sqlTotalTB TB" -ForeGroundColor Green
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL/MI CSV file."}
   $sqlList | Export-CSV -path $outputSQL
 } #if ($SkipAzureSQLandMI -ne $true)
 
 if ($SkipAzureStorageAccounts -ne $true) {
   $azSATotalGiB = ($azSAList.UsedCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalTiB = ($azSAList.UsedCapacityTiB | Measure-Object -Sum).sum
   $azSATotalGB = ($azSAList.UsedCapacityGB | Measure-Object -Sum).sum
+  $azSATotalTB = ($azSAList.UsedCapacityTB | Measure-Object -Sum).sum
   $azSATotalBlobGiB = ($azSAList.UsedBlobCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalBlobTiB = ($azSAList.UsedBlobCapacityTiB | Measure-Object -Sum).sum
   $azSATotalBlobGB = ($azSAList.UsedBlobCapacityGB | Measure-Object -Sum).sum
+  $azSATotalBlobTB = ($azSAList.UsedBlobCapacityTB | Measure-Object -Sum).sum
   $azSATotalBlobObjects = ($azSAList.BlobCount | Measure-Object -Sum).sum
   $azSATotalBlobContainers = ($azSAList.BlobContainerCount | Measure-Object -Sum).sum
   $azSATotalFileGiB = ($azSAList.UsedFileShareCapacityGiB | Measure-Object -Sum).sum
+  $azSATotalFileTiB = ($azSAList.UsedFileShareCapacityTiB | Measure-Object -Sum).sum
   $azSATotalFileGB = ($azSAList.UsedFileShareCapacityGB | Measure-Object -Sum).sum
+  $azSATotalFileTB = ($azSAList.UsedFileShareCapacityTB | Measure-Object -Sum).sum
   $azSATotalFileObjects = ($azSAList.FileCountInFileShares | Measure-Object -Sum).sum
   $azSATotalFileShares = ($azSAList.FileShareCount | Measure-Object -Sum).sum
   Write-Host
   Write-Host "Totals based on querying storage account metrics:"
   Write-Host "Total # of Azure Storage Accounts: $('{0:N0}' -f $azSAList.count)" -ForeGroundColor Green
-  Write-Host "Total capacity of all Azure Storage Accounts: $('{0:N0}' -f $azSATotalGiB) GiB or $('{0:N0}' -f $azSATotalGB) GB" -ForeGroundColor Green
-  Write-Host "Total capacity of all Azure Blob storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalBlobGiB) GiB or $('{0:N0}' -f $azSATotalBlobGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure Storage Accounts: $('{0:N0}' -f $azSATotalGiB) GiB or $('{0:N0}' -f $azSATotalGB) GB or $azSATotalTiB TiB or $azSATotalTB TB" -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure Blob storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalBlobGiB) GiB or $('{0:N0}' -f $azSATotalBlobGB) GB or $azSATotalBlobTiB TiB or $azSATotalBlobTB TB" -ForeGroundColor Green
   Write-Host "Total number blobs is $('{0:N0}' -f $azSATotalBlobObjects) in $('{0:N0}' -f $azSATotalBlobContainers) containers." -ForeGroundColor Green
-  Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB" -ForeGroundColor Green
+  Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB or $azSATotalFileTiB or $azSATotalFileTB TB" -ForeGroundColor Green
   Write-Host "Total number files is $('{0:N0}' -f $azSATotalFileObjects) in $('{0:N0}' -f $azSATotalFileShares) Azure File Shares." -ForeGroundColor Green
 
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzSA - Azure Storage Account CSV file."}
@@ -999,30 +1045,36 @@ if ($SkipAzureStorageAccounts -ne $true) {
 
   if ($GetContainerDetails -eq $true) {
     $azConTotalGiB = ($azConList.UsedCapacityAllTiersGiB | Measure-Object -Sum).sum
+    $azConTotalTiB = ($azConList.UsedCapacityAllTiersTiB | Measure-Object -Sum).sum
     $azConTotalGB = ($azConList.UsedCapacityAllTiersGB | Measure-Object -Sum).sum
+    $azConTotalTB = ($azConList.UsedCapacityAllTiersTB | Measure-Object -Sum).sum
     $azConTotalGiB = ($azConList.UsedCapacityGiB | Measure-Object -Sum).sum
+    $azConTotalTiB = ($azConList.UsedCapacityTiB | Measure-Object -Sum).sum
     $azConTotalGB = ($azConList.UsedCapacityGB | Measure-Object -Sum).sum
+    $azConTotalTB = ($azConList.UsedCapacityTB | Measure-Object -Sum).sum
     Write-Host
     Write-Host "Totals based on traversing each blob store container and calculating statistics:"
     Write-Host "NOTE: The totals may be different than those gathered from Storage Account metrics if"
     Write-Host "some containers could not be accessed. There are also differences in the way these two metrics"
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
-    Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB" -ForeGroundColor Green
+    Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB or $azConTotalTiB TiB or $azConTotalTB TB" -ForeGroundColor Green
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
     $azConList | Export-CSV -path $outputAzCon
   }
 
   if ($SkipAzureFiles -ne $true) {
     $azFSTotalGiB = ($azFSList.UsedCapacityGiB | Measure-Object -Sum).sum
+    $azFSTotalTiB = ($azFSList.UsedCapacityTiB | Measure-Object -Sum).sum
     $azFSTotalGB = ($azFSList.UsedCapacityGB | Measure-Object -Sum).sum
+    $azFSTotalTB = ($azFSList.UsedCapacityTB | Measure-Object -Sum).sum
     Write-Host
     Write-Host "Totals based on traversing each Azure File Share and calculating statistics:"
     Write-Host "Note: The totals may be different than those gathered from Storage Account metrics if"
     Write-Host "the Azure File Share could not be accessed. There are also differences in the way these two metrics"
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure File Shares: $('{0:N0}' -f $azFSList.count)" -ForeGroundColor Green
-    Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB" -ForeGroundColor Green
+    Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB or $azFSTotalTiB TiB or $azFSTotalTB TB" -ForeGroundColor Green
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzFS - Azure File Share CSV file."}
     $azFSList | Export-CSV -path $outputAzFS
   }
