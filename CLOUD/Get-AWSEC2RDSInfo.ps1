@@ -620,13 +620,31 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     }
     getAWSData $cred
   }
-} 
+}
 elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
-  $SSOOIDCClient = $(Register-SSOOIDCClient -ClientName $MyInvocation.MyCommand -ClientType 'public' -Region $SSORegion)
+  try {
+    $SSOOIDCClient = $(Register-SSOOIDCClient -ClientName $MyInvocation.MyCommand -ClientType 'public' -Region $SSORegion)
+  } catch {
+    Write-Host ""
+    Write-Error "An error occurred:"
+    Write-Error $_
+    Write-Error "Unable to register SSO OIDC Client."
+    exit 1
+  }
+
+  try {
   $DevAuth = $(Start-SSOOIDCDeviceAuthorization -ClientId $SSOOIDCClient.ClientId `
                                                 -ClientSecret $SSOOIDCClient.ClientSecret `
                                                 -StartUrl $SSOStartURL `
                                                 -Region $SSORegion)
+  } catch {
+    Write-Host ""
+    Write-Error "An error occurred:"
+    Write-Error $_
+    Write-Error "Unable to start with SSO OIDC Authorization for $($SSOStartURL) in region $($SSORegion)."
+    exit 1
+  }
+                                        
   $CodeExpiry = (Get-Date) + (New-TimeSpan -Seconds $DevAuth.ExpiresIn)
   Set-Clipboard $DevAuth.VerificationUriComplete
   Write-Host "Please visit the link below (also copied to the clipboard) and verify the user code is:"
@@ -648,9 +666,14 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
                                       -GrantType 'urn:ietf:params:oauth:grant-type:device_code' `
                                       -Region $SSORegion)
           break
-      }
-      catch [Amazon.SSOOIDC.Model.AuthorizationPendingException] {
+      } catch [Amazon.SSOOIDC.Model.AuthorizationPendingException] {
           continue #Awaiting auth to be given
+      } catch {
+        Write-Host ""
+        Write-Error "An error occurred:"
+        Write-Error $_
+        Write-Error "Unable to authenticate with SSO $($SSOStartURL) using SSO role $($SSORoleName) in region $($SSORegion)."
+        exit 1
       }
   }
 
