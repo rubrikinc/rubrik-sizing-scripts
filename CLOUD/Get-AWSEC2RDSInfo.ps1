@@ -204,9 +204,8 @@
     PS /home/cloudshell-user> ./Get-AWSEC2RDSInfo.ps1 -SSORoleName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
 
 #>
-
+[CmdletBinding(DefaultParameterSetName = 'DefaultProfile')]
 param (
-  [CmdletBinding(DefaultParameterSetName = 'DefaultProfile')]
 
   # Choose to get info for all detected AWS accounts in locally defined profiles.
   [Parameter(ParameterSetName='AllLocalProfiles',
@@ -225,7 +224,7 @@ param (
   [string]$CrossAccountRoleName,
   # Choose to get info for only the default profile account (default option).
   [Parameter(ParameterSetName='DefaultProfile',
-    Mandatory=$true)]
+    Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$DefaultProfile,
   # Get Info from AWS SSO
