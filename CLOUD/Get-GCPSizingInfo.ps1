@@ -60,10 +60,20 @@ param (
   [string]$projectFile = ''
 )
 
+Start-Transcript -Path "./output.log" -Append
+
 $date = Get-Date
 
 # Filename of the CSV output
 $output = "gce_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$archiveFile = "gcp_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+
+# List of output files
+$outputFiles = @(
+    $output,
+    "output.log"
+)
+
 
 Write-Host "Current glcoud context`n" -foregroundcolor green
 & gcloud auth list
@@ -163,3 +173,21 @@ Write-Host "Total capacity of all disks: $totalGiB GiB or $totalGB GB or $totalT
 Write-Host ""
 Write-Host "CSV file output to: $output" -foregroundcolor green
 $vmList | Export-CSV -path $output
+
+Write-Host
+Write-Host
+Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+Stop-Transcript
+
+# Compress the files into a zip archive
+Compress-Archive -Path $outputFiles -DestinationPath $archiveFile
+
+# Remove the original files
+foreach ($file in $outputFiles) {
+    Remove-Item -Path $file -ErrorAction SilentlyContinue
+}
+
+Write-Host
+Write-Host
+Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
