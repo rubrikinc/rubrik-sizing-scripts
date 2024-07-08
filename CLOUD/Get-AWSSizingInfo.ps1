@@ -269,6 +269,8 @@ param (
   [string]$RegionToQuery
 )
 
+Start-Transcript -Path "./output.log" -Append
+
 # Print Powershell Version
 Write-Debug "$($PSVersionTable | Out-String)"
 
@@ -290,6 +292,18 @@ $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$archiveFile = "aws_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+
+# List of output files
+$outputFiles = @(
+    $outputEc2Instance,
+    $outputEc2UnattachedVolume,
+    $outputRDS,
+    $outputS3,
+    $outputEFS,
+    $outputFSX,
+    "output.log"
+)
 
 # Function to do the work
 
@@ -894,3 +908,17 @@ Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
 Write-Output $s3TotalTBsFormatted
+
+Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+Stop-Transcript
+
+# Compress the files into a zip archive
+Compress-Archive -Path $outputFiles -DestinationPath $archiveFile
+
+# Remove the original files
+foreach ($file in $outputFiles) {
+    Remove-Item -Path $file -ErrorAction SilentlyContinue
+}
+
+Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
