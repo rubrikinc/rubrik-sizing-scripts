@@ -907,8 +907,23 @@ Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
-Write-Output $s3TotalTBsFormatted
+# Write-Output $s3TotalTBsFormatted
 
+# Ensure Write-Output is captured by writing the formatted data to Host
+$s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
+  ForEach-Object {
+    [PSCustomObject]@{
+      StorageType = $_.Key
+      Size_TB = "{0:n7}" -f $_.Value
+    }
+  }
+
+$s3TotalTBsFormatted | ForEach-Object {
+    Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
+}
+
+Write-Host
+Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
 Stop-Transcript
@@ -921,4 +936,6 @@ foreach ($file in $outputFiles) {
     Remove-Item -Path $file -ErrorAction SilentlyContinue
 }
 
+Write-Host
+Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
