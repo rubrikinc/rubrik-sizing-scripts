@@ -66,7 +66,7 @@ $date = Get-Date
 
 # Filename of the CSV output
 $output = "gce_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$archiveFile = "gcp_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$archiveFile = "gcp_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 # List of output files
 $outputFiles = @(
@@ -191,3 +191,8 @@ foreach ($file in $outputFiles) {
 Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
+
+Write-Host
+Write-Host
+Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+Write-Host

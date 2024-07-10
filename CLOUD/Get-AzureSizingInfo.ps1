@@ -1131,7 +1131,7 @@ Write-Host "Output files are:"
 $outputFiles.Files
 Write-Host
 
-$archiveFile = "azure_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
@@ -1155,6 +1155,10 @@ Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
 
+Write-Host
+Write-Host
+Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+Write-Host
 
 # Reset subscription context back to original.
 try {
