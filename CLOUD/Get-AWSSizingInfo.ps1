@@ -269,7 +269,11 @@ param (
   [string]$RegionToQuery
 )
 
-Start-Transcript -Path "./output.log" -Append
+if (Test-Path "./output.log") {
+  Remove-Item -Path "./output.log"
+}
+
+Start-Transcript -Path "./output.log"
 
 # Print Powershell Version
 Write-Debug "$($PSVersionTable | Out-String)"
@@ -620,7 +624,7 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
-
+try{
 if ($RegionToQuery) {
   $queryRegion = $RegionToQuery
   write-host "Set region to query"
@@ -926,7 +930,11 @@ Write-Host
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
-Stop-Transcript
+} catch{
+  Write-Error $_
+} finally{
+  Stop-Transcript
+}
 
 # Compress the files into a zip archive
 Compress-Archive -Path $outputFiles -DestinationPath $archiveFile

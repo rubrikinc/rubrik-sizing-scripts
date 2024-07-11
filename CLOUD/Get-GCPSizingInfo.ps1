@@ -60,8 +60,12 @@ param (
   [string]$projectFile = ''
 )
 
-Start-Transcript -Path "./output.log" -Append
+if (Test-Path "./output.log") {
+  Remove-Item -Path "./output.log"
+}
 
+Start-Transcript -Path "./output.log"
+try{
 $date = Get-Date
 
 # Filename of the CSV output
@@ -178,7 +182,11 @@ Write-Host
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
-Stop-Transcript
+} catch {
+  Write-Error $_
+} finally {
+  Stop-Transcript
+}
 
 # Compress the files into a zip archive
 Compress-Archive -Path $outputFiles -DestinationPath $archiveFile

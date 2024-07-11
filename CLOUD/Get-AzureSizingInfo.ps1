@@ -208,7 +208,11 @@ param (
 
 )
 
-Start-Transcript -Path "./output.log" -Append
+if (Test-Path "./output.log") {
+  Remove-Item -Path "./output.log"
+}
+
+Start-Transcript -Path "./output.log"
 
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
 
@@ -224,6 +228,7 @@ function Get-AzureFileSAs {
             $StorageAccount.Sku.Name -in @('Premium_LRS', 'Premium_ZRS'))
 }
 
+try{
 $azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 
@@ -1136,7 +1141,11 @@ $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
-Stop-Transcript
+} catch{
+  Write-Error $_
+} finally{
+  Stop-Transcript
+}
 
 $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="output.log - Log file"}
 
