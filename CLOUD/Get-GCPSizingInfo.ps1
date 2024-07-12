@@ -188,8 +188,11 @@ Write-Host "Results will be compressed into $archiveFile and original files will
   Stop-Transcript
 }
 
+# In the case of an early exit/error, this filters only the files which exist
+$existingFiles = $outputFiles | Where-Object { Test-Path $_ }
+
 # Compress the files into a zip archive
-Compress-Archive -Path $outputFiles -DestinationPath $archiveFile
+Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
 
 # Remove the original files
 foreach ($file in $outputFiles) {

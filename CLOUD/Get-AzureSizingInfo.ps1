@@ -214,6 +214,12 @@ if (Test-Path "./output.log") {
 
 Start-Transcript -Path "./output.log"
 
+$azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
+Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
+
+$date = Get-Date
+$archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
 
 function Get-AzureFileSAs {
@@ -229,10 +235,6 @@ function Get-AzureFileSAs {
 }
 
 try{
-$azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
-Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
-
-$date = Get-Date
 
 # Filenames of the CSVs to output
 $fileDate = $date.ToString("yyyy-MM-dd_HHmm")
@@ -1136,8 +1138,6 @@ Write-Host "Output files are:"
 $outputFiles.Files
 Write-Host
 
-$archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
-
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
@@ -1152,8 +1152,11 @@ $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="output.lo
 # Extract only the unique file names from the array of objects for compression
 $filePaths = $outputFiles | ForEach-Object { $_.Files.Split(' - ')[0] }  | Sort-Object -Unique
 
+# In the case of an early exit/error, this filters only the files which exist
+$existingFiles = $filePaths | Where-Object { Test-Path $_ }
+
 # Compress the files into a zip archive
-Compress-Archive -Path $filePaths -DestinationPath $archiveFile
+Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
 
 # Remove the original files
 foreach ($file in $filePaths) {
