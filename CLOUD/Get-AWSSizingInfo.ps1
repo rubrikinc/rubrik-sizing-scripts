@@ -396,6 +396,8 @@ function getAWSData($cred) {
         "AwsAccountAlias" = $awsAccountAlias
         "BucketName" = $s3Bucket
         "Region" = $awsRegion
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
       foreach ($bytesStorage in $bytesStorages.GetEnumerator()) {
         if ($($bytesStorage.Value) -eq $null) {
@@ -463,6 +465,8 @@ function getAWSData($cred) {
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
         "ProductCode" = $ec2.ProductCodes.ProductCodeType
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $ec2List.Add($ec2obj) | Out-Null
@@ -492,6 +496,8 @@ function getAWSData($cred) {
         "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 7)
         "Region" = $awsRegion
         "VolumeType" = $ec2UnattachedVolume.VolumeType
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
@@ -519,6 +525,8 @@ function getAWSData($cred) {
         "Region" = $awsRegion
         "InstanceType" = $rds.DBInstanceClass
         "Platform" = $rds.Engine
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $rdsList.Add($rdsObj) | Out-Null
@@ -552,6 +560,8 @@ function getAWSData($cred) {
         "DBInstanceIdentifier" = $efs.DBInstanceIdentifier
         "Region" = $awsRegion
         "ThroughputMode" = $efs.ThroughputMode
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $efsList.Add($efsObj) | Out-Null
@@ -614,6 +624,8 @@ function getAWSData($cred) {
         "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 7)
         "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 7)
         "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $fsxList.Add($fsxObj) | Out-Null
