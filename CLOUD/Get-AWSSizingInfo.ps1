@@ -269,6 +269,12 @@ param (
   [string]$RegionToQuery
 )
 
+if (Test-Path "./output.log") {
+  Remove-Item -Path "./output.log"
+}
+
+Start-Transcript -Path "./output.log"
+
 # Print Powershell Version
 Write-Debug "$($PSVersionTable | Out-String)"
 
@@ -290,6 +296,18 @@ $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+
+# List of output files
+$outputFiles = @(
+    $outputEc2Instance,
+    $outputEc2UnattachedVolume,
+    $outputRDS,
+    $outputS3,
+    $outputEFS,
+    $outputFSX,
+    "output.log"
+)
 
 # Function to do the work
 
@@ -606,7 +624,7 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
-
+try{
 if ($RegionToQuery) {
   $queryRegion = $RegionToQuery
   write-host "Set region to query"
@@ -893,4 +911,47 @@ Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
-Write-Output $s3TotalTBsFormatted
+# Write-Output $s3TotalTBsFormatted
+
+# Ensure Write-Output is captured by writing the formatted data to Host
+$s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
+  ForEach-Object {
+    [PSCustomObject]@{
+      StorageType = $_.Key
+      Size_TB = "{0:n7}" -f $_.Value
+    }
+  }
+
+$s3TotalTBsFormatted | ForEach-Object {
+    Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
+}
+
+Write-Host
+Write-Host
+Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+} catch{
+  Write-Error $_
+} finally{
+  Stop-Transcript
+}
+
+# In the case of an early exit/error, this filters only the files which exist
+$existingFiles = $outputFiles | Where-Object { Test-Path $_ }
+
+# Compress the files into a zip archive
+Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
+
+# Remove the original files
+foreach ($file in $outputFiles) {
+    Remove-Item -Path $file -ErrorAction SilentlyContinue
+}
+
+Write-Host
+Write-Host
+Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
+
+Write-Host
+Write-Host
+Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+Write-Host

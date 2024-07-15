@@ -208,6 +208,18 @@ param (
 
 )
 
+if (Test-Path "./output.log") {
+  Remove-Item -Path "./output.log"
+}
+
+Start-Transcript -Path "./output.log"
+
+$azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
+Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
+
+$date = Get-Date
+$archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
 
 function Get-AzureFileSAs {
@@ -222,10 +234,7 @@ function Get-AzureFileSAs {
             $StorageAccount.Sku.Name -in @('Premium_LRS', 'Premium_ZRS'))
 }
 
-$azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
-Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
-
-$date = Get-Date
+try{
 
 # Filenames of the CSVs to output
 $fileDate = $date.ToString("yyyy-MM-dd_HHmm")
@@ -1083,18 +1092,19 @@ if ($SkipAzureStorageAccounts -ne $true) {
 if ($SkipAzureBackup -ne $true) {
   
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaults - Azure Backup Vault CSV file."}
-  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPolicies - Azure Backup Vault VM policies CSV file."}
+  # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPolicies - Azure Backup Vault VM policies CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPoliciesJSON - Azure Backup Vault VM policies JSON file."}
-  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLPolicies - Azure Backup Vault VM SQL policies CSV file."}
+  # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLPolicies - Azure Backup Vault VM SQL policies CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLPoliciesJSON - Azure Backup Vault VM SQL policies JSON file."}
-  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabasePolicies - Azure Backup Vault Azure SQL Database policies CSV file."}
+  # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabasePolicies - Azure Backup Vault Azure SQL Database policies CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabasePoliciesJSON - Azure Backup Vault Azure SQL Database policies JSON file."}
-  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesPolicies - Azure Backup Vault Azure Files CSV file."}
+  # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesPolicies - Azure Backup Vault Azure Files CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesPoliciesJSON - Azure Backup Vault Azure Files JSON file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMItems - Azure Backup Vault VM items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMItems - Azure Backup Vault VM SQL items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabaseItems - Azure Backup Vault Azure SQL Database items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesItems - Azure Backup Vault Azure Files items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLItem - Azure Vault VMSQL items CSV file."}
 
   Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)"
   Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)"
@@ -1126,6 +1136,40 @@ if ($SkipAzureBackup -ne $true) {
 Write-Host
 Write-Host "Output files are:"
 $outputFiles.Files
+Write-Host
+
+Write-Host
+Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+} catch{
+  Write-Error $_
+} finally{
+  Stop-Transcript
+}
+
+$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="output.log - Log file"}
+
+# Extract only the unique file names from the array of objects for compression
+$filePaths = $outputFiles | ForEach-Object { $_.Files.Split(' - ')[0] }  | Sort-Object -Unique
+
+# In the case of an early exit/error, this filters only the files which exist
+$existingFiles = $filePaths | Where-Object { Test-Path $_ }
+
+# Compress the files into a zip archive
+Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
+
+# Remove the original files
+foreach ($file in $filePaths) {
+    Remove-Item -Path $file -ErrorAction SilentlyContinue
+}
+
+Write-Host
+Write-Host
+Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
+
+Write-Host
+Write-Host
+Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
 
 # Reset subscription context back to original.
