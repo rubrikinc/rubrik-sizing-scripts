@@ -1109,10 +1109,10 @@ if ($SkipAzureStorageAccounts -ne $true) {
     $azConTotalGB = ($azConList.UsedCapacityGB | Measure-Object -Sum).sum
     $azConTotalTB = ($azConList.UsedCapacityTB | Measure-Object -Sum).sum
     Write-Host
-    Write-Host "Totals based on traversing each blob store container and calculating statistics:"
-    Write-Host "NOTE: The totals may be different than those gathered from Storage Account metrics if"
-    Write-Host "some containers could not be accessed. There are also differences in the way these two metrics"
-    Write-Host "are calculated by Azure."
+    Write-Host "Totals based on traversing each blob store container and calculating statistics:" -ForeGroundColor Green
+    Write-Host "NOTE: The totals may be different than those gathered from Storage Account metrics if" -ForeGroundColor Green
+    Write-Host "some containers could not be accessed. There are also differences in the way these two metrics" -ForeGroundColor Green
+    Write-Host "are calculated by Azure." -ForeGroundColor Green
     Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB or $azConTotalTiB TiB or $azConTotalTB TB" -ForeGroundColor Green
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
@@ -1153,15 +1153,15 @@ if ($SkipAzureBackup -ne $true) {
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesItems - Azure Backup Vault Azure Files items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLItem - Azure Vault VMSQL items CSV file."}
 
-  Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)"
-  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)"
-  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines with SQL databases: $('{0:N0}' -f $azVaultVMSQLPoliciesList.Count)"
-  Write-Host "Total # of Azure Backup Vault policies for Azure SQL databases: $('{0:N0}' -f $azVaultAzureSQLDatabasePoliciesList.Count)"
-  Write-Host "Total # of Azure Backup Vault policies for Azure Files: $('{0:N0}' -f $azVaultAzureFilesPoliciesList.Count)"
-  Write-Host "Total # of Azure VMs protected by Azure Backup : $('{0:N0}' -f $azVaultVMItems.Count)"
-  Write-Host "Total # of Azure VMs with MS SQL protected by Azure Backup : $('{0:N0}' -f $azVaultVMSQLItems.Count)"
-  Write-Host "Total # of Azure SQL databases protected by Azure Backup : $('{0:N0}' -f $azVaultAzureSQLDatabaseItems.Count)"
-  Write-Host "Total # of Azure Files shares protected by Azure Backup : $('{0:N0}' -f $azVaultAzureFilesItems.Count)"
+  Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure Backup Vault policies for Virtual Machines with SQL databases: $('{0:N0}' -f $azVaultVMSQLPoliciesList.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure Backup Vault policies for Azure SQL databases: $('{0:N0}' -f $azVaultAzureSQLDatabasePoliciesList.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure Backup Vault policies for Azure Files: $('{0:N0}' -f $azVaultAzureFilesPoliciesList.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure VMs protected by Azure Backup : $('{0:N0}' -f $azVaultVMItems.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure VMs with MS SQL protected by Azure Backup : $('{0:N0}' -f $azVaultVMSQLItems.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure SQL databases protected by Azure Backup : $('{0:N0}' -f $azVaultAzureSQLDatabaseItems.Count)" -ForeGroundColor Green
+  Write-Host "Total # of Azure Files shares protected by Azure Backup : $('{0:N0}' -f $azVaultAzureFilesItems.Count)" -ForeGroundColor Green
 
 
   $azVaultList | Export-Csv -Path $outputAzVaults
@@ -1181,7 +1181,7 @@ if ($SkipAzureBackup -ne $true) {
 } # if ($SkipAzureBackup -ne $true)
 
 Write-Host
-Write-Host "Output files are:"
+Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
 Write-Host
 
