@@ -300,6 +300,7 @@ $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
 $archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
@@ -311,6 +312,7 @@ $outputFiles = @(
     $outputS3,
     $outputEFS,
     $outputFSX,
+    $outputBackupCosts,
     $outputBackupPlansJSON,
     "output.log"
 )
@@ -780,6 +782,45 @@ function getAWSData($cred) {
       }
       $backupPlanList.Add($BackupPlanObject) | Out-Null
     }
+  }
+  
+  $filter = @{
+    Dimensions = @{
+        Key = "SERVICE"
+        Values = @("AWS Backup")
+    }
+  }
+
+  # Create a date interval for past 12 months
+  $startDate = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
+  $endDate = (Get-Date).ToString("yyyy-MM-dd")
+  $timePeriod = @{
+      Start = $startDate
+      End = $endDate
+  }
+
+  $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
+
+  # Get the cost and usage data for AWS Backup
+  $result = Get-CECostAndUsage `
+      -TimePeriod $timePeriod `
+      -Granularity MONTHLY `
+      -Metrics $metrics `
+      -Filter $filter -Credential $cred
+
+  foreach ($resultItem in $result.ResultsByTime) {
+    $monthCostObj = [PSCustomObject] @{
+      "AwsAccountId" = $awsAccountInfo.Account
+      "AwsAccountAlias" = $awsAccountAlias
+      "AwsAccountArn" = $awsAccountInfo.Arn
+      "Time-Period-Start" = $resultItem.TimePeriod.Start
+      "Time-Period-End" = $resultItem.TimePeriod.End
+    }
+    foreach ($metric in $metrics) {
+        $cost = $resultItem.Total[$metric].Amount
+        $monthCostObj | Add-Member -MemberType NoteProperty -Name "${metric}" -Value "$cost"
+    }
+    $backupCostsList.Add($monthCostObj) | Out-Null
   }  
 }
 
@@ -791,7 +832,9 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
+$backupCostsList = New-Object collections.arraylist
 $backupPlanList = New-Object collections.arraylist
+
 try{
 if ($RegionToQuery) {
   $queryRegion = $RegionToQuery
@@ -1059,33 +1102,35 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
       }
     }
 
-$efsTotalGiB = ($efsList.sizeGiB | Measure-Object -Sum).sum
-$efsTotalTiB = ($efsList.sizeTiB | Measure-Object -Sum).sum 
-$efsTotalGB = ($efsList.sizeGB | Measure-Object -Sum).sum
-$efsTotalTB = ($efsList.sizeTB | Measure-Object -Sum).sum
-$efsInBackupPolicyList = $efsList | Where-Object { $_.InBackupPlan }
-$efsTotalBackupGiB = ($efsInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
-$efsTotalBackupTiB = ($efsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
-$efsTotalBackupGB = ($efsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
-$efsTotalBackupTB = ($efsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
+  $efsTotalGiB = ($efsList.sizeGiB | Measure-Object -Sum).sum
+  $efsTotalTiB = ($efsList.sizeTiB | Measure-Object -Sum).sum 
+  $efsTotalGB = ($efsList.sizeGB | Measure-Object -Sum).sum
+  $efsTotalTB = ($efsList.sizeTB | Measure-Object -Sum).sum
+  $efsInBackupPolicyList = $efsList | Where-Object { $_.InBackupPlan }
+  $efsTotalBackupGiB = ($efsInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+  $efsTotalBackupTiB = ($efsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+  $efsTotalBackupGB = ($efsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+  $efsTotalBackupTB = ($efsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
-$fsxTotalUsedGiB = ($fsxList.StorageUsedGiB | Measure-Object -Sum).sum
-$fsxTotalUsedTiB = ($fsxList.StorageUsedTiB | Measure-Object -Sum).sum 
-$fsxTotalUsedGB = ($fsxList.StorageUsedGB | Measure-Object -Sum).sum
-$fsxTotalUsedTB = ($fsxList.StorageUsedTB | Measure-Object -Sum).sum
-$fsxTotalCapacityGiB = ($fsxList.StorageCapacityGiB | Measure-Object -Sum).sum
-$fsxTotalCapacityTiB = ($fsxList.StorageCapacityTiB | Measure-Object -Sum).sum 
-$fsxTotalCapacityGB = ($fsxList.StorageCapacityGB | Measure-Object -Sum).sum
-$fsxTotalCapacityTB = ($fsxList.StorageCapacityTB | Measure-Object -Sum).sum
-$fsxInBackupPolicyList = $fsxList | Where-Object { $_.InBackupPlan }
-$fsxTotalBackupUsedGiB = ($fsxInBackupPolicyList.StorageUsedGiB | Measure-Object -Sum).sum
-$fsxTotalBackupUsedTiB = ($fsxInBackupPolicyList.StorageUsedTiB | Measure-Object -Sum).sum 
-$fsxTotalBackupUsedGB = ($fsxInBackupPolicyList.StorageUsedGB | Measure-Object -Sum).sum
-$fsxTotalBackupUsedTB = ($fsxInBackupPolicyList.StorageUsedTB | Measure-Object -Sum).sum
-$fsxTotalBackupCapacityGiB = ($fsxInBackupPolicyList.StorageCapacityGiB | Measure-Object -Sum).sum
-$fsxTotalBackupCapacityTiB = ($fsxInBackupPolicyList.StorageCapacityTiB | Measure-Object -Sum).sum 
-$fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
-$fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
+  $fsxTotalUsedGiB = ($fsxList.StorageUsedGiB | Measure-Object -Sum).sum
+  $fsxTotalUsedTiB = ($fsxList.StorageUsedTiB | Measure-Object -Sum).sum 
+  $fsxTotalUsedGB = ($fsxList.StorageUsedGB | Measure-Object -Sum).sum
+  $fsxTotalUsedTB = ($fsxList.StorageUsedTB | Measure-Object -Sum).sum
+  $fsxTotalCapacityGiB = ($fsxList.StorageCapacityGiB | Measure-Object -Sum).sum
+  $fsxTotalCapacityTiB = ($fsxList.StorageCapacityTiB | Measure-Object -Sum).sum 
+  $fsxTotalCapacityGB = ($fsxList.StorageCapacityGB | Measure-Object -Sum).sum
+  $fsxTotalCapacityTB = ($fsxList.StorageCapacityTB | Measure-Object -Sum).sum
+  $fsxInBackupPolicyList = $fsxList | Where-Object { $_.InBackupPlan }
+  $fsxTotalBackupUsedGiB = ($fsxInBackupPolicyList.StorageUsedGiB | Measure-Object -Sum).sum
+  $fsxTotalBackupUsedTiB = ($fsxInBackupPolicyList.StorageUsedTiB | Measure-Object -Sum).sum 
+  $fsxTotalBackupUsedGB = ($fsxInBackupPolicyList.StorageUsedGB | Measure-Object -Sum).sum
+  $fsxTotalBackupUsedTB = ($fsxInBackupPolicyList.StorageUsedTB | Measure-Object -Sum).sum
+  $fsxTotalBackupCapacityGiB = ($fsxInBackupPolicyList.StorageCapacityGiB | Measure-Object -Sum).sum
+  $fsxTotalBackupCapacityTiB = ($fsxInBackupPolicyList.StorageCapacityTiB | Measure-Object -Sum).sum 
+  $fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
+  $fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
+
+  $backupTotalNetUnblendedCost = ($backupCostsList.NetUnblendedCost | Measure-Object -Sum).sum
 
 # Export to CSV
 Write-Host ""
@@ -1101,6 +1146,8 @@ Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
 $efsList | Export-CSV -path $outputEFS
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
 $fsxList | Export-CSV -path $outputFSX
+Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
+$backupCostsList | Export-CSV -path $outputBackupCosts
 
 # Export to JSON
 Write-Host "JSON file output to: $outputBackupPlansJSON"  -ForegroundColor Green
@@ -1177,6 +1224,10 @@ $s3BackupTotalTBsFormatted  = $s3BackupTotalTBs.GetEnumerator() |
 $s3BackupTotalTBsFormatted | ForEach-Object {
     Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
 }
+
+Write-Host
+Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $backupTotalNetUnblendedCost"  -ForegroundColor Green
+Write-Host "See CSV for further breakdown of cost for Backup"  -ForegroundColor Green
 
 Write-Host
 Write-Host
