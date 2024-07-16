@@ -472,6 +472,18 @@ function getAWSData($cred) {
         "InBackupPlan" = $false
       }
 
+      foreach ($tag in $ec2.Tags) { 
+        # Powershell objects have restrictions on key names, 
+        # so I use Regular Expressions to substitute non valid parts 
+        # like ' ' or '-' to '_' 
+        # This may cause small subtle changes from the tagname in AWS 
+        # Same applies to all other types of objects
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $ec2obj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+        } 
+      }
+
       $ec2List.Add($ec2obj) | Out-Null
     }
     Write-Progress -Activity 'Processing EC2 Instances:' -PercentComplete 100 -Completed
@@ -503,6 +515,13 @@ function getAWSData($cred) {
         "InBackupPlan" = $false
       }
 
+      foreach ($tag in $ec2UnattachedVolume.Tags) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+        } 
+      }
+
       $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
       Write-Progress -Activity 'Processing unattached EC2 volumes:' -PercentComplete 100 -Completed
     }
@@ -530,6 +549,13 @@ function getAWSData($cred) {
         "Platform" = $rds.Engine
         "BackupPlans" = ""
         "InBackupPlan" = $false
+      }
+
+      foreach ($tag in $rds.TagList) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $rdsObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+        } 
       }
 
       $rdsList.Add($rdsObj) | Out-Null
@@ -565,6 +591,13 @@ function getAWSData($cred) {
         "ThroughputMode" = $efs.ThroughputMode
         "BackupPlans" = ""
         "InBackupPlan" = $false
+      }
+
+      foreach ($tag in $efs.Tags) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $efsObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+        } 
       }
 
       $efsList.Add($efsObj) | Out-Null
@@ -629,6 +662,13 @@ function getAWSData($cred) {
         "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
         "BackupPlans" = ""
         "InBackupPlan" = $false
+      }
+
+      foreach ($tag in $fsx.Tags) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $fsxObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+        } 
       }
 
       $fsxList.Add($fsxObj) | Out-Null
@@ -1138,20 +1178,56 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
 
   $backupTotalNetUnblendedCost = ($backupCostsList.NetUnblendedCost | Measure-Object -Sum).sum
 
+function addTagsToAllObjectsInList($list) {
+  # Determine all unique tag keys
+  $allTagKeys = @{}
+  foreach ($obj in $list) {
+      $properties = $obj.PSObject.Properties
+      foreach ($property in $properties) {
+          if (-not $allTagKeys.ContainsKey($property.Name)) {
+              $allTagKeys[$property.Name] = $true
+          }
+      }
+  }
+  
+  $allTagKeys = $allTagKeys.Keys
+  
+  # Ensure each object has all possible tag keys
+  foreach ($obj in $list) {
+      foreach ($key in $allTagKeys) {
+          if (-not $obj.PSObject.Properties.Name.Contains($key)) {
+              $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
+          }
+      }
+  }
+}
+
 # Export to CSV
 Write-Host ""
+
+addTagsToAllObjectsInList($ec2List)
 Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
 $ec2List | Export-CSV -path $outputEc2Instance
+
+addTagsToAllObjectsInList($ec2UnattachedVolList)
 Write-Host "CSV file output to: $outputEc2UnattachedVolume"  -ForegroundColor Green
 $ec2UnattachedVolList | Export-CSV -path $outputEc2UnattachedVolume
+
+addTagsToAllObjectsInList($rdsList)
 Write-Host "CSV file output to: $outputRDS"  -ForegroundColor Green
 $rdsList | Export-CSV -path $outputRDS
+
 Write-Host "CSV file output to: $outputS3"  -ForegroundColor Green
 $s3ListAg | Export-CSV -path $outputS3
+
+addTagsToAllObjectsInList($efsList)
 Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
 $efsList | Export-CSV -path $outputEFS
+
+addTagsToAllObjectsInList($fsxList)
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
 $fsxList | Export-CSV -path $outputFSX
+
 Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
 $backupCostsList | Export-CSV -path $outputBackupCosts
 
