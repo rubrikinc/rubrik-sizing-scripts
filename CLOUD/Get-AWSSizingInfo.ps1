@@ -800,15 +800,20 @@ function getAWSData($cred) {
     }
   }
   
-  $filter = New-Object -TypeName Amazon.CostExplorer.Model.Expression
-  $filter.Dimensions = New-Object -TypeName Amazon.CostExplorer.Model.DimensionValues
-  $filter.Dimensions.Key = "SERVICE"
-  $filter.Dimensions.Values = @("AWS Backup")
+  $filter = @{
+    Dimensions = @{
+        Key = "SERVICE"
+        Values = @("AWS Backup")
+    }
+  }
 
   # Create a date interval for past 12 months
-  $timePeriod = New-Object -TypeName Amazon.CostExplorer.Model.DateInterval
-  $timePeriod.Start = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
-  $timePeriod.End = (Get-Date).ToString("yyyy-MM-dd")
+  $startDate = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
+  $endDate = (Get-Date).ToString("yyyy-MM-dd")
+  $timePeriod = @{
+      Start = $startDate
+      End = $endDate
+  }
 
   $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
