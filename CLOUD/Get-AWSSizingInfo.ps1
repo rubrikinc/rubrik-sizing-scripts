@@ -660,15 +660,13 @@ function getAWSData($cred) {
                   foreach ($ec2Obj in $ec2List) {
                     # Instance id will be fetched as * if all instances are backed up
                     if (($ec2Obj.InstanceId -eq $instanceId -or "*" -eq $instanceId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
-                      if (-not $ec2Obj.PSObject.Properties["BackupPlans"]) {
-                          $ec2Obj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                      if ("" -eq $ec2Obj.BackupPlans) {
+                          $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
                       }
                       else {
                           $ec2Obj.BackupPlans += ", $($plan.BackupPlanName)"
                       }
-                      if (-not $ec2Obj.PSObject.Properties["InBackupPlan"]) {
-                          $ec2Obj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                      }
+                      $ec2Obj.InBackupPlan = $true
                     }
                   }
                 }
@@ -677,15 +675,13 @@ function getAWSData($cred) {
                   foreach ($ec2Obj in $ec2UnattachedVolumes) {
                     # Volume id will be fetched as * if all ebs volumes are backed up
                     if (($ec2Obj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
-                      if (-not $ec2Obj.PSObject.Properties["BackupPlans"]) {
-                          $ec2Obj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                      if ("" -eq $ec2Obj.BackupPlans) {
+                          $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
                       }
                       else {
                           $ec2Obj.BackupPlans += ", $($plan.BackupPlanName)"
                       }
-                      if (-not $ec2Obj.PSObject.Properties["InBackupPlan"]) {
-                          $ec2Obj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                      }
+                      $ec2Obj.InBackupPlan = $true
                     }
                   }
                 }
@@ -695,15 +691,13 @@ function getAWSData($cred) {
                 $RDSId = ($resource -split ':')[6]
                 foreach ($rdsObj in $rdsList) {
                   if (($rdsObj.DBInstanceIdentifier -eq $RDSId -or "*" -eq $RDSId) -and $awsRegion -eq $rdsObj.Region -and $awsAccountInfo.Account -eq $rdsObj.AwsAccountId) {
-                    if (-not $rdsObj.PSObject.Properties["BackupPlans"]) {
-                        $rdsObj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $rdsObj.BackupPlans) {
+                        $rdsObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $rdsObj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $rdsObj.PSObject.Properties["InBackupPlan"]) {
-                        $rdsObj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $rdsObj.InBackupPlan = $true
                   }
                 }
             } 
@@ -711,15 +705,13 @@ function getAWSData($cred) {
               $EFSId = ($resource -split '/')[1]
                 foreach ($efsObj in $efsList) {
                   if (($efsObj.FileSystemId -eq $EFSId -or "*" -eq $EFSId) -and $awsRegion -eq $efsObj.Region -and $awsAccountInfo.Account -eq $efsObj.AwsAccountId) {
-                    if (-not $efsObj.PSObject.Properties["BackupPlans"]) {
-                        $efsObj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $efsObj.BackupPlans) {
+                        $efsObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $efsObj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $efsObj.PSObject.Properties["InBackupPlan"]) {
-                        $efsObj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $efsObj.InBackupPlan = $true
                   }
                 }
             }
@@ -728,15 +720,13 @@ function getAWSData($cred) {
               if(($resource -split ':')[-1] -eq "*") {
                 foreach ($fsxObj in $fsxList) {
                   if ($awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
-                    if (-not $fsxObj.PSObject.Properties["BackupPlans"]) {
-                        $fsxObj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $fsxObj.BackupPlans) {
+                        $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $fsxObj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $fsxObj.PSObject.Properties["InBackupPlan"]) {
-                        $fsxObj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $fsxObj.InBackupPlan = $true
                   }
                 }
               } else {
@@ -745,15 +735,13 @@ function getAWSData($cred) {
                 $VolumeId = $FSXInfo[2]
                 foreach ($fsxObj in $fsxList) {
                   if ($fsxObj.VolumeId -eq $VolumeId -and $fsxObj.FileSystemId -eq $FileSystemId -and $awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
-                    if (-not $fsxObj.PSObject.Properties["BackupPlans"]) {
-                        $fsxObj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $fsxObj.BackupPlans) {
+                        $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $fsxObj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $fsxObj.PSObject.Properties["InBackupPlan"]) {
-                        $fsxObj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $fsxObj.InBackupPlan = $true
                   }
                 }
               }
@@ -763,30 +751,26 @@ function getAWSData($cred) {
               if(($resource -split ':')[-1] -eq "*") {
                 foreach ($s3Obj in $s3List) {
                   if ($awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
-                    if (-not $s3Obj.PSObject.Properties["BackupPlans"]) {
-                        $s3Obj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $s3Obj.BackupPlans) {
+                        $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $s3Obj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $s3Obj.PSObject.Properties["InBackupPlan"]) {
-                        $s3Obj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $s3Obj.InBackupPlan = $true
                   }
                 }
               } else {
                 $S3Name = ($resource -split '/')[1]
                 foreach ($s3Obj in $s3List) {
                   if ($s3Obj.BucketName -eq $S3Name -and $awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
-                    if (-not $s3Obj.PSObject.Properties["BackupPlans"]) {
-                        $s3Obj | Add-Member -MemberType NoteProperty -Name "BackupPlans" -Value "$($plan.BackupPlanName)"
+                    if ("" -eq $s3Obj.BackupPlans) {
+                        $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
                     }
                     else {
                         $s3Obj.BackupPlans += ", $($plan.BackupPlanName)"
                     }
-                    if (-not $s3Obj.PSObject.Properties["InBackupPlan"]) {
-                        $s3Obj | Add-Member -MemberType NoteProperty -Name "InBackupPlan" -Value $true -Force
-                    }
+                    $s3Obj.InBackupPlan = $true
                   }
                 }
               }
