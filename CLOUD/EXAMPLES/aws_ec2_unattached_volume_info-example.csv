@@ -1,2 +1,2 @@
-"AwsAccountId","AwsAccountAlias","VolumeId","Name","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","VolumeType"
-"012345678901","account1","vol-01234567890abcdef","example_unattached_volume1","5","0.0048828","5.369","0.0053687","us-west-2","gp2"
+"AwsAccountId","AwsAccountAlias","VolumeId","Name","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","VolumeType", "BackupPlans", "InBackupPlan"
+"012345678901","account1","vol-01234567890abcdef","example_unattached_volume1","5","0.0048828","5.369","0.0053687","us-west-2","gp2","plan-1","TRUE"

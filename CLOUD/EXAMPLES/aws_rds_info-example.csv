@@ -1,4 +1,4 @@
-"AwsAccountId","AwsAccountAlias","RDSInstance","DBInstanceIdentifier","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","InstanceType","Platform"
-"012345678901","account1","example_db_1","example_db_1","1","0.0009766","1.074","0.0010737","us-west-2","db.r5.large","aurora-mysql"
+"AwsAccountId","AwsAccountAlias","RDSInstance","DBInstanceIdentifier","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","InstanceType","Platform", "BackupPlans", "InBackupPlan"
+"012345678901","account1","example_db_1","example_db_1","1","0.0009766","1.074","0.0010737","us-west-2","db.r5.large","aurora-mysql", "plan-test", "TRUE"
 "012345678901","account1","example_db_2","example_db_2","100","0.0976563","107.374","0.1073742","us-west-2","db.m6i.large","mysql"
 "098765432109","account2","example_db_3","example_db_3","20","0.0195313","21.475","0.0214748","us-west-2","db.m6i.xlarge","sqlserver-web"
