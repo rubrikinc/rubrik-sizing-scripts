@@ -572,8 +572,12 @@ foreach ($sub in $subs) {
             $sqlObj.Add("DatabaseID",$sqlDB.DatabaseId)
             $sqlObj.Add("InstanceType",$sqlDB.SkuName)
             $sqlObj.Add("Status",$sqlDB.Status)
-
-            $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName
+            try{
+              $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName
+            } catch {
+              Write-Host "Failed to get Long Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
+              Write-Host "Error: $_" -ForeGroundColor Red
+            }
             $sqlObj.Add("LTRWeeklyRetention",$ltrPolicy.WeeklyRetention)
             $sqlObj.Add("LTRMonthlyRetention",$ltrPolicy.MonthlyRetention)
             $sqlObj.Add("LTRYearlyRetention",$ltrPolicy.YearlyRetention)
@@ -662,8 +666,18 @@ foreach ($sub in $subs) {
     foreach ($azSA in $azSAs) {
       Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
       $azSANum++
-      $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
-      $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
+      try{
+        $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
+      } catch {
+        Write-Host "Failed to get Storage Account Context for Storage Account $($azSA.StorageAccountName) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }
+      try{
+        $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
+      } catch {
+        Write-Host "Failed to get Storage Account Objects for Storage Account $($azSA.StorageAccountName) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }
       $azSAResourceId = "/subscriptions/$($sub.Id)/resourceGroups/$($azSA.ResourceGroupName)/providers/Microsoft.Storage/storageAccounts/$($azSA.StorageAccountName)"
       $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId $azSAResourceId `
@@ -712,7 +726,7 @@ foreach ($sub in $subs) {
       $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824), 0))
       $azSAObj.Add("UsedFileShareCapacityTiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824 / 1024), 4))
       $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($($UsedFileShareCapacityBytes / 1000000000), 3))
-      $azSAObj.Add("UUsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 7))
+      $azSAObj.Add("UsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 7))
       $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
       $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
@@ -744,7 +758,12 @@ foreach ($sub in $subs) {
         foreach ($azCon in $azCons) {
           Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 -Status "Azure Container $($azConNum) of $($azCons.Count)"
           $azConNum++
-          $azConBlobs = Get-AzStorageBlob -Container $($azCon.Name) -Context $azSAContext
+          try{
+            $azConBlobs = Get-AzStorageBlob -Container $($azCon.Name) -Context $azSAContext
+          } catch {
+            Write-Host "Failed to get Azure Container Information for container $($azCon.Name) in Storage Account Storage Account $($azSA.StorageAccountName) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
+            Write-Host "Error: $_" -ForeGroundColor Red
+          }
           $lengthHotTier = 0
           $lengthCoolTier = 0
           $lengthArchiveTier = 0
@@ -916,100 +935,109 @@ foreach ($sub in $subs) {
 
       Set-AzRecoveryServicesVaultContext  -Vault $azVault
       #Get Azure Backup policies for VMs and SQL in a VM
-      $azVaultVMPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureVM
-      $azVaultVMPoliciesList += $azVaultVMPolicies | Select-Object -Property `
+      try {
+        $azVaultVMPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureVM
+        $azVaultVMPoliciesList += $azVaultVMPolicies | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$sub.Name}}, `
+          @{Name = "Region"; Expression = {$azVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+          *
+
+        $azVaultVMSQLPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType MSSQL
+        $azVaultVMSQLPoliciesList += $azVaultVMSQLPolicies | Select-Object -Property `
         @{Name = "Tenant"; Expression = {$tenant.Name}}, `
         @{Name = "Subscription"; Expression = {$sub.Name}}, `
         @{Name = "Region"; Expression = {$azVault.Location}}, `
         @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
         *
 
-      $azVaultVMSQLPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType MSSQL
-      $azVaultVMSQLPoliciesList += $azVaultVMSQLPolicies | Select-Object -Property `
-      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-      @{Name = "Subscription"; Expression = {$sub.Name}}, `
-      @{Name = "Region"; Expression = {$azVault.Location}}, `
-      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-      *
+        $azVaultAzureSQLDatabasePolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureSQLDatabase
+        $azVaultAzureSQLDatabasePoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+        @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+        @{Name = "Subscription"; Expression = {$sub.Name}}, `
+        @{Name = "Region"; Expression = {$azVault.Location}}, `
+        @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+        *
 
-      $azVaultAzureSQLDatabasePolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureSQLDatabase
-      $azVaultAzureSQLDatabasePoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
-      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-      @{Name = "Subscription"; Expression = {$sub.Name}}, `
-      @{Name = "Region"; Expression = {$azVault.Location}}, `
-      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-      *
-
-      $azVaultAzureFilesPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureFiles
-      $azVaultAzureFilesPoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
-      @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-      @{Name = "Subscription"; Expression = {$sub.Name}}, `
-      @{Name = "Region"; Expression = {$azVault.Location}}, `
-      @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-      *
-
-      #For each policy, get the items currently protected by the policy
-      foreach ($policy in $azVaultVMPolicies) {
-          $azVaultVMItem = Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
-          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-          @{Name = "Subscription"; Expression = {$sub.Name}}, `
-          @{Name = "Region"; Expression = {$azVault.Location}}, `
-          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-          *
-          $azVaultVMItems += $azVaultVMItem
-          foreach($item in $azVaultVMItem){
-            $vmName = ($item.VirtualMachineId -split '/')[ -1 ]
-            $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
-            if ($vmList.ContainsKey($vmKey)) {
-              if ($vmList[$vmKey].BackupPolicies -eq "-") {
-                $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+        $azVaultAzureFilesPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureFiles
+        $azVaultAzureFilesPoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+        @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+        @{Name = "Subscription"; Expression = {$sub.Name}}, `
+        @{Name = "Region"; Expression = {$azVault.Location}}, `
+        @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+        *
+      } catch {
+        Write-Host "Failed to get Azure Recovery Services Backup Protection Policies for vault $($azVault.Name) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name) in Region $($azVault.Location)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }
+      try{
+        #For each policy, get the items currently protected by the policy
+        foreach ($policy in $azVaultVMPolicies) {
+            $azVaultVMItem = Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+            @{Name = "Subscription"; Expression = {$sub.Name}}, `
+            @{Name = "Region"; Expression = {$azVault.Location}}, `
+            @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+            *
+            $azVaultVMItems += $azVaultVMItem
+            foreach($item in $azVaultVMItem){
+              $vmName = ($item.VirtualMachineId -split '/')[ -1 ]
+              $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
+              if ($vmList.ContainsKey($vmKey)) {
+                if ($vmList[$vmKey].BackupPolicies -eq "-") {
+                  $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+                }
+                else {
+                  $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
+                }
+              } else {
+                  Write-Host "VM: $vmName not found in the vmList."
               }
-              else {
-                $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
-              }
-            } else {
-                Write-Host "VM: $vmName not found in the vmList."
             }
-          }
-      }
-      foreach ($policy in $azVaultVMSQLPolicies) {
-          $azVaultVMSQLItem = Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
-          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-          @{Name = "Subscription"; Expression = {$sub.Name}}, `
-          @{Name = "Region"; Expression = {$azVault.Location}}, `
-          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-          *
-          $azVaultVMSQLItems += $azVaultVMSQLItem
-          foreach($item in $azVaultVMSQLItem){
-            $vmName = $item.ServerName
-            $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
-            if ($vmList.ContainsKey($vmKey)) {
-              if ($vmList[$vmKey].BackupPolicies -eq "-") {
-                $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+        }
+        foreach ($policy in $azVaultVMSQLPolicies) {
+            $azVaultVMSQLItem = Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+            @{Name = "Subscription"; Expression = {$sub.Name}}, `
+            @{Name = "Region"; Expression = {$azVault.Location}}, `
+            @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+            *
+            $azVaultVMSQLItems += $azVaultVMSQLItem
+            foreach($item in $azVaultVMSQLItem){
+              $vmName = $item.ServerName
+              $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
+              if ($vmList.ContainsKey($vmKey)) {
+                if ($vmList[$vmKey].BackupPolicies -eq "-") {
+                  $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+                }
+                else {
+                  $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
+                }
+              } else {
+                  Write-Host "VM: $vmName not found in the vmList."
               }
-              else {
-                $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
-              }
-            } else {
-                Write-Host "VM: $vmName not found in the vmList."
             }
-          }
-      }
-      foreach ($policy in $azVaultAzureSQLDatabasePolicies) {
-          $AzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
-          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-          @{Name = "Subscription"; Expression = {$sub.Name}}, `
-          @{Name = "Region"; Expression = {$azVault.Location}}, `
-          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-          *
-      }
-      foreach ($policy in $azVaultAzureFilesPolicies) {
-          $AzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
-          @{Name = "Tenant"; Expression = {$tenant.Name}}, `
-          @{Name = "Subscription"; Expression = {$sub.Name}}, `
-          @{Name = "Region"; Expression = {$azVault.Location}}, `
-          @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-          *
+        }
+        foreach ($policy in $azVaultAzureSQLDatabasePolicies) {
+            $AzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+            @{Name = "Subscription"; Expression = {$sub.Name}}, `
+            @{Name = "Region"; Expression = {$azVault.Location}}, `
+            @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+            *
+        }
+        foreach ($policy in $azVaultAzureFilesPolicies) {
+            $AzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            @{Name = "Tenant"; Expression = {$tenant.Name}}, `
+            @{Name = "Subscription"; Expression = {$sub.Name}}, `
+            @{Name = "Region"; Expression = {$azVault.Location}}, `
+            @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
+            *
+        }
+      }catch {
+        Write-Host "Failed to get Azure Recovery Services Backup Items for policies in vault $($azVault.Name) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name) in Region $($azVault.Location)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
       }
 
     } # foreach ($azVault in $azVaults)

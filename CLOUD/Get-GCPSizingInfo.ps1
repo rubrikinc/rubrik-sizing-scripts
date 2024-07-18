@@ -102,7 +102,12 @@ if ($projectFile -ne '')
 } else {
   # If no project is provided use the current project
   $projectList = @()
-  $projectList += & gcloud config get-value project
+  try{
+    $projectList += & gcloud config get-value project
+  } catch {
+    Write-Host "Failed to get project" -foregroundcolor Red
+  }
+  
   Write-Host "No project list provided, using current project: $projectList" -foregroundcolor green
 }
 
@@ -112,7 +117,11 @@ foreach ($project in $projectList)
   Write-Host "Getting GCE VM info for current project: $project" -foregroundcolor green
 
   # gcloud SDK command to get each VM disk info a given project
-  $projectInfo = & gcloud compute instances list --project=$project --format=json | jq '[ .[] | . as $vm | .disks[] | { vmName: $vm.name, vmID: $vm.id, status: $vm.status, diskName: .deviceName, diskSizeGb: .diskSizeGb} ]'
+  try{
+    $projectInfo = & gcloud compute instances list --project=$project --format=json | jq '[ .[] | . as $vm | .disks[] | { vmName: $vm.name, vmID: $vm.id, status: $vm.status, diskName: .deviceName, diskSizeGb: .diskSizeGb} ]'
+  } catch {
+    Write-Host "Failed to get instances in project $project"
+  }
   $projectInfo = $projectInfo | ConvertFrom-Json
 
   # Loop through each VM disk info and add it to the VM hash entry
