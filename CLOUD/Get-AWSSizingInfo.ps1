@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX
+#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup
 
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC, AWS.Tools.FSX
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -62,7 +62,11 @@
                     "s3:ListAllMyBuckets",
                     "sts:AssumeRole",
                     "fsx:DescribeFileSystems",
-                    "fsx:DescribeVolumes"
+                    "fsx:DescribeVolumes",
+                    "backup:ListBackupPlans",
+                    "backup:ListBackupSelections",
+                    "backup:GetBackupPlan",
+                    "backup:GetBackupSelection"
                 ],
                 "Resource": "*"
             }
@@ -296,6 +300,7 @@ $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
 $archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 # List of output files
@@ -306,6 +311,7 @@ $outputFiles = @(
     $outputS3,
     $outputEFS,
     $outputFSX,
+    $outputBackupPlansJSON,
     "output.log"
 )
 
@@ -390,6 +396,8 @@ function getAWSData($cred) {
         "AwsAccountAlias" = $awsAccountAlias
         "BucketName" = $s3Bucket
         "Region" = $awsRegion
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
       foreach ($bytesStorage in $bytesStorages.GetEnumerator()) {
         if ($($bytesStorage.Value) -eq $null) {
@@ -457,6 +465,8 @@ function getAWSData($cred) {
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
         "ProductCode" = $ec2.ProductCodes.ProductCodeType
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $ec2List.Add($ec2obj) | Out-Null
@@ -486,6 +496,8 @@ function getAWSData($cred) {
         "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 7)
         "Region" = $awsRegion
         "VolumeType" = $ec2UnattachedVolume.VolumeType
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
@@ -513,6 +525,8 @@ function getAWSData($cred) {
         "Region" = $awsRegion
         "InstanceType" = $rds.DBInstanceClass
         "Platform" = $rds.Engine
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $rdsList.Add($rdsObj) | Out-Null
@@ -546,6 +560,8 @@ function getAWSData($cred) {
         "DBInstanceIdentifier" = $efs.DBInstanceIdentifier
         "Region" = $awsRegion
         "ThroughputMode" = $efs.ThroughputMode
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $efsList.Add($efsObj) | Out-Null
@@ -608,11 +624,162 @@ function getAWSData($cred) {
         "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 7)
         "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 7)
         "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
 
       $fsxList.Add($fsxObj) | Out-Null
     }
     Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
+
+    Write-Host "Getting Backup Plans for region: $awsRegion" -ForegroundColor Green
+    $BackupPlans = Get-BAKBackupPlanList -Credential $cred -region $awsRegion
+    Write-Host "Found" $BackupPlans.Count "Backup Plans."  -ForegroundColor Green
+
+    $counter = 0
+    foreach ($plan in $BackupPlans) {
+      $counter++
+      Write-Progress -Activity 'Processing Backup Plan:' -Status $plan.BackupPlanId -PercentComplete (($counter / $BackupPlans.Count) * 100)
+      $BackupPlanObject = (Get-BAKBackupPlan -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+      $BackupPlanObject | Add-Member -MemberType NoteProperty -Name "Resources" -Value @()
+
+      $Selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId
+      foreach ($selection in $Selections) {
+        Write-Progress -Activity 'Processing Backup Plan/Selection:' -Status "$($plan.BackupPlanId) - $($selection.SelectionId)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
+        $foundSelection = Get-BakBackupSelection -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
+        $resources = $foundSelection.BackupSelection.Resources
+        foreach ($resource in $resources) {
+          $BackupPlanObject.Resources += $resource
+          $type = ($resource -split ':')[2]
+          switch ($type) {
+            "ec2" {
+              $EC2Id = ($resource -split ':')[5] -split '/' # format: volume/vol-0000 or instance/i-0000
+              switch ($EC2Id[0]) {
+                "instance" {
+                  $instanceId = $EC2Id[1]
+                  foreach ($ec2Obj in $ec2List) {
+                    # Instance id will be fetched as * if all instances are backed up
+                    if (($ec2Obj.InstanceId -eq $instanceId -or "*" -eq $instanceId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
+                      if ("" -eq $ec2Obj.BackupPlans) {
+                          $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
+                      }
+                      else {
+                          $ec2Obj.BackupPlans += ", $($plan.BackupPlanName)"
+                      }
+                      $ec2Obj.InBackupPlan = $true
+                    }
+                  }
+                }
+                "volume" {
+                  $volId = $EC2Id[1]
+                  foreach ($ec2Obj in $ec2UnattachedVolumes) {
+                    # Volume id will be fetched as * if all ebs volumes are backed up
+                    if (($ec2Obj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
+                      if ("" -eq $ec2Obj.BackupPlans) {
+                          $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
+                      }
+                      else {
+                          $ec2Obj.BackupPlans += ", $($plan.BackupPlanName)"
+                      }
+                      $ec2Obj.InBackupPlan = $true
+                    }
+                  }
+                }
+              }
+            }
+            "rds" {
+                $RDSId = ($resource -split ':')[6]
+                foreach ($rdsObj in $rdsList) {
+                  if (($rdsObj.DBInstanceIdentifier -eq $RDSId -or "*" -eq $RDSId) -and $awsRegion -eq $rdsObj.Region -and $awsAccountInfo.Account -eq $rdsObj.AwsAccountId) {
+                    if ("" -eq $rdsObj.BackupPlans) {
+                        $rdsObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $rdsObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $rdsObj.InBackupPlan = $true
+                  }
+                }
+            } 
+            "elasticfilesystem" {
+              $EFSId = ($resource -split '/')[1]
+                foreach ($efsObj in $efsList) {
+                  if (($efsObj.FileSystemId -eq $EFSId -or "*" -eq $EFSId) -and $awsRegion -eq $efsObj.Region -and $awsAccountInfo.Account -eq $efsObj.AwsAccountId) {
+                    if ("" -eq $efsObj.BackupPlans) {
+                        $efsObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $efsObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $efsObj.InBackupPlan = $true
+                  }
+                }
+            }
+            "fsx" {
+              # arn:*:fsx:* in the case of 'all fsx's'
+              if(($resource -split ':')[-1] -eq "*") {
+                foreach ($fsxObj in $fsxList) {
+                  if ($awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
+                    if ("" -eq $fsxObj.BackupPlans) {
+                        $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $fsxObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $fsxObj.InBackupPlan = $true
+                  }
+                }
+              } else {
+                $FSXInfo = ($resource -split '/')
+                $FileSystemId = $FSXInfo[1]
+                $VolumeId = $FSXInfo[2]
+                foreach ($fsxObj in $fsxList) {
+                  if ($fsxObj.VolumeId -eq $VolumeId -and $fsxObj.FileSystemId -eq $FileSystemId -and $awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
+                    if ("" -eq $fsxObj.BackupPlans) {
+                        $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $fsxObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $fsxObj.InBackupPlan = $true
+                  }
+                }
+              }
+            }
+            "s3" {
+              # arn:aws:s3:::* in the case of 'all s3's'
+              if(($resource -split ':')[-1] -eq "*") {
+                foreach ($s3Obj in $s3List) {
+                  if ($awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
+                    if ("" -eq $s3Obj.BackupPlans) {
+                        $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $s3Obj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $s3Obj.InBackupPlan = $true
+                  }
+                }
+              } else {
+                $S3Name = ($resource -split '/')[1]
+                foreach ($s3Obj in $s3List) {
+                  if ($s3Obj.BucketName -eq $S3Name -and $awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
+                    if ("" -eq $s3Obj.BackupPlans) {
+                        $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $s3Obj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $s3Obj.InBackupPlan = $true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      $backupPlanList.Add($BackupPlanObject) | Out-Null
+    }
   }  
 }
 
@@ -624,6 +791,7 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
+$backupPlanList = New-Object collections.arraylist
 try{
 if ($RegionToQuery) {
   $queryRegion = $RegionToQuery
@@ -827,16 +995,33 @@ $ec2TotalGiB = ($ec2list.sizeGiB | Measure-Object -Sum).sum
 $ec2TotalTiB = ($ec2list.sizeTiB | Measure-Object -Sum).sum 
 $ec2TotalGB = ($ec2list.sizeGB | Measure-Object -Sum).sum
 $ec2TotalTB = ($ec2list.sizeTB | Measure-Object -Sum).sum
+$ec2InBackupPolicyList = $ec2List | Where-Object { $_.InBackupPlan }
+$ec2TotalBackupGiB = ($ec2InBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+$ec2TotalBackupTiB = ($ec2InBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+$ec2TotalBackupGB = ($ec2InBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+$ec2TotalBackupTB = ($ec2InBackupPolicyList.sizeTB | Measure-Object -Sum).sum
+
 
 $ec2UnVolTotalGiB = ($ec2UnattachedVolList.sizeGiB | Measure-Object -Sum).sum
 $ec2UnVolTotalTiB = ($ec2UnattachedVolList.sizeTiB | Measure-Object -Sum).sum
 $ec2UnVolTotalGB = ($ec2UnattachedVolList.sizeGB | Measure-Object -Sum).sum
 $ec2UnVolTotalTB = ($ec2UnattachedVolList.sizeTB | Measure-Object -Sum).sum
+$ec2UnVolInBackupPolicyList = $ec2UnattachedVolList | Where-Object { $_.InBackupPlan }
+$ec2UnVolTotalBackupGiB = ($ec2UnVolInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+$ec2UnVolTotalBackupTiB = ($ec2UnVolInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+$ec2UnVolTotalBackupGB = ($ec2UnVolInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+$ec2UnVolTotalBackupTB = ($ec2UnVolInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
 $rdsTotalGiB = ($rdsList.sizeGiB | Measure-Object -Sum).sum
 $rdsTotalTiB = ($rdsList.sizeTiB | Measure-Object -Sum).sum 
 $rdsTotalGB = ($rdsList.sizeGB | Measure-Object -Sum).sum
 $rdsTotalTB = ($rdsList.sizeTB | Measure-Object -Sum).sum
+$rdsInBackupPolicyList = $rdsList | Where-Object { $_.InBackupPlan }
+$rdsTotalBackupGiB = ($rdsInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+$rdsTotalBackupTiB = ($rdsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+$rdsTotalBackupGB = ($rdsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+$rdsTotalBackupTB = ($rdsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
+
 
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
@@ -855,10 +1040,34 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
     }
   }
 
+  $s3InBackupPolicyList = $s3List | Where-Object { $_.InBackupPlan }
+
+  $s3BackupProps = $s3InBackupPolicyList.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
+  $s3BackupTBProps = $s3BackupProps | Select-String -Pattern "_SizeTB"
+  $s3BackupListAg = $s3InBackupPolicyList | Select-Object $s3BackupProps
+  $s3BackupTotalTBs = @{}
+  
+  foreach ($s3TBProp in $s3BackupTBProps) {
+    $s3BackupTotalTBs.Add($s3TBProp, ($s3BackupListAg.$s3TBProp | Measure-Object -Sum).Sum)
+  }
+  
+  $s3BackupTotalTBsFormatted  = $s3BackupTotalTBs.GetEnumerator() |
+    ForEach-Object {
+      [PSCustomObject]@{
+        StorageType = $_.Key
+        Size_TB = "{0:n7}" -f $_.Value
+      }
+    }
+
 $efsTotalGiB = ($efsList.sizeGiB | Measure-Object -Sum).sum
 $efsTotalTiB = ($efsList.sizeTiB | Measure-Object -Sum).sum 
 $efsTotalGB = ($efsList.sizeGB | Measure-Object -Sum).sum
 $efsTotalTB = ($efsList.sizeTB | Measure-Object -Sum).sum
+$efsInBackupPolicyList = $efsList | Where-Object { $_.InBackupPlan }
+$efsTotalBackupGiB = ($efsInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+$efsTotalBackupTiB = ($efsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+$efsTotalBackupGB = ($efsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+$efsTotalBackupTB = ($efsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
 $fsxTotalUsedGiB = ($fsxList.StorageUsedGiB | Measure-Object -Sum).sum
 $fsxTotalUsedTiB = ($fsxList.StorageUsedTiB | Measure-Object -Sum).sum 
@@ -868,6 +1077,15 @@ $fsxTotalCapacityGiB = ($fsxList.StorageCapacityGiB | Measure-Object -Sum).sum
 $fsxTotalCapacityTiB = ($fsxList.StorageCapacityTiB | Measure-Object -Sum).sum 
 $fsxTotalCapacityGB = ($fsxList.StorageCapacityGB | Measure-Object -Sum).sum
 $fsxTotalCapacityTB = ($fsxList.StorageCapacityTB | Measure-Object -Sum).sum
+$fsxInBackupPolicyList = $fsxList | Where-Object { $_.InBackupPlan }
+$fsxTotalBackupUsedGiB = ($fsxInBackupPolicyList.StorageUsedGiB | Measure-Object -Sum).sum
+$fsxTotalBackupUsedTiB = ($fsxInBackupPolicyList.StorageUsedTiB | Measure-Object -Sum).sum 
+$fsxTotalBackupUsedGB = ($fsxInBackupPolicyList.StorageUsedGB | Measure-Object -Sum).sum
+$fsxTotalBackupUsedTB = ($fsxInBackupPolicyList.StorageUsedTB | Measure-Object -Sum).sum
+$fsxTotalBackupCapacityGiB = ($fsxInBackupPolicyList.StorageCapacityGiB | Measure-Object -Sum).sum
+$fsxTotalBackupCapacityTiB = ($fsxInBackupPolicyList.StorageCapacityTiB | Measure-Object -Sum).sum 
+$fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
+$fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
 
 # Export to CSV
 Write-Host ""
@@ -884,34 +1102,47 @@ $efsList | Export-CSV -path $outputEFS
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
 $fsxList | Export-CSV -path $outputFSX
 
+# Export to JSON
+Write-Host "JSON file output to: $outputBackupPlansJSON"  -ForegroundColor Green
+$backupPlanList | ConvertTo-Json -Depth 10 > $outputBackupPlansJSON
+
 # Print Summary
 Write-Host
 Write-Host "Total # of EC2 instances: $($ec2list.count)"  -ForegroundColor Green
 Write-Host "Total # of volumes: $(($ec2list.volumes | Measure-Object -Sum).sum)"  -ForegroundColor Green
 Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB or $ec2TotalTiB TiB or $ec2TotalTB TB"  -ForegroundColor Green
+Write-Host "Capacity of backed up volumes: $ec2TotalBackupGiB GiB or $ec2TotalBackupGB GB or $ec2TotalBackupTiB TiB or $ec2TotalBackupTB TB"  -ForegroundColor Green
 Write-Host
 
 Write-Host
 Write-Host "Total # of EC2 unattached volumes: $($ec2UnattachedVolList.count)"  -ForegroundColor Green
 Write-Host "Total capacity of all unattached volumes: $ec2UnVolTotalGiB GiB or $ec2UnVolTotalGB GB or $ec2UnVolTotalTiB TiB or $ec2UnVolTotalTB TB"  -ForegroundColor Green
+Write-Host "Capacity of all backed up unattached volumes: $ec2UnVolTotalBackupGiB GiB or $ec2UnVolTotalBackupGB GB or $ec2UnVolTotalBackupTiB TiB or $ec2UnVolTotalBackupTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
+Write-Host "Provisioned capacity of all backed up RDS instances: $rdsTotalBackupGiB GiB or $rdsTotalBackupGB GB or $rdsTotalBackupTiB TiB or $rdsTotalBackupTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of EFS file systems: $($efsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all EFS file systems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
+Write-Host "Provisioned capacity of all backed up EFS file systems: $efsTotalBackupGiB GiB or $efsTotalBackupGB GB or $efsTotalBackupTiB TiB or $efsTotalBackupTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of FSx volumes: $($fsxList.count)"  -ForegroundColor Green
 Write-Host "Total used storage of all FSx volumes: $fsxTotalUsedGiB GiB or $fsxTotalUsedGB GB or $fsxTotalUsedTiB TiB or $fsxTotalUsedTB TB"  -ForegroundColor Green
 Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB or $fsxTotalCapacityGB GB or $fsxTotalCapacityTiB TiB or $fsxTotalCapacityTB TB"  -ForegroundColor Green
+Write-Host "Used storage of all backed up FSx volumes: $fsxTotalBackupUsedGiB GiB or $fsxTotalBackupUsedGB GB or $fsxTotalBackupUsedTiB TiB or $fsxTotalBackupUsedTB TB"  -ForegroundColor Green
+Write-Host "Storage capacity of all backed up FSx volumes: $fsxTotalBackupCapacityGiB GiB or $fsxTotalBackupCapacityGB GB or $fsxTotalBackupCapacityTiB TiB or $fsxTotalBackupCapacityTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
 Write-Host "Total used capacity of all S3 buckets:"   -ForegroundColor Green
 # Write-Output $s3TotalTBsFormatted
+if($s3TotalTBs.count -eq 0) {
+  Write-Host "No S3 Buckets" -ForegroundColor Green
+}
 
 # Ensure Write-Output is captured by writing the formatted data to Host
 $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
@@ -923,6 +1154,27 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   }
 
 $s3TotalTBsFormatted | ForEach-Object {
+    Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
+}
+
+Write-Host
+Write-Host "# of Backed Up S3 buckets: $($s3InBackupPolicyList.count)"  -ForegroundColor Green
+Write-Host "Used capacity of all backed up S3 buckets:"   -ForegroundColor Green
+# Write-Output $s3BackupTotalTBsFormatted
+if($s3BackupTotalTBs.count -eq 0) {
+  Write-Host "No S3 Buckets backed up" -ForegroundColor Green
+}
+
+# Ensure Write-Output is captured by writing the formatted data to Host
+$s3BackupTotalTBsFormatted  = $s3BackupTotalTBs.GetEnumerator() |
+  ForEach-Object {
+    [PSCustomObject]@{
+      StorageType = $_.Key
+      Size_TB = "{0:n7}" -f $_.Value
+    }
+  }
+
+$s3BackupTotalTBsFormatted | ForEach-Object {
     Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
 }
 

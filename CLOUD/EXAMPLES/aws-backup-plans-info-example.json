@@ -1,0 +1,47 @@
+[
+  {
+    "AdvancedBackupSettings": [],
+    "BackupPlan": {
+      "AdvancedBackupSettings": [],
+      "BackupPlanName": "Test-Plan",
+      "Rules": [
+        {
+          "CompletionWindowMinutes": 10080,
+          "CopyActions": [],
+          "EnableContinuousBackup": false,
+          "Lifecycle": {
+            "DeleteAfterDays": 35,
+            "MoveToColdStorageAfterDays": 0,
+            "OptInToArchiveForSupportedResources": false
+          },
+          "RecoveryPointTags": {},
+          "RuleId": "11aaa11a-1a1a-1aa1-aa11-aa11aa1aaaaa",
+          "RuleName": "DailyBackups",
+          "ScheduleExpression": "cron(14 15 ? * * *)",
+          "ScheduleExpressionTimezone": "America/Los_Angeles",
+          "StartWindowMinutes": 480,
+          "TargetBackupVaultName": "Default"
+        }
+      ]
+    },
+    "BackupPlanArn": "arn:aws:backup:us-west-2:101010101010:backup-plan:a111a111-0111-411b-1111-121831111111",
+    "BackupPlanId": "a111a111-0111-411b-1111-121831111111",
+    "CreationDate": "2024-07-10T22:12:36.391Z",
+    "CreatorRequestId": null,
+    "DeletionDate": "0001-01-01T00:00:00",
+    "LastExecutionDate": "2024-07-12T22:40:07.444Z",
+    "VersionId": "Sample-Version-ID",
+    "ResponseMetadata": {
+      "RequestId": "Sample-Request-ID",
+      "Metadata": {},
+      "ChecksumAlgorithm": 0,
+      "ChecksumValidationStatus": 0
+    },
+    "ContentLength": 895,
+    "HttpStatusCode": 200,
+    "Resources": [
+      "arn:aws:ec2:us-west-2:111111111111:instance/i-0a1a1a101a1a1a1aa",
+      "arn:aws:ec2:us-west-2:111111111111:instance/i-0a1a1a101a1a1a1ac"
+    ]
+  }
+]
