@@ -938,7 +938,7 @@ function getAWSData($cred) {
   $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
   Write-Host "Getting Cost and Usage of Backup in Account: $awsAccountAlias" -ForegroundColor Green
-  Write-Progress -Activity 'Processing Cost and Usage of Backup:' -Status $plan.BackupPlanId -PercentComplete (0)
+  Write-Progress -Activity 'Processing Cost and Usage of Backup:' -PercentComplete (0)
   $result = @{ResultsByTime = @()}
   try{
     $result = Get-CECostAndUsage `
