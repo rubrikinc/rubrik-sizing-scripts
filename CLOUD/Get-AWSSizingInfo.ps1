@@ -1416,7 +1416,9 @@ Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
 } catch{
+  Write-Error "An error occurred and the script has exited prematurely:"
   Write-Error $_
+  Write-Error $_.ScriptStackTrace
 } finally{
   Stop-Transcript
 }
