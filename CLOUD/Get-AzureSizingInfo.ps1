@@ -437,6 +437,7 @@ foreach ($sub in $subs) {
       $vmObj.Add("Status",$vm.StatusCode)
       $vmObj.Add("HasMSSQL","No")
       $vmObj.Add("BackupPolicies", "-")
+      $vmObj.Add("InBackupPolicy", $false)
 
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($vm.Labels.Count -ne 0) {
@@ -987,6 +988,7 @@ foreach ($sub in $subs) {
               if ($vmList.ContainsKey($vmKey)) {
                 if ($vmList[$vmKey].BackupPolicies -eq "-") {
                   $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+                  $vmList[$vmKey].InBackupPolicy = $true
                 }
                 else {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
@@ -1010,6 +1012,7 @@ foreach ($sub in $subs) {
               if ($vmList.ContainsKey($vmKey)) {
                 if ($vmList[$vmKey].BackupPolicies -eq "-") {
                   $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
+                  $vmList[$vmKey].InBackupPolicy = $true
                 }
                 else {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
