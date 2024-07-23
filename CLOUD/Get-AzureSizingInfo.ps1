@@ -573,16 +573,39 @@ foreach ($sub in $subs) {
             $sqlObj.Add("DatabaseID",$sqlDB.DatabaseId)
             $sqlObj.Add("InstanceType",$sqlDB.SkuName)
             $sqlObj.Add("Status",$sqlDB.Status)
-            try{
-              $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName
+
+            $ltrPolicy = @{}
+            try {
+              $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
             } catch {
-              Write-Host "Failed to get Long Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
-              Write-Host "Error: $_" -ForeGroundColor Red
+              if ($sqlDB.DatabaseName -ne "master") {
+                Write-Host "Failed to get Long Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
+                Write-Host "Error: $_" -ForeGroundColor Red
+              } 
+              # else {
+              #   Write-Host "Expected error: LTR for master"
+              # }
             }
+
+            $strPolicy = @{}
+            try {
+              $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+            } catch {
+              if ($sqlDB.DatabaseName -ne "master") {
+                Write-Host "Failed to get Short Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
+                Write-Host "Error: $_" -ForeGroundColor Red
+              } 
+              # else {
+              #   Write-Host "Expected error: STR for master"
+              # }
+            }
+
             $sqlObj.Add("LTRWeeklyRetention",$ltrPolicy.WeeklyRetention)
             $sqlObj.Add("LTRMonthlyRetention",$ltrPolicy.MonthlyRetention)
             $sqlObj.Add("LTRYearlyRetention",$ltrPolicy.YearlyRetention)
             $sqlObj.Add("LTRWeekOfYear",$ltrPolicy.WeekOfYear)
+            $sqlObj.Add("PITR (Days)",$strPolicy.RetentionDays)
+            $sqlObj.Add("DiffBackupFrequency (Hours)",$strPolicy.DiffBackupIntervalInHours)
 
             # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
             if ($sqlDB.Labels.Count -ne 0) {
