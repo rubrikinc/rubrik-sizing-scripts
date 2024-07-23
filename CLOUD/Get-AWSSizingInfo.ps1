@@ -958,7 +958,6 @@ function getAWSData($cred) {
     $monthCostObj = [PSCustomObject] @{
       "AwsAccountId" = $awsAccountInfo.Account
       "AwsAccountAlias" = $awsAccountAlias
-      "AwsAccountArn" = $awsAccountInfo.Arn
       "Time-Period-Start" = $resultItem.TimePeriod.Start
       "Time-Period-End" = $resultItem.TimePeriod.End
     }
