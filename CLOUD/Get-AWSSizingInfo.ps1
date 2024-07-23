@@ -520,7 +520,7 @@ function getAWSData($cred) {
         # Same applies to all other types of objects
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
         if($key -ne "Name"){ 
-          $ec2obj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+          $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
         } 
       }
 
@@ -563,7 +563,7 @@ function getAWSData($cred) {
       foreach ($tag in $ec2UnattachedVolume.Tags) { 
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
         if($key -ne "Name"){ 
-          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
         } 
       }
 
@@ -604,7 +604,7 @@ function getAWSData($cred) {
       foreach ($tag in $rds.TagList) { 
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
         if($key -ne "Name"){ 
-          $rdsObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+          $rdsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
         } 
       }
 
@@ -742,7 +742,7 @@ function getAWSData($cred) {
       foreach ($tag in $fsx.Tags) { 
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
         if($key -ne "Name"){ 
-          $fsxObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
         } 
       }
 

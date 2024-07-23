@@ -442,14 +442,14 @@ foreach ($sub in $subs) {
       if ($vm.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
             if ($vm.Labels[$_]) {
-                $vmObj.Add("$_ (Label)",$vm.Labels[$_])
+                $vmObj.Add("Label/Tag: $_",$vm.Labels[$_])
             }
             else {
-                $vmObj.Add("$_ (Label)","-")
+                $vmObj.Add("Label/Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $vmObj.Add("$_ (Label)","-") }
+          $uniqueAzLabels | Foreach-Object { $vmObj.Add("Label/Tag: $_","-") }
       }
       $vmKey = Generate-VMKey -vmName $vm.Name -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
       $vmList[$vmKey] = $vmObj
@@ -543,14 +543,14 @@ foreach ($sub in $subs) {
                 if ($pool.Labels.Count -ne 0) {
                   $uniqueAzLabels | Foreach-Object {
                       if ($pool.Labels[$_]) {
-                          $sqlObj.Add("$_ (Label)",$pool.Labels[$_])
+                          $sqlObj.Add("Label/Tag: $_)",$pool.Labels[$_])
                       }
                       else {
-                          $sqlObj.Add("$_ (Label)","-")
+                          $sqlObj.Add("Label/Tag: $_","-")
                       }
                   }
                 } else {
-                    $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
+                    $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
                 }
                 $sqlList += New-Object -TypeName PSObject -Property $sqlObj
               }
@@ -587,14 +587,14 @@ foreach ($sub in $subs) {
             if ($sqlDB.Labels.Count -ne 0) {
               $uniqueAzLabels | Foreach-Object {
                   if ($sqlDB.Labels[$_]) {
-                      $sqlObj.Add("$_ (Label)",$sqlDB.Labels[$_])
+                      $sqlObj.Add("Label/Tag: $_",$sqlDB.Labels[$_])
                   }
                   else {
-                      $sqlObj.Add("$_ (Label)","-")
+                      $sqlObj.Add("Label/Tag: $_","-")
                   }
               }
             } else {
-                $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
+                $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
             }
             $sqlList += New-Object -TypeName PSObject -Property $sqlObj
           }  # else not an Elastic Pool but normal SQL DB
@@ -637,14 +637,14 @@ foreach ($sub in $subs) {
       if ($MI.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
             if ($MI.Labels[$_]) {
-                $sqlObj.Add("$_ (Label)",$MI.Labels[$_])
+                $sqlObj.Add("Label/Tag: $_",$MI.Labels[$_])
             }
             else {
-                $sqlObj.Add("$_ (Label)","-")
+                $sqlObj.Add("Label/Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $sqlObj.Add("$_ (Label)","-") }
+          $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
       }
       $sqlList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
@@ -733,14 +733,14 @@ foreach ($sub in $subs) {
       if ($azSA.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
             if ($azSA.Labels[$_]) {
-                $azSAObj.Add("$_ (Label)",$azSA.Labels[$_])
+                $azSAObj.Add("Label/Tag: $_",$azSA.Labels[$_])
             }
             else {
-                $azSAObj.Add("$_ (Label)","-")
+                $azSAObj.Add("Label/Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $azSAObj.Add("$_ (Label)","-") }
+          $uniqueAzLabels | Foreach-Object { $azSAObj.Add("Label/Tag: $_","-") }
       }
       $azSAList += New-Object -TypeName PSObject -Property $azSAObj
       
@@ -822,14 +822,14 @@ foreach ($sub in $subs) {
           if ($azCon.Labels.Count -ne 0) {
             $uniqueAzLabels | Foreach-Object {
                 if ($azCon.Labels[$_]) {
-                    $azConObj.Add("$_ (Label)",$azCon.Labels[$_])
+                    $azConObj.Add("Label/Tag: $_",$azCon.Labels[$_])
                 }
                 else {
-                    $azConObj.Add("$_ (Label)","-")
+                    $azConObj.Add("Label/Tag: $_","-")
                 }
             }
           } else {
-              $uniqueAzLabels | Foreach-Object { $azConObj.Add("$_ (Label)","-") }
+              $uniqueAzLabels | Foreach-Object { $azConObj.Add("Label/Tag: $_","-") }
           }
           $azConList += New-Object -TypeName PSObject -Property $azConObj
         } #foreach ($azCon in $azCons)
@@ -885,14 +885,14 @@ foreach ($sub in $subs) {
           if ($azFSi.Labels.Count -ne 0) {
             $uniqueAzLabels | Foreach-Object {
                 if ($azFSi.Labels[$_]) {
-                    $azFSObj.Add("$_ (Label)",$azFSi.Labels[$_])
+                    $azFSObj.Add("Label/Tag: $_",$azFSi.Labels[$_])
                 }
                 else {
-                    $azFSObj.Add("$_ (Label)","-")
+                    $azFSObj.Add("Label/Tag: $_","-")
                 }
             }
           } else {
-              $uniqueAzLabels | Foreach-Object { $azFSObj.Add("$_ (Label)","-") }
+              $uniqueAzLabels | Foreach-Object { $azFSObj.Add("Label/Tag: $_","-") }
           }
           $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
