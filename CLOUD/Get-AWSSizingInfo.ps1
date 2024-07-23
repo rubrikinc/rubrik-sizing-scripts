@@ -338,14 +338,14 @@ function getAWSData($cred) {
   Write-Host "Current identity:"  -ForegroundColor Green
   Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
   try{
-    $awsAccountInfo = Get-STSCallerIdentity  -Credential $cred -Region $queryRegion
+    $awsAccountInfo = Get-STSCallerIdentity  -Credential $cred -Region $queryRegion -ErrorAction Stop
   } catch {
     Write-Host "Failed to get AWS Account Info for region $queryRegion for profile name $awsProfile" -ForeGroundColor Red
     Write-Host "Error: $_" -ForeGroundColor Red
   }
   $awsAccountInfo | format-table
   try{
-    $awsAccountAlias = Get-IAMAccountAlias -Credential $cred -Region $queryRegion
+    $awsAccountAlias = Get-IAMAccountAlias -Credential $cred -Region $queryRegion -ErrorAction Stop
   } catch {
     Write-Host "Failed to get IAM Account Alias Info for region $queryRegion for profile name $awsProfile in account $($awsAccountInfo.Account)" -ForeGroundColor Red
     Write-Host "Error: $_" -ForeGroundColor Red
@@ -355,7 +355,7 @@ function getAWSData($cred) {
   foreach ($awsRegion in $awsRegions) {
     Write-Host "Getting S3 bucket information for region $awsRegion."  -ForegroundColor Green
     try{
-      $cwBucketInfo = Get-CWmetriclist -namespace AWS/S3 -Region $awsRegion -Credential $cred
+      $cwBucketInfo = Get-CWmetriclist -namespace AWS/S3 -Region $awsRegion -Credential $cred -ErrorAction Stop
     } catch {
       Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -370,9 +370,9 @@ function getAWSData($cred) {
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
       try{
-        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion | Where-Object -Property MetricName -eq 'BucketSizeBytes' `
+        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop | Where-Object -Property MetricName -eq 'BucketSizeBytes' `
                         | Select-Object -ExpandProperty Dimensions | where-object -Property Name -eq StorageType).Value  
-        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion | Where-Object -Property MetricName -eq 'NumberOfObjects' `
+        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop | Where-Object -Property MetricName -eq 'NumberOfObjects' `
                         | Select-Object -ExpandProperty Dimensions | where-object -Property Name -eq StorageType).Value 
       } catch {
         Write-Host "Failed to get S3 Info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
@@ -393,7 +393,7 @@ function getAWSData($cred) {
                           -UtcEndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
                           -Period 86400  `
                           -Credential $cred -Region $awsRegion `
-                          -Dimension $bucketNameDim, $bucketBytesStorageDim `
+                          -Dimension $bucketNameDim, $bucketBytesStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
           Write-Host "Failed to get S3 Info for StorageType $bytesStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
@@ -414,7 +414,7 @@ function getAWSData($cred) {
                           -UtcEndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
                           -Period 86400  `
                           -Credential $cred -Region $awsRegion `
-                          -Dimension $bucketNameDim, $bucketNumObjStorageDim `
+                          -Dimension $bucketNameDim, $bucketNumObjStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
           Write-Host "Failed to get S3 Info for StorageType $numObjStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
@@ -468,7 +468,7 @@ function getAWSData($cred) {
     Write-Host "Getting EC2 instance info for region: $awsRegion"  -ForegroundColor Green
     $ec2Instances = $null
     try{
-      $ec2Instances = (Get-EC2Instance -Credential $cred -region $awsRegion).instances    
+      $ec2Instances = (Get-EC2Instance -Credential $cred -region $awsRegion -ErrorAction Stop).instances    
     } catch {
       Write-Host "Failed to get EC2 Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -487,7 +487,7 @@ function getAWSData($cred) {
       # Iterate through each volume and sum up the volume size
       foreach ($vol in $volumes) {
         try{
-          $volSize += (Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $awsRegion).size   
+          $volSize += (Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $awsRegion -ErrorAction Stop).size   
         } catch {
           Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -531,7 +531,7 @@ function getAWSData($cred) {
     Write-Host "Getting unattached EC2 volume info for region: $awsRegion"  -ForegroundColor Green
     $ec2UnattachedVolumes = $null
     try{
-      $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $cred -region $awsRegion -Filter @{ Name="status"; Values="available" })
+      $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $cred -region $awsRegion -Filter @{ Name="status"; Values="available" } -ErrorAction Stop)
     } catch {
       Write-Host "Failed to get EC2 Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -574,7 +574,7 @@ function getAWSData($cred) {
     Write-Host "Getting RDS info for region: $awsRegion"  -ForegroundColor Green
     $rdsDBs = $null
     try{
-      $rdsDBs = Get-RDSDBInstance -Credential $cred -region $awsRegion
+      $rdsDBs = Get-RDSDBInstance -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
       Write-Host "Failed to get RDS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -615,7 +615,7 @@ function getAWSData($cred) {
     Write-Host "Getting EFS info for region: $awsRegion"  -ForegroundColor Green
     $efsListFromAPI = $null
     try{
-      $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion
+      $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
       Write-Host "Failed to get EFS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -662,7 +662,7 @@ function getAWSData($cred) {
     Write-Host "Getting FSx info for region: $awsRegion"  -ForegroundColor Green
     $fsxListFromAPI = $null
     try{
-      $fsxListFromAPI = Get-FSXVolume -Credential $cred -region $awsRegion
+      $fsxListFromAPI = Get-FSXVolume -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
       Write-Host "Failed to get FSX Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -685,8 +685,9 @@ function getAWSData($cred) {
             Value = $fsx.VolumeId
           }
       )
+      $metrics = $null
       try{
-        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum
+        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -695,8 +696,9 @@ function getAWSData($cred) {
       $maxStorageUsed = $storageUsed.Maximum
 
       $metricName = "StorageCapacity"
+      $metrics = $null
       try{
-        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum
+        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -704,8 +706,9 @@ function getAWSData($cred) {
       $storageCapacity = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
       $maxStorageCapacity = $storageCapacity.Maximum
 
+      $filesystem = $null
       try{
-        $filesystem = Get-FSXFileSystem -Credential $cred -region $awsRegion -FileSystemId $fsx.FileSystemId
+        $filesystem = Get-FSXFileSystem -Credential $cred -region $awsRegion -FileSystemId $fsx.FileSystemId -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File System $($fsx.FileSystemId) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -753,7 +756,7 @@ function getAWSData($cred) {
     Write-Host "Getting Backup Plans for region: $awsRegion" -ForegroundColor Green
     $BackupPlans = $null
     try{
-      $BackupPlans = Get-BAKBackupPlanList -Credential $cred -region $awsRegion
+      $BackupPlans = Get-BAKBackupPlanList -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
       Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
@@ -771,8 +774,9 @@ function getAWSData($cred) {
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $BackupPlanObject | Add-Member -MemberType NoteProperty -Name "Resources" -Value @()
+      $Selections = $null
       try{
-        $Selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId
+        $Selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
       } catch {
         Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -945,7 +949,7 @@ function getAWSData($cred) {
       -TimePeriod $timePeriod `
       -Granularity MONTHLY `
       -Metrics $metrics `
-      -Filter $filter -Credential $cred
+      -Filter $filter -Credential $cred -ErrorAction Stop
   } catch {
     Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
     Write-Host "Error: $_" -ForeGroundColor Red
