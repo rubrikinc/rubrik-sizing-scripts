@@ -966,7 +966,11 @@ function getAWSData($cred) {
       "Time-Period-End" = $resultItem.TimePeriod.End
     }
     foreach ($metric in $metrics) {
-        $cost = "$" + "$([math]::round($resultItem.Total[$metric].Amount, 2))"
+        if ($metric -like "*Cost") {
+          $cost = "$" + "$([math]::round($resultItem.Total[$metric].Amount, 2))"
+        } else {
+          $cost = "$([math]::round($resultItem.Total[$metric].Amount, 3))"
+        }
         $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
     }
     $backupCostsList.Add($monthCostObj) | Out-Null
