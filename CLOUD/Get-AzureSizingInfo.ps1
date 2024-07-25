@@ -938,6 +938,7 @@ foreach ($sub in $subs) {
 
     #Loop over all vaults in the subscription and get Azure Backup Details
     $azVaultNum=1
+    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     foreach ($azVault in $azVaults) {
       Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
       $azVaultNum++
