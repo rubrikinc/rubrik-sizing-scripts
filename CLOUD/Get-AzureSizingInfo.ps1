@@ -23,8 +23,12 @@ To prepare to run this script from the Azure Cloud Shell (preferred) system do t
   3. Login to the Azure Portal using the user that was verified above.
   
   4. Open the Azure Cloud Shell
+
+  5. Install the Azure CostManagement module by running the following command:
+
+      "Install-Module Az.CostManagement"
   
-  5. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
+  6. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
 
 To prepare to run this script from a local system do the following:
 
@@ -32,7 +36,7 @@ To prepare to run this script from a local system do the following:
   
   2. Install the Azure Powershell modules that are required by this script by running the command:
 
-      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices"
+      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement"
   
   3. Verify that the Azure AD account that will be used to run this script has the "Reader" and "Reader and Data Access"
       roles on each subscription to be scanned. 
@@ -227,7 +231,6 @@ Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 $date = Get-Date
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
-# NOTE - Customer must 'Install-Module Az.CostManagement' before running this
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
 function Generate-VMKey {
