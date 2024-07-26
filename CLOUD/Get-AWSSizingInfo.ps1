@@ -280,6 +280,13 @@ if (Test-Path "./output.log") {
 
 Start-Transcript -Path "./output.log"
 
+# Save the current culture so it can be restored later
+$CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
+
+# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+[System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
+
 # Print Powershell Version
 Write-Debug "$($PSVersionTable | Out-String)"
 
@@ -1444,6 +1451,9 @@ foreach ($file in $outputFiles) {
 Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
+
+[System.Threading.Thread]::CurrentThread.CurrentCulture = $CurrentCulture
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = $CurrentCulture
 
 Write-Host
 Write-Host
