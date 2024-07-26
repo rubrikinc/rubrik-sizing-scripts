@@ -1283,7 +1283,7 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
   $fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
 
-  $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | Measure-Object -Sum).sum
+  $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
