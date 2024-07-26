@@ -949,7 +949,7 @@ function getAWSData($cred) {
       -TimePeriod $timePeriod `
       -Granularity MONTHLY `
       -Metrics $metrics `
-      -Filter $filter -Credential $cred -ErrorAction Stop
+      -Filter $filter -Credential $cred -Region $awsRegion -ErrorAction Stop
   } catch {
     Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
     Write-Host "Error: $_" -ForeGroundColor Red
@@ -1283,7 +1283,7 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
   $fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
 
-  $backupTotalNetUnblendedCost = ($backupCostsList.NetUnblendedCost | Measure-Object -Sum).sum
+  $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | Measure-Object -Sum).sum
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
