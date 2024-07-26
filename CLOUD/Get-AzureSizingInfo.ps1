@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
+#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
 <#
 .SYNOPSIS
@@ -73,7 +73,7 @@ may take a long time when large blob stores are located.
 A comma separated list of Azure Management Groups to gather data from.
 
 .PARAMETER SkipAzureBackup
-Do not collect data on Azure Backup Vaults, Policies, or Items.
+Do not collect data on Azure Backup Vaults, Policies, Items, and cost.
 
 .PARAMETER SkipAzureFiles
 Do not collect data on Azure Files.
@@ -227,7 +227,8 @@ Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 $date = Get-Date
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
-Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
+# NOTE - Customer must 'Install-Module Az.CostManagement' before running this
+Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
 function Generate-VMKey {
   param (
@@ -273,6 +274,7 @@ $outputAzVaultVMItems = "azure_backup_vault_VM_items-$($fileDate).csv"
 $outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
 $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
+$outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -295,6 +297,7 @@ $azVaultVMItems = @()
 $azVaultVMSQLItems = @()
 $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
+$backupCostDetails = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -1076,6 +1079,47 @@ foreach ($sub in $subs) {
 
     } # foreach ($azVault in $azVaults)
     Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
+
+    # Limit for this API call is 12 months before current date
+    $costManagementQuery = $null
+    $startDate = (Get-Date).AddMonths(-11)
+    $endDate = (Get-Date)
+    $TimePeriodFrom = [datetime]::Parse($startDate)
+    $TimePeriodTo = [datetime]::Parse($endDate)
+    try{
+      $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup' -Operator ""
+      $filter = New-AzCostManagementQueryFilterObject -Dimensions $dimensions
+    
+      $aggregation = @{                                                                                                                                                             
+        totalCostUSD = @{
+            name = "CostUSD"
+            function = "Sum"
+        }
+        totalPreTaxCostUSD = @{
+            name = "PreTaxCostUSD"
+            function = "Sum"
+      }
+      } # max 2 in a query, possible values: 'UsageQuantity','PreTaxCost','Cost','CostUSD','PreTaxCostUSD'
+      $costManagementQuery = Invoke-AzCostManagementQuery -Type Usage -Scope "subscriptions/$($sub.SubscriptionId)" -DatasetGranularity 'Monthly' -DatasetFilter $filter -Timeframe Custom -TimePeriodFrom $TimePeriodFrom -TimePeriodTo $TimePeriodTo -DatasetAggregation $aggregation | ConvertTo-JSON -Depth 10 | ConvertFrom-Json
+      
+
+      foreach ($row in $costManagementQuery.Row) {
+          $costDetail = [PSCustomObject]@{
+              SubscriptionId = $sub.SubscriptionId
+              Subscription = $sub.Name
+              Tenant = $tenant.Name
+              BillingMonth  = [datetime]$row[2]
+              PreTaxCostUSD =  "$" + "$([math]::round([double]$row[0], 2))"
+              CostUSD =  "$" + "$([math]::round([double]$row[1], 2))"
+          }
+
+          $backupCostDetails += $costDetail
+      }
+    } catch{
+      Write-Host "Failed to get Azure Backup Costs in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
   } # if ($SkipAzureBackup -ne $true)
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -Completed
@@ -1214,6 +1258,7 @@ if ($SkipAzureBackup -ne $true) {
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabaseItems - Azure Backup Vault Azure SQL Database items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesItems - Azure Backup Vault Azure Files items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLItem - Azure Vault VMSQL items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultBackupCostsItems - Azure Backup Costs CSV file."}
 
   Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)" -ForeGroundColor Green
   Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)" -ForeGroundColor Green
@@ -1239,12 +1284,14 @@ if ($SkipAzureBackup -ne $true) {
   $azVaultVMSQLItems | Export-Csv -Path $outputAzVaultVMSQLItem
   $azVaultAzureSQLDatabaseItems | Export-Csv -Path $outputAzVaultAzureSQLDatabaseItems
   $azVaultAzureFilesItems | Export-Csv -Path $outputAzVaultAzureFilesItems
+  $backupCostDetails | Export-Csv -Path $outputAzVaultBackupCostsItems
 
 } # if ($SkipAzureBackup -ne $true)
 
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
+Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
 Write-Host
 
 Write-Host
