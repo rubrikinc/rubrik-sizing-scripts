@@ -1320,6 +1320,9 @@ function addTagsToAllObjectsInList($list) {
 }
 
 if ($Anonymize) {
+  Write-Host
+  Write-Host "Anonymizing..." -ForegroundColor Green
+
   $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
                                   "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
                                   "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId")
@@ -1556,5 +1559,5 @@ Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundC
 Write-Host
 
 if($Anonymize){
-  Write-Host "If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
+  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
 }

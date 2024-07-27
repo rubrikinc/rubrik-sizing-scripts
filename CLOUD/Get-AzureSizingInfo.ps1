@@ -208,8 +208,10 @@ param (
   [Parameter(ParameterSetName='ManagementGroups',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
-  [string]$ManagementGroups
-
+  [string]$ManagementGroups,
+  # Option to anonymize the output files.
+  [Parameter(Mandatory=$false)]
+  [switch]$Anonymize
 )
 
 if (Test-Path "./output.log") {
@@ -1129,6 +1131,90 @@ Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Na
 
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 
+if ($Anonymize) {
+  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", 
+                                  "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
+                                  "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
+                                  "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
+                                  "ManagedInstance", "DatabaseID", "vmID"
+                                  )
+
+  $global:anonymizeDict = @{}
+  $global:anonymizeCounter = 0
+
+  function Get-NextAnonymizedValue {
+      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      $base = $charSet.Length
+      $newValue = ""
+      $global:anonymizeCounter++
+
+      $counter = $global:anonymizeCounter
+      while ($counter -gt 0) {
+          $counter--
+          $newValue = $charSet[$counter % $base] + $newValue
+          $counter = [math]::Floor($counter / $base)
+      }
+
+      return $newValue
+  }
+
+  function Anonymize-Data {
+      param (
+          [PSObject]$DataObject
+      )
+
+      foreach ($property in $DataObject.PSObject.Properties) {
+          $propertyName = $property.Name
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+
+          if ($shouldAnonymize) {
+              $originalValue = $DataObject.$propertyName
+
+              if ($null -ne $originalValue) {
+                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                  }
+                  $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+              }
+          }
+          elseif ($property.Value -is [PSObject]) {
+              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+          }
+          elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
+              $anonymizedCollection = @()
+              foreach ($item in $property.Value) {
+                  if ($item -is [PSObject]) {
+                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedCollection += $anonymizedItem
+                  } else {
+                      $anonymizedCollection += $item
+                  }
+              }
+              $DataObject.$propertyName = $anonymizedCollection
+          }
+      }
+
+      return $DataObject
+  }
+
+  function Anonymize-Collection {
+      param (
+          [System.Collections.IEnumerable]$Collection
+      )
+
+      $anonymizedCollection = @()
+      foreach ($item in $Collection) {
+          if ($item -is [PSObject]) {
+              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedCollection += $anonymizedItem
+          } else {
+              $anonymizedCollection += $item
+          }
+      }
+
+      return $anonymizedCollection
+  }
+}
 if ($SkipAzureVMandManagedDisks -ne $true) {
 
   $VMtotalGiB = ($vmList.values.SizeGiB | Measure-Object -Sum).sum
@@ -1147,8 +1233,11 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.values.count)" -ForeGroundColor Green
   Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.values.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
   Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB or $VMtotalTiB TiB or $VMtotalTB TB" -ForeGroundColor Green
+
+  $vmListToCsv = $vmList.values
+
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
-  $vmList.values | Export-CSV -path $outputVmDisk -NoTypeInformation
+  $vmListToCsv | Export-CSV -path $outputVmDisk -NoTypeInformation
 
 } #if ($SkipAzureVMandManagedDisks -ne $true)
 
@@ -1175,6 +1264,11 @@ if ($SkipAzureSQLandMI -ne $true) {
   Write-Host
   Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB or $sqlTotalTiB TiB or $sqlTotalTB TB" -ForeGroundColor Green
+
+  if ($Anonymize) {
+    $sqlList = Anonymize-Collection -Collection $sqlList
+  }
+  
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL/MI CSV file."}
   $sqlList | Export-CSV -path $outputSQL
 } #if ($SkipAzureSQLandMI -ne $true)
@@ -1205,6 +1299,11 @@ if ($SkipAzureStorageAccounts -ne $true) {
   Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB or $azSATotalFileTiB or $azSATotalFileTB TB" -ForeGroundColor Green
   Write-Host "Total number files is $('{0:N0}' -f $azSATotalFileObjects) in $('{0:N0}' -f $azSATotalFileShares) Azure File Shares." -ForeGroundColor Green
 
+
+  if ($Anonymize) {
+    $azSAList = Anonymize-Collection -Collection $azSAList
+  }
+
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzSA - Azure Storage Account CSV file."}
   $azSAList | Export-CSV -path $outputAzSA
 
@@ -1224,6 +1323,11 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure." -ForeGroundColor Green
     Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB or $azConTotalTiB TiB or $azConTotalTB TB" -ForeGroundColor Green
+
+    if ($Anonymize) {
+      $azConList = Anonymize-Collection -Collection $azConList
+    }
+    
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
     $azConList | Export-CSV -path $outputAzCon
   }
@@ -1240,12 +1344,31 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure File Shares: $('{0:N0}' -f $azFSList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB or $azFSTotalTiB TiB or $azFSTotalTB TB" -ForeGroundColor Green
+
+    if ($Anonymize) {
+      $azFSList = Anonymize-Collection -Collection $azFSList
+    }
+    
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzFS - Azure File Share CSV file."}
     $azFSList | Export-CSV -path $outputAzFS
   }
 } #if ($SkipAzureStorageAccounts -ne $true)
 
 if ($SkipAzureBackup -ne $true) {
+  
+
+  if ($Anonymize) {
+    $azVaultList = Anonymize-Collection -Collection $azVaultList
+    $azVaultVMPoliciesList = Anonymize-Collection -Collection $azVaultVMPoliciesList
+    $azVaultVMSQLPoliciesList = Anonymize-Collection -Collection $azVaultVMSQLPoliciesList
+    $azVaultAzureSQLDatabasePoliciesList = Anonymize-Collection -Collection $azVaultAzureSQLDatabasePoliciesList
+    $azVaultAzureFilesPoliciesList = Anonymize-Collection -Collection $azVaultAzureFilesPoliciesList
+    $azVaultVMItems = Anonymize-Collection -Collection $azVaultVMItems
+    $azVaultVMSQLItems = Anonymize-Collection -Collection $azVaultVMSQLItems
+    $azVaultAzureSQLDatabaseItems = Anonymize-Collection -Collection $azVaultAzureSQLDatabaseItems
+    $azVaultAzureFilesItems = Anonymize-Collection -Collection $azVaultAzureFilesItems
+    $backupCostDetails = Anonymize-Collection -Collection $backupCostDetails
+  }
   
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaults - Azure Backup Vault CSV file."}
   # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPolicies - Azure Backup Vault VM policies CSV file."}
@@ -1335,6 +1458,9 @@ Write-Host "Results have been compressed into $archiveFile and original files ha
 Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+if($Anonymize){
+  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
+}
 Write-Host
 
 # Reset subscription context back to original.
