@@ -1236,6 +1236,10 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
 
   $vmListToCsv = $vmList.values
 
+  if ($Anonymize) {
+    $vmListToCsv = Anonymize-Collection -Collection $vmList
+  }
+
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
   $vmListToCsv | Export-CSV -path $outputVmDisk -NoTypeInformation
 
