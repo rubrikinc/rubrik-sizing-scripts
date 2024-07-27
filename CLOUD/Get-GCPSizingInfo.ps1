@@ -57,7 +57,11 @@ param (
 
   # Pass pass in a file with a list of projects separated by line breaks, no header required
   [Parameter(Mandatory=$false)]
-  [string]$projectFile = ''
+  [string]$projectFile = '',
+
+  # Option to anonymize the output files.
+  [Parameter(Mandatory=$false)]
+  [switch]$Anonymize
 )
 
 if (Test-Path "./output.log") {
@@ -180,6 +184,88 @@ foreach ($i in $vmHash.getEnumerator())
   $vmList += $vmObj
 }
 
+if ($Anonymize) {
+  $global:anonymizeProperties = @("VM", "Project")
+
+  $global:anonymizeDict = @{}
+  $global:anonymizeCounter = 0
+
+  function Get-NextAnonymizedValue {
+      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      $base = $charSet.Length
+      $newValue = ""
+      $global:anonymizeCounter++
+
+      $counter = $global:anonymizeCounter
+      while ($counter -gt 0) {
+          $counter--
+          $newValue = $charSet[$counter % $base] + $newValue
+          $counter = [math]::Floor($counter / $base)
+      }
+
+      return $newValue
+  }
+
+  function Anonymize-Data {
+      param (
+          [PSObject]$DataObject
+      )
+
+      foreach ($property in $DataObject.PSObject.Properties) {
+          $propertyName = $property.Name
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+
+          if ($shouldAnonymize) {
+              $originalValue = $DataObject.$propertyName
+
+              if ($null -ne $originalValue) {
+                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                  }
+                  $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+              }
+          }
+          elseif ($property.Value -is [PSObject]) {
+              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+          }
+          elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
+              $anonymizedCollection = @()
+              foreach ($item in $property.Value) {
+                  if ($item -is [PSObject]) {
+                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedCollection += $anonymizedItem
+                  } else {
+                      $anonymizedCollection += $item
+                  }
+              }
+              $DataObject.$propertyName = $anonymizedCollection
+          }
+      }
+
+      return $DataObject
+  }
+
+  function Anonymize-Collection {
+      param (
+          [System.Collections.IEnumerable]$Collection
+      )
+
+      $anonymizedCollection = @()
+      foreach ($item in $Collection) {
+          if ($item -is [PSObject]) {
+              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedCollection += $anonymizedItem
+          } else {
+              $anonymizedCollection += $item
+          }
+      }
+
+      return $anonymizedCollection
+  }
+
+  $vmList = Anonymize-Collection -Collection $vmList
+}
+
 $totalGiB = ($vmList.sizeGiB | Measure -Sum).sum
 $totalGB = ($vmList.sizeGB | Measure -Sum).sum
 $totalTiB = ($vmList.sizeTiB | Measure -Sum).sum
@@ -229,3 +315,7 @@ Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
+
+if($Anonymize){
+  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
+}
