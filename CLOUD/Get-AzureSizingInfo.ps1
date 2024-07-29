@@ -1001,7 +1001,7 @@ foreach ($sub in $subs) {
         *
 
         $azVaultAzureFilesPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureFiles
-        $azVaultAzureFilesPoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+        $azVaultAzureFilesPoliciesList += $azVaultAzureFilesPolicies | Select-Object -Property `
         @{Name = "Tenant"; Expression = {$tenant.Name}}, `
         @{Name = "Subscription"; Expression = {$sub.Name}}, `
         @{Name = "Region"; Expression = {$azVault.Location}}, `
