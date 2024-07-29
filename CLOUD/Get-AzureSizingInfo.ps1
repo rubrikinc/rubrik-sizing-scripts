@@ -1062,7 +1062,7 @@ foreach ($sub in $subs) {
             }
         }
         foreach ($policy in $azVaultAzureSQLDatabasePolicies) {
-            $AzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            $azVaultAzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
             @{Name = "Tenant"; Expression = {$tenant.Name}}, `
             @{Name = "Subscription"; Expression = {$sub.Name}}, `
             @{Name = "Region"; Expression = {$azVault.Location}}, `
@@ -1070,7 +1070,8 @@ foreach ($sub in $subs) {
             *
         }
         foreach ($policy in $azVaultAzureFilesPolicies) {
-            $AzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          # fix this
+            $azVaultAzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
             @{Name = "Tenant"; Expression = {$tenant.Name}}, `
             @{Name = "Subscription"; Expression = {$sub.Name}}, `
             @{Name = "Region"; Expression = {$azVault.Location}}, `
