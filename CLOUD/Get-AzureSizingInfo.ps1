@@ -1070,7 +1070,6 @@ foreach ($sub in $subs) {
             *
         }
         foreach ($policy in $azVaultAzureFilesPolicies) {
-          # fix this
             $azVaultAzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
             @{Name = "Tenant"; Expression = {$tenant.Name}}, `
             @{Name = "Subscription"; Expression = {$sub.Name}}, `
