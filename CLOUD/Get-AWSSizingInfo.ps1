@@ -1325,7 +1325,9 @@ if ($Anonymize) {
 
   $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
                                   "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
-                                  "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId")
+                                  "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
+                                  "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
+                                  "RequestId")
 
   $global:anonymizeDict = @{}
   $global:anonymizeCounter = 0
