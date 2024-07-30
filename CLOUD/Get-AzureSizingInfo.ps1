@@ -94,6 +94,12 @@ Do not collect data on Azure VMs or Managed Disks.
 .PARAMETER Subscriptions
 A comma separated list of subscriptions to gather data from.
 
+.PARAMETER SubscriptionIds
+A comma separated list of ids of the subscriptions to gather data from.
+
+.PARAMETER Anonymize
+Anonymize data collected.
+
 .NOTES
 Written by Steven Tong for community usage
 GitHub: stevenctong
@@ -201,6 +207,10 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$Subscriptions = '',
+  [Parameter(ParameterSetName='SubscriptionIds',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$SubscriptionIds = '',
   [Parameter(ParameterSetName='AllSubscriptions',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -312,6 +322,20 @@ switch ($PSCmdlet.ParameterSetName) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
+      } catch {
+        Write-Error "Unable to get subscription information for subscription: $($subscription)"
+        $_
+        Continue
+      }
+    }
+  }
+  'SubscriptionIds' {
+    Write-Host "Finding specified subscription(s)..." -ForegroundColor Green
+    $subs = @()
+    foreach ($subscription in $SubscriptionIds.split(',')) {
+      Write-Host "Getting subscription information for: $($subscription)..."
+      try {
+        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
