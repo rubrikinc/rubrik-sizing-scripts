@@ -1529,6 +1529,24 @@ Write-Host
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
 
+if($Anonymize){
+  # Exporting as rows as new value - old value
+  $transformedDict = $global:anonymizeDict.GetEnumerator() | ForEach-Object {
+    [PSCustomObject]@{
+      AnonymizedValue = $_.Value
+      ActualValue   = $_.Key
+    } 
+  } | Sort-Object -Property AnonymizedValue
+
+  $anonKeyValuesFileName = "aws_anonymized_keys_to_actual_values.csv"
+
+  $transformedDict | Export-CSV -Path $anonKeyValuesFileName
+  Write-Host
+  Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
+  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host
+}
+
 } catch{
   Write-Error "An error occurred and the script has exited prematurely:"
   Write-Error $_
