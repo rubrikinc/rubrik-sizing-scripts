@@ -137,6 +137,23 @@
 
   .PARAMETER UserSpecifiedProfileNames
     A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
+  
+  .PARAMETER Anonymize
+    Anonymize data collected.
+
+  .PARAMETER AnonymizeFields
+    A comma separated list of fields in resulting csvs and jsons to anonymize. The list must be encased in
+    quotes, with no spaces between fields.
+
+  .PARAMETER NotAnonymizeFields
+    A comma separated list of fields in resulting csvs and jsons to not anonymize (only required for fields which are by default being 
+    anonymized). The list must be encased in quotes, with no spaces between fields.
+    Note that we currently anonymize the following fields:
+    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
+    "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
+    "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
+    "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
+    "RequestId"
 
   .EXAMPLE  
     >>>
@@ -274,7 +291,15 @@ param (
   [string]$RegionToQuery,
   # Option to anonymize the output files.
   [Parameter(Mandatory=$false)]
-  [switch]$Anonymize
+  [switch]$Anonymize,
+  # Choose to anonymize additional fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$AnonymizeFields,
+  # Choose to not anonymize certain fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$NotAnonymizeFields
 )
 
 if (Test-Path "./output.log") {
@@ -1328,6 +1353,18 @@ if ($Anonymize) {
                                   "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
                                   "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
                                   "RequestId")
+  if($AnonymizeFields){
+    [string[]]$anonFieldsList = $AnonymizeFields.split(',')
+    foreach($field in $anonFieldsList){
+      if (-not $global:anonymizeProperties.Contains($field)) {
+        $global:anonymizeProperties += $field
+      }
+    }
+  }
+  if($NotAnonymizeFields){
+    [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
+    $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+  }
 
   $global:anonymizeDict = @{}
   $global:anonymizeCounter = 0
