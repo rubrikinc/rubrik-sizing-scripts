@@ -61,7 +61,17 @@ param (
 
   # Option to anonymize the output files.
   [Parameter(Mandatory=$false)]
-  [switch]$Anonymize
+  [switch]$Anonymize,
+
+  # Choose to anonymize additional fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$AnonymizeFields,
+
+  # Choose to not anonymize certain fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$NotAnonymizeFields
 )
 
 if (Test-Path "./output.log") {
@@ -186,6 +196,19 @@ foreach ($i in $vmHash.getEnumerator())
 
 if ($Anonymize) {
   $global:anonymizeProperties = @("VM", "Project")
+
+  if($AnonymizeFields){
+    [string[]]$anonFieldsList = $AnonymizeFields.split(',')
+    foreach($field in $anonFieldsList){
+      if (-not $global:anonymizeProperties.Contains($field)) {
+        $global:anonymizeProperties += $field
+      }
+    }
+  }
+  if($NotAnonymizeFields){
+    [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
+    $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+  }
 
   $global:anonymizeDict = @{}
   $global:anonymizeCounter = 0
