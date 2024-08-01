@@ -26,6 +26,31 @@ param (
     [string]$directoryPath = "./"
 )
 
+function addNullValuesForFields($list) {
+    # Determine all unique fields
+    $allFields = @{}
+    foreach ($obj in $list) {
+        $properties = $obj.PSObject.Properties
+        foreach ($property in $properties) {
+            if (-not $allFields.ContainsKey($property.Name)) {
+                $allFields[$property.Name] = $true
+            }
+        }
+    }
+
+    $allFields = $allFields.Keys
+
+    # Ensure each object has all possible fields
+    foreach ($obj in $list) {
+        foreach ($field in $allFields) {
+            if (-not $obj.PSObject.Properties.Name.Contains($field)) {
+                $obj | Add-Member -MemberType NoteProperty -Name $field -Value $null -Force
+            }
+        }
+    }
+}
+  
+
 # Get all the CSV files in the directory
 $csvFiles = Get-ChildItem -Path $directoryPath -Filter "*.csv" -File -Recurse
 
@@ -42,15 +67,17 @@ foreach ($prefix in $prefixes) {
         # Skip the current file if it's empty
         if ((Get-Content $csvFile.FullName) -eq $null) { continue }
 
-        # Import the data, excluding the column headers if there is already data in $combinedData
-        # Filter out empty lines
-        $importedData = Import-Csv -Path $csvFile.FullName | Where-Object { $_.PSObject.Properties.Value -ne $null }
+        # Import the data
+        $importedData = Import-Csv -Path $csvFile.FullName
 
         $combinedData += $importedData
     }
 
     # If no data to write, skip to the next prefix
     if ($combinedData.Count -eq 0) { continue }
+
+    # Make sure every field is reported
+    addNullValuesForFields($combinedData)
 
     # Write the combined data to a new CSV file in the directory the script is run from
     $combinedData | Export-Csv -Path "${prefix}_combined.csv" -NoTypeInformation
