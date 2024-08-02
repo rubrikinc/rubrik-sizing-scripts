@@ -1559,7 +1559,7 @@ $s3BackupTotalTBsFormatted | ForEach-Object {
 }
 
 Write-Host
-Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $backupTotalNetUnblendedCost"  -ForegroundColor Green
+Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $ $backupTotalNetUnblendedCost"  -ForegroundColor Green
 Write-Host "See CSV for further breakdown of cost for Backup"  -ForegroundColor Green
 
 Write-Host
