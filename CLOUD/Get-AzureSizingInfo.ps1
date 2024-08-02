@@ -295,6 +295,8 @@ try{
 $fileDate = $date.ToString("yyyy-MM-dd_HHmm")
 $outputVmDisk = "azure_vmdisk_info-$($fileDate).csv"
 $outputSQL = "azure_sql_info-$($fileDate).csv"
+$outputMI = "azure_mi_sql_info-$($fileDate).csv"
+$outputMiDbLtrStrJSON = "azure_mi_db_items-$($fileDate).json"
 $outputAzSA = "azure_storage_account_info-$($fileDate).csv"
 $outputAzCon = "azure_container_info-$($fileDate).csv"
 $outputAzFS = "azure_file_share_info-$($fileDate).csv"
@@ -322,6 +324,8 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 $azLabels = @()
 $vmList = @{}
 $sqlList = @()
+$miList = @()
+$miPolicies = @{}
 $azSAList = @()
 $azConList = @()
 $azFSList = @()
@@ -637,7 +641,11 @@ foreach ($sub in $subs) {
 
             $ltrPolicy = @{}
             try {
-              $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              if ($sqlDB.DatabaseName -ne "master"){
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              } else{
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
                 Write-Host "Failed to get Long Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
@@ -650,7 +658,11 @@ foreach ($sub in $subs) {
 
             $strPolicy = @{}
             try {
-              $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              if ($sqlDB.DatabaseName -ne "master"){
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              } else{
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
                 Write-Host "Failed to get Short Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
@@ -699,8 +711,44 @@ foreach ($sub in $subs) {
 
     # Loop through each SQL Managed Instances to get size info
     $managedInstanceNum=1
+
+    # Setting up nested JSON accordingly if needed for this tenant/sub
+    # JSON output is tenant -> sub -> MI -> Databases in MI
+    if(-not $miPolicies.ContainsKey($tenant.Name)){
+      $miPolicies[$($tenant.Name)] = @{}
+    }
+    if(-not $miPolicies[$tenant.Name].ContainsKey($sub.Name)){
+      $miPolicies[$($tenant.Name)][$($sub.Name)] = @{}
+    }
+    
     foreach ($MI in $sqlManagedInstances) {
       Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
+
+      $databasesCounter = 0
+      $databases = @()
+      try{
+        $databases = Get-AzSqlInstanceDatabase -InstanceName $($MI.ManagedInstanceName) -ResourceGroupName $($MI.ResourceGroupName) -ErrorAction Stop| ConvertTo-JSON -Depth 10 | ConvertFrom-JSON
+      } catch{
+        Write-Host "Issue getting SqlInstance Databases from $($MI.ManagedInstanceName) in $($MI.ResourceGroupName) in subscription $($sub.Name) under tenant $($tenant.Name)"
+      }
+      foreach($database in $databases){
+        $databasesCounter++
+        try{
+        $str = Get-AzSqlInstanceDatabaseBackupShortTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        if($str){
+          $database | Add-Member -MemberType NoteProperty -Name "STR" -Value $($str | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)
+        }
+        $ltr = Get-AzSqlInstanceDatabaseBackupLongTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        if($ltr){
+          $database | Add-Member -MemberType NoteProperty -Name "LTR" -Value $($ltr | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)        
+        }
+        } catch{
+          Write-Host "failed to get LTR/STR for  $($database.Name) in $($MI.ManagedInstanceName) in subscription $($sub.Name) under tenant $($tenant.Name)"
+          Write-Host $_
+        }
+      }
+      $miPolicies[$($tenant.Name)][$($sub.Name)][$($MI.ManagedInstanceName)] = $databases
+
       $managedInstanceNum++
       $sqlObj = [ordered] @{}
       $sqlObj.Add("Database","")
@@ -718,6 +766,7 @@ foreach ($sub in $subs) {
       $sqlObj.Add("DatabaseID","")
       $sqlObj.Add("InstanceType",$MI.Sku.Name)
       $sqlObj.Add("Status",$MI.Status)
+      $sqlObj.Add("Databases", $databasesCounter)
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($MI.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
@@ -731,7 +780,7 @@ foreach ($sub in $subs) {
       } else {
           $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
       }
-      $sqlList += New-Object -TypeName PSObject -Property $sqlObj
+      $miList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
@@ -1281,10 +1330,6 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   $VMtotalGB = ($vmList.values.SizeGB | Measure-Object -Sum).sum
   $VMtotalTB = ($vmList.values.SizeTB | Measure-Object -Sum).sum 
 
-  $sqlTotalGiB = ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
-  $sqlTotalTiB = ($sqlList.MaxSizeTiB | Measure-Object -Sum).sum
-  $sqlTotalGB = ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
-  $sqlTotalTB = ($sqlList.MaxSizeTB | Measure-Object -Sum).sum
 
   Write-Host
   Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
@@ -1313,27 +1358,41 @@ if ($SkipAzureSQLandMI -ne $true) {
   $elasticTotalTiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTiB | Measure-Object -Sum).sum
   $elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
   $elasticTotalTB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTB | Measure-Object -Sum).sum
-  $MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
-  $MITotalTiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTiB | Measure-Object -Sum).sum 
-  $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
-  $MITotalTB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTB | Measure-Object -Sum).sum
+
+  $MITotalGiB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $MITotalTiB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTiB | Measure-Object -Sum).sum 
+  $MITotalGB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $MITotalTB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTB | Measure-Object -Sum).sum
+
+  $sqlTotalGiB = $MITotalGiB + ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
+  $sqlTotalTiB = $MITotalTiB + ($sqlList.MaxSizeTiB | Measure-Object -Sum).sum
+  $sqlTotalGB = $MITotalGB + ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
+  $sqlTotalTB = $MITotalTB + ($sqlList.MaxSizeTB | Measure-Object -Sum).sum
+
   Write-Host
   Write-Host "Total # of SQL DBs (independent): $('{0:N0}' -f ($sqlList | Where-Object -Property 'Database' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total # of SQL Elastic Pools: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ElasticPool' -ne '').Count)" -ForeGroundColor Green
-  Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($miList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL DBs (independent): $('{0:N0}' -f $DBtotalGiB) GiB or $('{0:N0}' -f $DBtotalGB) GB or $DBtotalTiB TiB or $DBtotalTB TB" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL Elastic Pools: $('{0:N0}' -f $elasticTotalGiB) GiB or $('{0:N0}' -f $elasticTotalGB) GB or $elasticTotalTiB TiB or $elasticTotalTB TB" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL Managed Instances: $('{0:N0}' -f $MITotalGiB) GiB or $('{0:N0}' -f $MITotalGB) GB or $MITotalTiB TiB or $MITotalTB TB" -ForeGroundColor Green
   Write-Host
-  Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f ($sqlList.count + $miList.count))" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB or $sqlTotalTiB TiB or $sqlTotalTB TB" -ForeGroundColor Green
 
   if ($Anonymize) {
     $sqlList = Anonymize-Collection -Collection $sqlList
+    $miList = Anonymize-Collection -Collection $miList
+    $miPolicies = Anonymize-Collection -Collection $miPolicies
   }
   
-  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL/MI CSV file."}
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL CSV file."}
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputMI - Azure MI SQL CSV file."}
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputMiDbLtrStrJSON - Azure MI SQL DBs and their LTRs and STR JSON file."}
+
   $sqlList | Export-CSV -path $outputSQL
+  $miList | Export-CSV -path $outputMI
+  $miPolicies | ConvertTo-Json -Depth 10 > $outputMiDbLtrStrJSON
 } #if ($SkipAzureSQLandMI -ne $true)
 
 if ($SkipAzureStorageAccounts -ne $true) {
