@@ -536,9 +536,15 @@ foreach ($sub in $subs) {
     foreach ($sqlVm in $sqlVms) {
       Write-Progress -Id 3 -Activity "Getting SQL VM information for: $($sqlVm.Name)" -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
       $sqlVmNum++
-      if ($vmToUpdate = $vmList.values | Where-Object { $_.Name -eq $sqlVm.Name }) {
-        $vmToUpdate.HasMSSQL = "Yes"
-      } 
+      $vmKey = Generate-VMKey -vmName $sqlVm.Name -subName $sub.Name -tenantName $tenant.Name -region $sqlVm.Location
+      if($vmList.containsKey($vmKey)){
+        $vmList[$vmKey].HasMSSQL = "Yes"
+      } else{
+        Write-Host "Not reporting sizing for SQL VM: $vmKey"
+      }
+      # if ($vmToUpdate = $vmList.values | Where-Object { $_.Name -eq $sqlVm.Name }) {
+      #   $vmToUpdate.HasMSSQL = "Yes"
+      # } 
     }
     Write-Progress -Id 3 -Activity "Getting VM information for: $($vm.Name)" -Completed
   } #if ($SkipAzureVMandManagedDisks -ne $true) 
