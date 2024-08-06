@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
+#requires -Modules Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
 <#
 .SYNOPSIS
@@ -23,8 +23,12 @@ To prepare to run this script from the Azure Cloud Shell (preferred) system do t
   3. Login to the Azure Portal using the user that was verified above.
   
   4. Open the Azure Cloud Shell
+
+  5. Install the Azure CostManagement module by running the following command:
+
+      "Install-Module Az.CostManagement"
   
-  5. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
+  6. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
 
 To prepare to run this script from a local system do the following:
 
@@ -32,7 +36,7 @@ To prepare to run this script from a local system do the following:
   
   2. Install the Azure Powershell modules that are required by this script by running the command:
 
-      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices"
+      "Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement"
   
   3. Verify that the Azure AD account that will be used to run this script has the "Reader" and "Reader and Data Access"
       roles on each subscription to be scanned. 
@@ -73,7 +77,7 @@ may take a long time when large blob stores are located.
 A comma separated list of Azure Management Groups to gather data from.
 
 .PARAMETER SkipAzureBackup
-Do not collect data on Azure Backup Vaults, Policies, or Items.
+Do not collect data on Azure Backup Vaults, Policies, Items, and cost.
 
 .PARAMETER SkipAzureFiles
 Do not collect data on Azure Files.
@@ -89,6 +93,26 @@ Do not collect data on Azure VMs or Managed Disks.
 
 .PARAMETER Subscriptions
 A comma separated list of subscriptions to gather data from.
+
+.PARAMETER SubscriptionIds
+A comma separated list of ids of the subscriptions to gather data from.
+
+.PARAMETER Anonymize
+Anonymize data collected.
+
+.PARAMETER AnonymizeFields
+  A comma separated list of fields in resulting csvs and jsons to anonymize. The list must be encased in
+  quotes, with no spaces between fields.
+
+.PARAMETER NotAnonymizeFields
+  A comma separated list of fields in resulting csvs and jsons to not anonymize (only required for fields which are by default being 
+  anonymized). The list must be encased in quotes, with no spaces between fields.
+  Note that we currently anonymize the following fields:
+  "SubscriptionId", "Subscription", "Tenant", "Name", 
+  "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
+  "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
+  "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
+  "ManagedInstance", "DatabaseID", "vmID"
 
 .NOTES
 Written by Steven Tong for community usage
@@ -197,6 +221,10 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$Subscriptions = '',
+  [Parameter(ParameterSetName='SubscriptionIds',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$SubscriptionIds = '',
   [Parameter(ParameterSetName='AllSubscriptions',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -204,8 +232,18 @@ param (
   [Parameter(ParameterSetName='ManagementGroups',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
-  [string]$ManagementGroups
-
+  [string]$ManagementGroups,
+  # Option to anonymize the output files.
+  [Parameter(Mandatory=$false)]
+  [switch]$Anonymize,
+  # Choose to anonymize additional fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$AnonymizeFields,
+  # Choose to not anonymize certain fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$NotAnonymizeFields
 )
 
 if (Test-Path "./output.log") {
@@ -214,13 +252,20 @@ if (Test-Path "./output.log") {
 
 Start-Transcript -Path "./output.log"
 
+# Save the current culture so it can be restored later
+$CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
+
+# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+[System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
+
 $azConfig = Get-AzConfig -DisplayBreakingChangeWarning 
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 
 $date = Get-Date
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
-Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices
+Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
 function Generate-VMKey {
   param (
@@ -250,6 +295,8 @@ try{
 $fileDate = $date.ToString("yyyy-MM-dd_HHmm")
 $outputVmDisk = "azure_vmdisk_info-$($fileDate).csv"
 $outputSQL = "azure_sql_info-$($fileDate).csv"
+$outputMI = "azure_mi_sql_info-$($fileDate).csv"
+$outputMiDbLtrStrJSON = "azure_mi_db_items-$($fileDate).json"
 $outputAzSA = "azure_storage_account_info-$($fileDate).csv"
 $outputAzCon = "azure_container_info-$($fileDate).csv"
 $outputAzFS = "azure_file_share_info-$($fileDate).csv"
@@ -266,6 +313,7 @@ $outputAzVaultVMItems = "azure_backup_vault_VM_items-$($fileDate).csv"
 $outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
 $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
+$outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -276,6 +324,8 @@ $context | Select-Object -Property Account,Environment,Tenant |  format-table
 $azLabels = @()
 $vmList = @{}
 $sqlList = @()
+$miList = @()
+$miPolicies = @{}
 $azSAList = @()
 $azConList = @()
 $azFSList = @()
@@ -288,6 +338,7 @@ $azVaultVMItems = @()
 $azVaultVMSQLItems = @()
 $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
+$backupCostDetails = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -297,6 +348,20 @@ switch ($PSCmdlet.ParameterSetName) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
+      } catch {
+        Write-Error "Unable to get subscription information for subscription: $($subscription)"
+        $_
+        Continue
+      }
+    }
+  }
+  'SubscriptionIds' {
+    Write-Host "Finding specified subscription(s)..." -ForegroundColor Green
+    $subs = @()
+    foreach ($subscription in $SubscriptionIds.split(',')) {
+      Write-Host "Getting subscription information for: $($subscription)..."
+      try {
+        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
@@ -576,7 +641,11 @@ foreach ($sub in $subs) {
 
             $ltrPolicy = @{}
             try {
-              $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              if ($sqlDB.DatabaseName -ne "master"){
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              } else{
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
                 Write-Host "Failed to get Long Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
@@ -589,7 +658,11 @@ foreach ($sub in $subs) {
 
             $strPolicy = @{}
             try {
-              $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              if ($sqlDB.DatabaseName -ne "master"){
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              } else{
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
                 Write-Host "Failed to get Short Term Retention Policy for DB $($sqlDB.DatabaseName), Server $($sqlDB.ServerName) in sub $($sub.Name) in tenant $($tenant.Name) in $($sqlDB.Location)" -ForeGroundColor Red
@@ -638,8 +711,44 @@ foreach ($sub in $subs) {
 
     # Loop through each SQL Managed Instances to get size info
     $managedInstanceNum=1
+
+    # Setting up nested JSON accordingly if needed for this tenant/sub
+    # JSON output is tenant -> sub -> MI -> Databases in MI
+    if(-not $miPolicies.ContainsKey($tenant.Name)){
+      $miPolicies[$($tenant.Name)] = @{}
+    }
+    if(-not $miPolicies[$tenant.Name].ContainsKey($sub.Name)){
+      $miPolicies[$($tenant.Name)][$($sub.Name)] = @{}
+    }
+    
     foreach ($MI in $sqlManagedInstances) {
       Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
+
+      $databasesCounter = 0
+      $databases = @()
+      try{
+        $databases = Get-AzSqlInstanceDatabase -InstanceName $($MI.ManagedInstanceName) -ResourceGroupName $($MI.ResourceGroupName) -ErrorAction Stop| ConvertTo-JSON -Depth 10 | ConvertFrom-JSON
+      } catch{
+        Write-Host "Issue getting SqlInstance Databases from $($MI.ManagedInstanceName) in $($MI.ResourceGroupName) in subscription $($sub.Name) under tenant $($tenant.Name)"
+      }
+      foreach($database in $databases){
+        $databasesCounter++
+        try{
+        $str = Get-AzSqlInstanceDatabaseBackupShortTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        if($str){
+          $database | Add-Member -MemberType NoteProperty -Name "STR" -Value $($str | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)
+        }
+        $ltr = Get-AzSqlInstanceDatabaseBackupLongTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        if($ltr){
+          $database | Add-Member -MemberType NoteProperty -Name "LTR" -Value $($ltr | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)        
+        }
+        } catch{
+          Write-Host "failed to get LTR/STR for  $($database.Name) in $($MI.ManagedInstanceName) in subscription $($sub.Name) under tenant $($tenant.Name)"
+          Write-Host $_
+        }
+      }
+      $miPolicies[$($tenant.Name)][$($sub.Name)][$($MI.ManagedInstanceName)] = $databases
+
       $managedInstanceNum++
       $sqlObj = [ordered] @{}
       $sqlObj.Add("Database","")
@@ -657,6 +766,7 @@ foreach ($sub in $subs) {
       $sqlObj.Add("DatabaseID","")
       $sqlObj.Add("InstanceType",$MI.Sku.Name)
       $sqlObj.Add("Status",$MI.Status)
+      $sqlObj.Add("Databases", $databasesCounter)
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($MI.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
@@ -670,7 +780,7 @@ foreach ($sub in $subs) {
       } else {
           $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
       }
-      $sqlList += New-Object -TypeName PSObject -Property $sqlObj
+      $miList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
@@ -986,7 +1096,7 @@ foreach ($sub in $subs) {
         *
 
         $azVaultAzureFilesPolicies += Get-AzRecoveryServicesBackupProtectionPolicy -WorkloadType AzureFiles
-        $azVaultAzureFilesPoliciesList += $azVaultAzureSQLDatabasePolicies | Select-Object -Property `
+        $azVaultAzureFilesPoliciesList += $azVaultAzureFilesPolicies | Select-Object -Property `
         @{Name = "Tenant"; Expression = {$tenant.Name}}, `
         @{Name = "Subscription"; Expression = {$sub.Name}}, `
         @{Name = "Region"; Expression = {$azVault.Location}}, `
@@ -1047,7 +1157,7 @@ foreach ($sub in $subs) {
             }
         }
         foreach ($policy in $azVaultAzureSQLDatabasePolicies) {
-            $AzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            $azVaultAzureSQLDatabaseItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
             @{Name = "Tenant"; Expression = {$tenant.Name}}, `
             @{Name = "Subscription"; Expression = {$sub.Name}}, `
             @{Name = "Region"; Expression = {$azVault.Location}}, `
@@ -1055,7 +1165,7 @@ foreach ($sub in $subs) {
             *
         }
         foreach ($policy in $azVaultAzureFilesPolicies) {
-            $AzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+            $azVaultAzureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
             @{Name = "Tenant"; Expression = {$tenant.Name}}, `
             @{Name = "Subscription"; Expression = {$sub.Name}}, `
             @{Name = "Region"; Expression = {$azVault.Location}}, `
@@ -1069,12 +1179,150 @@ foreach ($sub in $subs) {
 
     } # foreach ($azVault in $azVaults)
     Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
+
+    # Limit for this API call is 12 months before current date
+    $costManagementQuery = $null
+    $startDate = (Get-Date).AddMonths(-11)
+    $endDate = (Get-Date)
+    $TimePeriodFrom = [datetime]::Parse($startDate)
+    $TimePeriodTo = [datetime]::Parse($endDate)
+    try{
+      $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup' -Operator ""
+      $filter = New-AzCostManagementQueryFilterObject -Dimensions $dimensions
+    
+      $aggregation = @{                                                                                                                                                             
+        totalCostUSD = @{
+            name = "CostUSD"
+            function = "Sum"
+        }
+        totalPreTaxCostUSD = @{
+            name = "PreTaxCostUSD"
+            function = "Sum"
+      }
+      } # max 2 in a query, possible values: 'UsageQuantity','PreTaxCost','Cost','CostUSD','PreTaxCostUSD'
+      $costManagementQuery = Invoke-AzCostManagementQuery -Type Usage -Scope "subscriptions/$($sub.SubscriptionId)" -DatasetGranularity 'Monthly' -DatasetFilter $filter -Timeframe Custom -TimePeriodFrom $TimePeriodFrom -TimePeriodTo $TimePeriodTo -DatasetAggregation $aggregation | ConvertTo-JSON -Depth 10 | ConvertFrom-Json
+      
+
+      foreach ($row in $costManagementQuery.Row) {
+          $costDetail = [PSCustomObject]@{
+              SubscriptionId = $sub.SubscriptionId
+              Subscription = $sub.Name
+              Tenant = $tenant.Name
+              BillingMonth  = [datetime]$row[2]
+              PreTaxCostUSD =  "$" + "$([math]::round([double]$row[0], 2))"
+              CostUSD =  "$" + "$([math]::round([double]$row[1], 2))"
+          }
+
+          $backupCostDetails += $costDetail
+      }
+    } catch{
+      Write-Host "Failed to get Azure Backup Costs in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
   } # if ($SkipAzureBackup -ne $true)
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -Completed
 
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 
+if ($Anonymize) {
+  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", 
+                                  "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
+                                  "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
+                                  "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
+                                  "ManagedInstance", "DatabaseID", "vmID"
+                                  )
+
+  if($AnonymizeFields){
+    [string[]]$anonFieldsList = $AnonymizeFields.split(',')
+    foreach($field in $anonFieldsList){
+      if (-not $global:anonymizeProperties.Contains($field)) {
+        $global:anonymizeProperties += $field
+      }
+    }
+  }
+  if($NotAnonymizeFields){
+    [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
+    $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+  }
+
+  $global:anonymizeDict = @{}
+  $global:anonymizeCounter = 0
+
+  function Get-NextAnonymizedValue {
+      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      $base = $charSet.Length
+      $newValue = ""
+      $global:anonymizeCounter++
+
+      $counter = $global:anonymizeCounter
+      while ($counter -gt 0) {
+          $counter--
+          $newValue = $charSet[$counter % $base] + $newValue
+          $counter = [math]::Floor($counter / $base)
+      }
+
+      return $newValue
+  }
+
+  function Anonymize-Data {
+      param (
+          [PSObject]$DataObject
+      )
+
+      foreach ($property in $DataObject.PSObject.Properties) {
+          $propertyName = $property.Name
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+
+          if ($shouldAnonymize) {
+              $originalValue = $DataObject.$propertyName
+
+              if ($null -ne $originalValue) {
+                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                  }
+                  $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+              }
+          }
+          elseif ($property.Value -is [PSObject]) {
+              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+          }
+          elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
+              $anonymizedCollection = @()
+              foreach ($item in $property.Value) {
+                  if ($item -is [PSObject]) {
+                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedCollection += $anonymizedItem
+                  } else {
+                      $anonymizedCollection += $item
+                  }
+              }
+              $DataObject.$propertyName = $anonymizedCollection
+          }
+      }
+
+      return $DataObject
+  }
+
+  function Anonymize-Collection {
+      param (
+          [System.Collections.IEnumerable]$Collection
+      )
+
+      $anonymizedCollection = @()
+      foreach ($item in $Collection) {
+          if ($item -is [PSObject]) {
+              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedCollection += $anonymizedItem
+          } else {
+              $anonymizedCollection += $item
+          }
+      }
+
+      return $anonymizedCollection
+  }
+}
 if ($SkipAzureVMandManagedDisks -ne $true) {
 
   $VMtotalGiB = ($vmList.values.SizeGiB | Measure-Object -Sum).sum
@@ -1082,10 +1330,6 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   $VMtotalGB = ($vmList.values.SizeGB | Measure-Object -Sum).sum
   $VMtotalTB = ($vmList.values.SizeTB | Measure-Object -Sum).sum 
 
-  $sqlTotalGiB = ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
-  $sqlTotalTiB = ($sqlList.MaxSizeTiB | Measure-Object -Sum).sum
-  $sqlTotalGB = ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
-  $sqlTotalTB = ($sqlList.MaxSizeTB | Measure-Object -Sum).sum
 
   Write-Host
   Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
@@ -1093,8 +1337,15 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.values.count)" -ForeGroundColor Green
   Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.values.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
   Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB or $VMtotalTiB TiB or $VMtotalTB TB" -ForeGroundColor Green
+
+  $vmListToCsv = $vmList.values
+
+  if ($Anonymize) {
+    $vmListToCsv = Anonymize-Collection -Collection $vmList
+  }
+
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
-  $vmList.values | Export-CSV -path $outputVmDisk -NoTypeInformation
+  $vmListToCsv | Export-CSV -path $outputVmDisk -NoTypeInformation
 
 } #if ($SkipAzureVMandManagedDisks -ne $true)
 
@@ -1107,22 +1358,41 @@ if ($SkipAzureSQLandMI -ne $true) {
   $elasticTotalTiB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTiB | Measure-Object -Sum).sum
   $elasticTotalGB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeGB | Measure-Object -Sum).sum
   $elasticTotalTB = (($sqlList | Where-Object -Property 'ElasticPool' -ne '').MaxSizeTB | Measure-Object -Sum).sum
-  $MITotalGiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
-  $MITotalTiB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTiB | Measure-Object -Sum).sum 
-  $MITotalGB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
-  $MITotalTB = (($sqlList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTB | Measure-Object -Sum).sum
+
+  $MITotalGiB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
+  $MITotalTiB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTiB | Measure-Object -Sum).sum 
+  $MITotalGB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeGB | Measure-Object -Sum).sum
+  $MITotalTB = (($miList | Where-Object -Property 'ManagedInstance' -ne '').MaxSizeTB | Measure-Object -Sum).sum
+
+  $sqlTotalGiB = $MITotalGiB + ($sqlList.MaxSizeGiB | Measure-Object -Sum).sum
+  $sqlTotalTiB = $MITotalTiB + ($sqlList.MaxSizeTiB | Measure-Object -Sum).sum
+  $sqlTotalGB = $MITotalGB + ($sqlList.MaxSizeGB | Measure-Object -Sum).sum
+  $sqlTotalTB = $MITotalTB + ($sqlList.MaxSizeTB | Measure-Object -Sum).sum
+
   Write-Host
   Write-Host "Total # of SQL DBs (independent): $('{0:N0}' -f ($sqlList | Where-Object -Property 'Database' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total # of SQL Elastic Pools: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ElasticPool' -ne '').Count)" -ForeGroundColor Green
-  Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($sqlList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL Managed Instances: $('{0:N0}' -f ($miList | Where-Object -Property 'ManagedInstance' -ne '').Count)" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL DBs (independent): $('{0:N0}' -f $DBtotalGiB) GiB or $('{0:N0}' -f $DBtotalGB) GB or $DBtotalTiB TiB or $DBtotalTB TB" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL Elastic Pools: $('{0:N0}' -f $elasticTotalGiB) GiB or $('{0:N0}' -f $elasticTotalGB) GB or $elasticTotalTiB TiB or $elasticTotalTB TB" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL Managed Instances: $('{0:N0}' -f $MITotalGiB) GiB or $('{0:N0}' -f $MITotalGB) GB or $MITotalTiB TiB or $MITotalTB TB" -ForeGroundColor Green
   Write-Host
-  Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f $sqlList.count)" -ForeGroundColor Green
+  Write-Host "Total # of SQL DBs, Elastic Pools & Managed Instances: $('{0:N0}' -f ($sqlList.count + $miList.count))" -ForeGroundColor Green
   Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB or $sqlTotalTiB TiB or $sqlTotalTB TB" -ForeGroundColor Green
-  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL/MI CSV file."}
+
+  if ($Anonymize) {
+    $sqlList = Anonymize-Collection -Collection $sqlList
+    $miList = Anonymize-Collection -Collection $miList
+    $miPolicies = Anonymize-Collection -Collection $miPolicies
+  }
+  
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL CSV file."}
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputMI - Azure MI SQL CSV file."}
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputMiDbLtrStrJSON - Azure MI SQL DBs and their LTRs and STR JSON file."}
+
   $sqlList | Export-CSV -path $outputSQL
+  $miList | Export-CSV -path $outputMI
+  $miPolicies | ConvertTo-Json -Depth 10 > $outputMiDbLtrStrJSON
 } #if ($SkipAzureSQLandMI -ne $true)
 
 if ($SkipAzureStorageAccounts -ne $true) {
@@ -1151,6 +1421,11 @@ if ($SkipAzureStorageAccounts -ne $true) {
   Write-Host "Total capacity of all Azure File storage in Azure Storage Accounts: $('{0:N0}' -f $azSATotalFileGiB) GiB or $('{0:N0}' -f $azSATotalFileGB) GB or $azSATotalFileTiB or $azSATotalFileTB TB" -ForeGroundColor Green
   Write-Host "Total number files is $('{0:N0}' -f $azSATotalFileObjects) in $('{0:N0}' -f $azSATotalFileShares) Azure File Shares." -ForeGroundColor Green
 
+
+  if ($Anonymize) {
+    $azSAList = Anonymize-Collection -Collection $azSAList
+  }
+
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzSA - Azure Storage Account CSV file."}
   $azSAList | Export-CSV -path $outputAzSA
 
@@ -1170,6 +1445,11 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure." -ForeGroundColor Green
     Write-Host "Total # of Azure Containers: $('{0:N0}' -f $azConList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB or $azConTotalTiB TiB or $azConTotalTB TB" -ForeGroundColor Green
+
+    if ($Anonymize) {
+      $azConList = Anonymize-Collection -Collection $azConList
+    }
+    
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
     $azConList | Export-CSV -path $outputAzCon
   }
@@ -1186,12 +1466,31 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "are calculated by Azure."
     Write-Host "Total # of Azure File Shares: $('{0:N0}' -f $azFSList.count)" -ForeGroundColor Green
     Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB or $azFSTotalTiB TiB or $azFSTotalTB TB" -ForeGroundColor Green
+
+    if ($Anonymize) {
+      $azFSList = Anonymize-Collection -Collection $azFSList
+    }
+    
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzFS - Azure File Share CSV file."}
     $azFSList | Export-CSV -path $outputAzFS
   }
 } #if ($SkipAzureStorageAccounts -ne $true)
 
 if ($SkipAzureBackup -ne $true) {
+  
+
+  if ($Anonymize) {
+    $azVaultList = Anonymize-Collection -Collection $azVaultList
+    $azVaultVMPoliciesList = Anonymize-Collection -Collection $azVaultVMPoliciesList
+    $azVaultVMSQLPoliciesList = Anonymize-Collection -Collection $azVaultVMSQLPoliciesList
+    $azVaultAzureSQLDatabasePoliciesList = Anonymize-Collection -Collection $azVaultAzureSQLDatabasePoliciesList
+    $azVaultAzureFilesPoliciesList = Anonymize-Collection -Collection $azVaultAzureFilesPoliciesList
+    $azVaultVMItems = Anonymize-Collection -Collection $azVaultVMItems
+    $azVaultVMSQLItems = Anonymize-Collection -Collection $azVaultVMSQLItems
+    $azVaultAzureSQLDatabaseItems = Anonymize-Collection -Collection $azVaultAzureSQLDatabaseItems
+    $azVaultAzureFilesItems = Anonymize-Collection -Collection $azVaultAzureFilesItems
+    $backupCostDetails = Anonymize-Collection -Collection $backupCostDetails
+  }
   
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaults - Azure Backup Vault CSV file."}
   # $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMPolicies - Azure Backup Vault VM policies CSV file."}
@@ -1207,6 +1506,7 @@ if ($SkipAzureBackup -ne $true) {
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureSQLDatabaseItems - Azure Backup Vault Azure SQL Database items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultAzureFilesItems - Azure Backup Vault Azure Files items CSV file."}
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultVMSQLItem - Azure Vault VMSQL items CSV file."}
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaultBackupCostsItems - Azure Backup Costs CSV file."}
 
   Write-Host "Total # of Azure Backup Vaults: $('{0:N0}' -f $azVaultList.count)" -ForeGroundColor Green
   Write-Host "Total # of Azure Backup Vault policies for Virtual Machines: $('{0:N0}' -f $azVaultVMPoliciesList.Count)" -ForeGroundColor Green
@@ -1232,16 +1532,36 @@ if ($SkipAzureBackup -ne $true) {
   $azVaultVMSQLItems | Export-Csv -Path $outputAzVaultVMSQLItem
   $azVaultAzureSQLDatabaseItems | Export-Csv -Path $outputAzVaultAzureSQLDatabaseItems
   $azVaultAzureFilesItems | Export-Csv -Path $outputAzVaultAzureFilesItems
+  $backupCostDetails | Export-Csv -Path $outputAzVaultBackupCostsItems
 
 } # if ($SkipAzureBackup -ne $true)
 
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
+Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
 Write-Host
 
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+if($Anonymize){
+  # Exporting as rows as new value - old value
+  $transformedDict = $global:anonymizeDict.GetEnumerator() | ForEach-Object {
+    [PSCustomObject]@{
+      AnonymizedValue = $_.Value
+      ActualValue   = $_.Key
+    } 
+  } | Sort-Object -Property AnonymizedValue
+
+  $anonKeyValuesFileName = "azure_anonymized_keys_to_actual_values.csv"
+
+  $transformedDict | Export-CSV -Path $anonKeyValuesFileName
+  Write-Host
+  Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
+  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host
+}
 
 } catch{
   Write-Error "An error occurred and the script has exited prematurely:"
@@ -1271,9 +1591,16 @@ Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
 
+# Reset Culture settings back to original value
+[System.Threading.Thread]::CurrentThread.CurrentCulture = $CurrentCulture
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = $CurrentCulture
+
 Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+if($Anonymize){
+  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
+}
 Write-Host
 
 # Reset subscription context back to original.

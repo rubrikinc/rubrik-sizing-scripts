@@ -57,7 +57,21 @@ param (
 
   # Pass pass in a file with a list of projects separated by line breaks, no header required
   [Parameter(Mandatory=$false)]
-  [string]$projectFile = ''
+  [string]$projectFile = '',
+
+  # Option to anonymize the output files.
+  [Parameter(Mandatory=$false)]
+  [switch]$Anonymize,
+
+  # Choose to anonymize additional fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$AnonymizeFields,
+
+  # Choose to not anonymize certain fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$NotAnonymizeFields
 )
 
 if (Test-Path "./output.log") {
@@ -65,6 +79,14 @@ if (Test-Path "./output.log") {
 }
 
 Start-Transcript -Path "./output.log"
+
+# Save the current culture so it can be restored later
+$CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
+
+# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+[System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
+
 try{
 $date = Get-Date
 
@@ -172,6 +194,101 @@ foreach ($i in $vmHash.getEnumerator())
   $vmList += $vmObj
 }
 
+if ($Anonymize) {
+  $global:anonymizeProperties = @("VM", "Project")
+
+  if($AnonymizeFields){
+    [string[]]$anonFieldsList = $AnonymizeFields.split(',')
+    foreach($field in $anonFieldsList){
+      if (-not $global:anonymizeProperties.Contains($field)) {
+        $global:anonymizeProperties += $field
+      }
+    }
+  }
+  if($NotAnonymizeFields){
+    [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
+    $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+  }
+
+  $global:anonymizeDict = @{}
+  $global:anonymizeCounter = 0
+
+  function Get-NextAnonymizedValue {
+      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      $base = $charSet.Length
+      $newValue = ""
+      $global:anonymizeCounter++
+
+      $counter = $global:anonymizeCounter
+      while ($counter -gt 0) {
+          $counter--
+          $newValue = $charSet[$counter % $base] + $newValue
+          $counter = [math]::Floor($counter / $base)
+      }
+
+      return $newValue
+  }
+
+  function Anonymize-Data {
+      param (
+          [PSObject]$DataObject
+      )
+
+      foreach ($property in $DataObject.PSObject.Properties) {
+          $propertyName = $property.Name
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+
+          if ($shouldAnonymize) {
+              $originalValue = $DataObject.$propertyName
+
+              if ($null -ne $originalValue) {
+                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                  }
+                  $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+              }
+          }
+          elseif ($property.Value -is [PSObject]) {
+              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+          }
+          elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
+              $anonymizedCollection = @()
+              foreach ($item in $property.Value) {
+                  if ($item -is [PSObject]) {
+                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedCollection += $anonymizedItem
+                  } else {
+                      $anonymizedCollection += $item
+                  }
+              }
+              $DataObject.$propertyName = $anonymizedCollection
+          }
+      }
+
+      return $DataObject
+  }
+
+  function Anonymize-Collection {
+      param (
+          [System.Collections.IEnumerable]$Collection
+      )
+
+      $anonymizedCollection = @()
+      foreach ($item in $Collection) {
+          if ($item -is [PSObject]) {
+              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedCollection += $anonymizedItem
+          } else {
+              $anonymizedCollection += $item
+          }
+      }
+
+      return $anonymizedCollection
+  }
+
+  $vmList = Anonymize-Collection -Collection $vmList
+}
+
 $totalGiB = ($vmList.sizeGiB | Measure -Sum).sum
 $totalGB = ($vmList.sizeGB | Measure -Sum).sum
 $totalTiB = ($vmList.sizeTiB | Measure -Sum).sum
@@ -190,6 +307,24 @@ $vmList | Export-CSV -path $output
 Write-Host
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+if($Anonymize){
+  # Exporting as rows as new value - old value
+  $transformedDict = $global:anonymizeDict.GetEnumerator() | ForEach-Object {
+    [PSCustomObject]@{
+      AnonymizedValue = $_.Value
+      ActualValue   = $_.Key
+    } 
+  } | Sort-Object -Property AnonymizedValue
+
+  $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values.csv"
+
+  $transformedDict | Export-CSV -Path $anonKeyValuesFileName
+  Write-Host
+  Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
+  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host
+}
 
 } catch {
   Write-Error "An error occurred and the script has exited prematurely:"
@@ -214,7 +349,14 @@ Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
 
+[System.Threading.Thread]::CurrentThread.CurrentCulture = $CurrentCulture
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = $CurrentCulture
+
 Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
+
+if($Anonymize){
+  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
+}
