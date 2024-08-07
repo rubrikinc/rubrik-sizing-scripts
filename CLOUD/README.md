@@ -171,9 +171,9 @@ The anonymization feature allows you to anonymize specific fields in the output 
 
 - Use the tag `-Anonymize`. Fields anonymized by default are as follows:
 
-    - **AWS:** (list of default anonymized fields)
-    - **GCP:** (list of default anonymized fields)
-    - **Azure:** (list of default anonymized fields)
+    - **AWS:** "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier", "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId", "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId", "RequestId"
+    - **GCP:** "VM", "Project"
+    - **Azure:** "SubscriptionId", "Subscription", "Tenant", "Name", "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id", "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName", "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool", "ManagedInstance", "DatabaseID", "vmID"
 
 - To customize anonymization:
     - Anonymize additional fields: `-AnonymizeFields "NewField1,NewField2"`
