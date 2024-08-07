@@ -31,6 +31,8 @@ Check your current gcloud context:
 - gcloud auth list
 - gcloud config list
 
+IAM permissions needed: "compute.instances.list,compute.disks.get,resourcemanager.projects.get"
+
 .NOTES
 Written by Steven Tong for community usage
 GitHub: stevenctong
@@ -122,15 +124,20 @@ if ($projectFile -ne '')
   # Else if a comma separated list of projects was provided on the command line, use that
   $projectList = $projects -split ','
 } else {
-  # If no project is provided use the current project
+  # If no project is provided, try to fetch all projects accessible via this account, else use the current project
+  Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
   try{
-    $projectList += & gcloud config get-value project
+    $projectList = & gcloud projects list --format="value(projectId)"
   } catch {
-    Write-Host "Failed to get project" -foregroundcolor Red
+    Write-Host "Failed to get projects" -foregroundcolor Red
+    Write-Host "Error: $_" -foregroundcolor Red
+    $projectList += & gcloud config get-value project
+    Write-Host "Failed to get project list, using current project: $projectList" -foregroundcolor green
+    Write-Host
   }
   
-  Write-Host "No project list provided, using current project: $projectList" -foregroundcolor green
+  Write-Host "Projects found: $projectList" -foregroundcolor green
 }
 
 # Loop through each project and grab the VM and disk info
