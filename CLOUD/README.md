@@ -193,6 +193,10 @@ For detailed instructions on setting up AWS Organizations and AWS SSO, refer to 
 
 Ensure the respective IAM permissions as outlined in the script prerequisites section for each cloud provider.
 
+### How do I run the script with custom settings, such as using AWS SSO or querying certain regions?
+
+One can read the detailed parameter list and how to interact with them in the documentation at the top of each script. There are also examples provided of how to use these parameters to customize your data query.
+
 ### How can I verify my current cloud context?
 
 - **GCP:** 
