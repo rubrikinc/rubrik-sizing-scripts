@@ -146,30 +146,36 @@ foreach ($project in $projectList)
   Write-Host "Getting GCE VM info for current project: $project" -foregroundcolor green
 
   # gcloud SDK command to get each VM disk info a given project
+  $projectInfo = $null
   try{
     $projectInfo = & gcloud compute instances list --project=$project --format=json | jq '[ .[] | . as $vm | .disks[] | { vmName: $vm.name, vmID: $vm.id, status: $vm.status, diskName: .deviceName, diskSizeGb: .diskSizeGb} ]'
   } catch {
     Write-Host "Failed to get instances in project $project"
   }
-  $projectInfo = $projectInfo | ConvertFrom-Json
+  if($projectInfo -ne $null){
 
-  # Loop through each VM disk info and add it to the VM hash entry
-  foreach ($vm in $projectInfo)
-  {
-    # If the object key doesn't exist, then create it along with initial details of the VM info
-    if ($vmHash.containsKey($vm.'vmName') -eq $false)
+    $projectInfo = $projectInfo | ConvertFrom-Json
+
+    # Loop through each VM disk info and add it to the VM hash entry
+    foreach ($vm in $projectInfo)
     {
-      $vmHash.($vm.'vmName') = @{}
-      $vmHash.($vm.'vmName').'Project' = $project
-      $vmHash.($vm.'vmName').'VM' = $vm.'vmName'
-      $vmHash.($vm.'vmName').'DiskSizeGb' = [int]$vm.'diskSizeGb'
-      $vmHash.($vm.'vmName').'NumDisks' = 1
-      $vmHash.($vm.'vmName').'Status' = $vm.'status'
-    } else
-    {
-      $vmHash.($vm.'vmName').'DiskSizeGb' += [int]$vm.'diskSizeGb'
-      $vmHash.($vm.'vmName').'NumDisks' += 1
+      # If the object key doesn't exist, then create it along with initial details of the VM info
+      if ($vmHash.containsKey($vm.'vmName') -eq $false)
+      {
+        $vmHash.($vm.'vmName') = @{}
+        $vmHash.($vm.'vmName').'Project' = $project
+        $vmHash.($vm.'vmName').'VM' = $vm.'vmName'
+        $vmHash.($vm.'vmName').'DiskSizeGb' = [int]$vm.'diskSizeGb'
+        $vmHash.($vm.'vmName').'NumDisks' = 1
+        $vmHash.($vm.'vmName').'Status' = $vm.'status'
+      } else
+      {
+        $vmHash.($vm.'vmName').'DiskSizeGb' += [int]$vm.'diskSizeGb'
+        $vmHash.($vm.'vmName').'NumDisks' += 1
+      }
     }
+  } else{
+    Write-Host "Failed to (/did not) get instances in project $project" -ForeGroundColor Red
   }
 }
 
