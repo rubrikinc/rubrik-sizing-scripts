@@ -143,6 +143,7 @@ if ($projectFile -ne '')
 # Loop through each project and grab the VM and disk info
 foreach ($project in $projectList)
 {
+  gcloud config set project $project
   Write-Host "Getting GCE VM info for current project: $project" -foregroundcolor green
 
   # gcloud SDK command to get each VM disk info a given project
