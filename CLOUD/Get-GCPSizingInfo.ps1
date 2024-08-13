@@ -211,22 +211,25 @@ if ($Anonymize) {
   }
 
   $global:anonymizeDict = @{}
-  $global:anonymizeCounter = 0
+  $global:anonymizeCounter = @{}
 
-  function Get-NextAnonymizedValue {
-      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  function Get-NextAnonymizedValue ($anonField) {
+      $charSet = "0123456789"
       $base = $charSet.Length
       $newValue = ""
-      $global:anonymizeCounter++
+      if (-not $global:anonymizeCounter.ContainsKey($anonField)) {
+        $global:anonymizeCounter[$anonField] = 0
+      }
+      $global:anonymizeCounter[$anonField]++
 
-      $counter = $global:anonymizeCounter
+      $counter = $global:anonymizeCounter[$anonField]
       while ($counter -gt 0) {
           $counter--
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
 
-      return $newValue
+      return "$($anonField)-$($newValue)"
   }
 
   function Anonymize-Data {
@@ -243,7 +246,7 @@ if ($Anonymize) {
 
               if ($null -ne $originalValue) {
                   if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
-                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
               }
