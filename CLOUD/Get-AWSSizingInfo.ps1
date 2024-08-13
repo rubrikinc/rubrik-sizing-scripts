@@ -1447,6 +1447,7 @@ if ($Anonymize) {
   $ec2UnattachedVolList = Anonymize-Collection -Collection $ec2UnattachedVolList
   $rdsList = Anonymize-Collection -Collection $rdsList
   $s3List = Anonymize-Collection -Collection $s3List
+  $s3ListAg = Anonymize-Collection -Collection $s3ListAg
   $efsList = Anonymize-Collection -Collection $efsList
   $fsxList = Anonymize-Collection -Collection $fsxList
   $backupPlanList = Anonymize-Collection -Collection $backupPlanList
