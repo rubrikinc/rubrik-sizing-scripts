@@ -317,7 +317,7 @@ if($Anonymize){
     } 
   } | Sort-Object -Property AnonymizedValue
 
-  $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values.csv"
+  $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
