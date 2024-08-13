@@ -1227,7 +1227,7 @@ Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Na
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", 
+  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", "AzureBackupRGName", "ResourceGroupName", "DatabaseName", "ManagedInstanceName", "InstanceName",
                                   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
                                   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
                                   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
