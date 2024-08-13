@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer
+#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2
 
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -67,7 +67,9 @@
                     "backup:ListBackupSelections",
                     "backup:GetBackupPlan",
                     "backup:GetBackupSelection",
-                    "ce:GetCostAndUsage"
+                    "ce:GetCostAndUsage",
+                    "dynamodb:ListTables",
+                    "dynamodb:DescribeTable"
                 ],
                 "Resource": "*"
             }
@@ -153,7 +155,7 @@
     "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
     "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
     "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
-    "RequestId"
+    "RequestId", "TableName", "TableId", "TableArn"
 
   .EXAMPLE  
     >>>
@@ -336,6 +338,7 @@ $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputDDB = "aws_ddb_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
 $archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
@@ -348,6 +351,7 @@ $outputFiles = @(
     $outputS3,
     $outputEFS,
     $outputFSX,
+    $outputDDB,
     $outputBackupCosts,
     $outputBackupPlansJSON,
     "output.log"
@@ -787,6 +791,54 @@ function getAWSData($cred) {
       $fsxList.Add($fsxObj) | Out-Null
     }
     Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
+#update min perms
+    Write-Host "Getting DDB info for region: $awsRegion"  -ForegroundColor Green
+    $ddbListFromAPI = $null
+    try{
+      $ddbListFromAPI = Get-DDBTableList -Credential $cred -region $awsRegion -ErrorAction Stop
+    } catch {
+      Write-Host "Failed to get DDB Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+    Write-Host "Found" $ddbListFromAPI.Count "DDB Tables."  -ForegroundColor Green
+
+    foreach($ddbName in $ddbListFromAPI){
+
+      $ddbItem = $null
+      try{
+        $ddbItem = Get-DDBTable -TableName $ddbName -Credential $cred -region $awsRegion -ErrorAction Stop
+      } catch {
+        Write-Host "Failed to get DDB Table $($ddbName) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }
+
+      $ddbObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Region" = $awsRegion
+        "TableName" = $ddbItem.TableName
+        "TableId" = $ddbItem.TableId
+        "TableArn" = $ddbItem.TableArn
+        "TableSizeBytes" = $ddbItem.TableSizeBytes
+        "TableStatus" = $ddbItem.TableStatus.Value
+        "TableSizeGiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824), 7)
+        "TableSizeTiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824 / 1024), 7)
+        "TableSizeGB" = [math]::round($($ddbItem.TableSizeBytes/ 1000000000), 7)
+        "TableSizeTB" = [math]::round($($ddbItem.TableSizeBytes / 1000000000000), 7)
+        "ItemCount" = $ddbItem.ItemCount
+        "DeletionProtectionEnabled" = $ddbItem.DeletionProtectionEnabled
+        "GlobalTableVersion" = $ddbItem.GlobalTableVersion
+        "ProvisionedThroughputLastDecreaseDateTime" = $ddbItem.ProvisionedThroughput.LastDecreaseDateTime
+        "ProvisionedThroughputLastIncreaseDateTime" = $ddbItem.ProvisionedThroughput.LastIncreaseDateTime
+        "ProvisionedThroughput.NumberOfDecreasesToday" = $ddbItem.ProvisionedThroughput.NumberOfDecreasesToday
+        "ProvisionedThroughputReadCapacityUnits" = $ddbItem.ProvisionedThroughput.ReadCapacityUnits
+        "ProvisionedThroughputWriteCapacityUnits" = $ddbItem.ProvisionedThroughput.WriteCapacityUnits
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
+      }
+      $ddbList.add($ddbObj) | Out-Null
+
+    }
 
     Write-Host "Getting Backup Plans for region: $awsRegion" -ForegroundColor Green
     $BackupPlans = $null
@@ -952,6 +1004,34 @@ function getAWSData($cred) {
                 }
               }
             }
+            "dynamodb" {
+              if(($resource -split ':')[-1] -eq "*") {
+                foreach ($ddbObj in $ddbList) {
+                  if ($awsRegion -eq $ddbObj.Region -and $awsAccountInfo.Account -eq $ddbObj.AwsAccountId) {
+                    if ("" -eq $ddbObj.BackupPlans) {
+                        $ddbObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $ddbObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $ddbObj.InBackupPlan = $true
+                  }
+                }
+              } else {
+                $ddbName = ($resource -split '/')[1]
+                foreach ($ddbObj in $ddbList) {
+                  if ($ddbObj.BucketName -eq $ddbName -and $awsRegion -eq $ddbObj.Region -and $awsAccountInfo.Account -eq $ddbObj.AwsAccountId) {
+                    if ("" -eq $ddbObj.BackupPlans) {
+                        $ddbObj.BackupPlans = "$($plan.BackupPlanName)"
+                    }
+                    else {
+                        $ddbObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $ddbObj.InBackupPlan = $true
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1020,6 +1100,7 @@ $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
+$ddbList = New-Object collections.arraylist
 $backupCostsList = New-Object collections.arraylist
 $backupPlanList = New-Object collections.arraylist
 
@@ -1318,6 +1399,11 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $fsxTotalBackupCapacityGB = ($fsxInBackupPolicyList.StorageCapacityGB | Measure-Object -Sum).sum
   $fsxTotalBackupCapacityTB = ($fsxInBackupPolicyList.StorageCapacityTB | Measure-Object -Sum).sum
 
+  $ddbTotalGiB = ($ddbList.TableSizeGiB | Measure-Object -Sum).sum
+  $ddbTotalTiB = ($ddbList.TableSizeTiB | Measure-Object -Sum).sum 
+  $ddbTotalGB = ($ddbList.TableSizeGB | Measure-Object -Sum).sum
+  $ddbTotalTB = ($ddbList.TableSizeTB | Measure-Object -Sum).sum
+
   $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
 
 function addTagsToAllObjectsInList($list) {
@@ -1352,7 +1438,7 @@ if ($Anonymize) {
                                   "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
                                   "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
                                   "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
-                                  "RequestId")
+                                  "RequestId", "TableName", "TableId", "TableArn")
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
     foreach($field in $anonFieldsList){
@@ -1449,6 +1535,7 @@ if ($Anonymize) {
   $s3List = Anonymize-Collection -Collection $s3List
   $efsList = Anonymize-Collection -Collection $efsList
   $fsxList = Anonymize-Collection -Collection $fsxList
+  $ddbList = Anonymize-Collection -Collection $ddbList
   $backupPlanList = Anonymize-Collection -Collection $backupPlanList
   $backupCostsList = Anonymize-Collection -Collection $backupCostsList
 }
@@ -1478,6 +1565,9 @@ $efsList | Export-CSV -path $outputEFS
 addTagsToAllObjectsInList($fsxList)
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
 $fsxList | Export-CSV -path $outputFSX
+
+Write-Host "CSV file output to: $outputDDB"  -ForegroundColor Green
+$ddbList | Export-CSV -path $outputDDB
 
 Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
 $backupCostsList | Export-CSV -path $outputBackupCosts
@@ -1515,6 +1605,10 @@ Write-Host "Total used storage of all FSx volumes: $fsxTotalUsedGiB GiB or $fsxT
 Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB or $fsxTotalCapacityGB GB or $fsxTotalCapacityTiB TiB or $fsxTotalCapacityTB TB"  -ForegroundColor Green
 Write-Host "Used storage of all backed up FSx volumes: $fsxTotalBackupUsedGiB GiB or $fsxTotalBackupUsedGB GB or $fsxTotalBackupUsedTiB TiB or $fsxTotalBackupUsedTB TB"  -ForegroundColor Green
 Write-Host "Storage capacity of all backed up FSx volumes: $fsxTotalBackupCapacityGiB GiB or $fsxTotalBackupCapacityGB GB or $fsxTotalBackupCapacityTiB TiB or $fsxTotalBackupCapacityTB TB"  -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of DDB Tables: $($ddbList.count)"  -ForegroundColor Green
+Write-Host "Total table size of all DDB Tables: $ddbTotalGiB GiB or $ddbTotalGB GB or $ddbTotalTiB TiB or $ddbTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
