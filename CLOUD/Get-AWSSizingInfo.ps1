@@ -1401,7 +1401,7 @@ if ($Anonymize) {
               $originalValue = $DataObject.$propertyName
 
               if ($null -ne $originalValue) {
-                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
+                  if (-not $global:anonymizeDict.ContainsKey("$($propertyName)-$($originalValue)")) {
                       $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
