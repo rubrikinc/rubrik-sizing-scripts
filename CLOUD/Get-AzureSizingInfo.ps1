@@ -1289,7 +1289,7 @@ if ($Anonymize) {
 
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
-          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Tag:*"
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName
 
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
@@ -1312,7 +1312,30 @@ if ($Anonymize) {
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
                 }
               }
-          }
+          } 
+          elseif ($propertyName -like "Label/Tag:*") {
+            # Must anonymize both the tag name and value
+
+            $tagValue = $DataObject.$propertyName
+            $anonymizedTagKey = ""
+            
+            $tagName = $propertyName.Substring(10)
+            
+            if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("Label/TagName")
+            }
+            $anonymizedTagKey = 'Label/Tag:' + $global:anonymizeDict["$tagName"]
+            
+            $anonymizedTagValue = $null
+            if ($null -ne $tagValue) {
+                if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
+                    $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue($anonymizedTagKey)
+                }
+                $anonymizedTagValue = $global:anonymizeDict[$tagValue]
+            }
+            $DataObject.PSObject.Properties.Remove($propertyName)
+            $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
+        }
           elseif ($property.Value -is [PSObject]) {
               $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
           }
