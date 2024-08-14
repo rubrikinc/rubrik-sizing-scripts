@@ -791,7 +791,7 @@ function getAWSData($cred) {
       $fsxList.Add($fsxObj) | Out-Null
     }
     Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
-#update min perms
+
     Write-Host "Getting DDB info for region: $awsRegion"  -ForegroundColor Green
     $ddbListFromAPI = $null
     try{
