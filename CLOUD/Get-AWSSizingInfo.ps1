@@ -302,12 +302,6 @@ param (
   [string]$NotAnonymizeFields
 )
 
-if (Test-Path "./output.log") {
-  Remove-Item -Path "./output.log"
-}
-
-Start-Transcript -Path "./output.log"
-
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
@@ -328,6 +322,20 @@ $defaultGovCloudQueryRegion = "us-gov-east-1"
 $date = Get-Date
 $utcEndTime = $date.ToUniversalTime()
 $utcStartTime = $utcEndTime.AddDays(-7)
+
+$output_log = "output_aws_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+
+if (Test-Path "./$output_log") {
+  Remove-Item -Path "./$output_log"
+}
+
+if($Anonymize){
+  "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
+  $log_for_anon_customers = "output_aws_not_anonymized_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+  Start-Transcript -Path "./$log_for_anon_customers"
+} else{
+  Start-Transcript -Path "./$output_log"
+}
 
 # Filenames of the CSVs output
 $outputEc2Instance = "aws_ec2_instance_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
@@ -350,7 +358,7 @@ $outputFiles = @(
     $outputFSX,
     $outputBackupCosts,
     $outputBackupPlansJSON,
-    "output.log"
+    $output_log
 )
 
 # Function to do the work
@@ -1584,7 +1592,8 @@ if($Anonymize){
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
   Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
-  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
+  Write-Host "These files are not part of the zip file generated" -ForegroundColor Cyan
   Write-Host
 }
 
@@ -1618,7 +1627,3 @@ Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
-
-if($Anonymize){
-  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
-}

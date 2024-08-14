@@ -246,12 +246,6 @@ param (
   [string]$NotAnonymizeFields
 )
 
-if (Test-Path "./output.log") {
-  Remove-Item -Path "./output.log"
-}
-
-Start-Transcript -Path "./output.log"
-
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
@@ -263,6 +257,22 @@ $azConfig = Get-AzConfig -DisplayBreakingChangeWarning
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 
 $date = Get-Date
+
+$output_log = "output_azure_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+
+if (Test-Path "./$output_log") {
+  Remove-Item -Path "./$output_log"
+}
+
+if($Anonymize){
+  "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
+  $log_for_anon_customers = "output_azure_not_anonymized_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+  Start-Transcript -Path "./$log_for_anon_customers"
+} else{
+  Start-Transcript -Path "./$output_log"
+}
+
+
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
@@ -1542,7 +1552,9 @@ if ($SkipAzureBackup -ne $true) {
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
-Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
+if ($SkipAzureBackup -ne $true) {
+  Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
+}
 Write-Host
 
 Write-Host
@@ -1562,7 +1574,8 @@ if($Anonymize){
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
   Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
-  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
+  Write-Host "These files are not part of the zip file generated" -ForegroundColor Cyan
   Write-Host
 }
 
@@ -1574,7 +1587,7 @@ if($Anonymize){
   Stop-Transcript
 }
 
-$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="output.log - Log file"}
+$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$output_log - Log file"}
 
 # Extract only the unique file names from the array of objects for compression
 $filePaths = $outputFiles | ForEach-Object { $_.Files.Split(' - ')[0] }  | Sort-Object -Unique
@@ -1601,9 +1614,6 @@ Write-Host "Results have been compressed into $archiveFile and original files ha
 Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
-if($Anonymize){
-  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
-}
 Write-Host
 
 # Reset subscription context back to original.
