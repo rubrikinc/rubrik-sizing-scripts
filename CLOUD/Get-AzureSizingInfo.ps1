@@ -257,8 +257,9 @@ $azConfig = Get-AzConfig -DisplayBreakingChangeWarning
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 
 $date = Get-Date
+$date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
 
-$output_log = "output_azure_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+$output_log = "output_azure_$date_string.log"
 
 if (Test-Path "./$output_log") {
   Remove-Item -Path "./$output_log"
@@ -266,7 +267,7 @@ if (Test-Path "./$output_log") {
 
 if($Anonymize){
   "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
-  $log_for_anon_customers = "output_azure_not_anonymized_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+  $log_for_anon_customers = "output_azure_not_anonymized_$date_string.log"
   Start-Transcript -Path "./$log_for_anon_customers"
 } else{
   Start-Transcript -Path "./$output_log"
@@ -1583,7 +1584,7 @@ if($Anonymize){
     } 
   } | Sort-Object -Property AnonymizedValue
 
-  $anonKeyValuesFileName = "azure_anonymized_keys_to_actual_values-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+  $anonKeyValuesFileName = "azure_anonymized_keys_to_actual_values-$date_string.csv"
 
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host

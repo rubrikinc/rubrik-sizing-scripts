@@ -320,10 +320,11 @@ $defaultQueryRegion = "us-east-1"
 $defaultGovCloudQueryRegion = "us-gov-east-1"
 
 $date = Get-Date
+$date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
 $utcEndTime = $date.ToUniversalTime()
 $utcStartTime = $utcEndTime.AddDays(-7)
 
-$output_log = "output_aws_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+$output_log = "output_aws_$date_string.log"
 
 if (Test-Path "./$output_log") {
   Remove-Item -Path "./$output_log"
@@ -331,22 +332,22 @@ if (Test-Path "./$output_log") {
 
 if($Anonymize){
   "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
-  $log_for_anon_customers = "output_aws_not_anonymized_$($date.ToString("yyyy-MM-dd_HHmm")).log"
+  $log_for_anon_customers = "output_aws_not_anonymized_$date_string.log"
   Start-Transcript -Path "./$log_for_anon_customers"
 } else{
   Start-Transcript -Path "./$output_log"
 }
 
 # Filenames of the CSVs output
-$outputEc2Instance = "aws_ec2_instance_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
-$archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$outputEc2Instance = "aws_ec2_instance_info-$date_string.csv"
+$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
+$outputRDS = "aws_rds_info-$date_string.csv"
+$outputS3 = "aws_s3_info-$date_string.csv"
+$outputEFS = "aws_efs_info-$date_string.csv"
+$outputFSX = "aws_fsx_info-$date_string.csv"
+$outputBackupCosts = "aws_backup_costs-$date_string.csv"
+$outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
+$archiveFile = "aws_sizing_results_$date_string.zip"
 
 # List of output files
 $outputFiles = @(
@@ -1619,7 +1620,7 @@ if($Anonymize){
     } 
   } | Sort-Object -Property AnonymizedValue
 
-  $anonKeyValuesFileName = "aws_anonymized_keys_to_actual_values-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+  $anonKeyValuesFileName = "aws_anonymized_keys_to_actual_values-$date_string.csv"
 
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
