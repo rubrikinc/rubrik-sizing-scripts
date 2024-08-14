@@ -237,8 +237,10 @@ if ($Anonymize) {
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
+      
+      $paddedValue = $newValue.PadLeft(5, '0')
 
-      return "$($anonField)-$($newValue)"
+      return "$($anonField)-$($paddedValue)"
   }
 
   function Anonymize-Data {
@@ -248,16 +250,28 @@ if ($Anonymize) {
 
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
-          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Tag:*"
 
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
 
               if ($null -ne $originalValue) {
-                  if (-not $global:anonymizeDict.ContainsKey("$($propertyName)-$($originalValue)")) {
+                if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
+                  # This is to handle the anonymization of list objects
+                  $anonymizedCollection = @()
+                  foreach ($item in $originalValue) {
+                      if (-not $global:anonymizeDict.ContainsKey("$item")) {
+                          $global:anonymizeDict["$item"] = Get-NextAnonymizedValue($propertyName)
+                      }
+                      $anonymizedCollection += $global:anonymizeDict["$item"]
+                  }
+                  $DataObject.$propertyName = $anonymizedCollection
+                } else{
+                  if (-not $global:anonymizeDict.ContainsKey("$($originalValue)")) {
                       $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+                }
               }
           }
           elseif ($property.Value -is [PSObject]) {

@@ -1356,7 +1356,7 @@ if ($Anonymize) {
   Write-Host
   Write-Host "Anonymizing..." -ForegroundColor Green
 
-  $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
+  $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", "BackupPlanName", "DestinationBackupVaultArn", "Project", "TargetBackupVaultName", "CreatorRequestId", "Resources",
                                   "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
                                   "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
                                   "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
@@ -1392,8 +1392,10 @@ if ($Anonymize) {
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
+      
+      $paddedValue = $newValue.PadLeft(5, '0')
 
-      return "$($anonField)-$($newValue)"
+      return "$($anonField)-$($paddedValue)"
   }
 
   function Anonymize-Data {
@@ -1409,11 +1411,41 @@ if ($Anonymize) {
               $originalValue = $DataObject.$propertyName
 
               if ($null -ne $originalValue) {
-                  if (-not $global:anonymizeDict.ContainsKey("$($propertyName)-$($originalValue)")) {
+                if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
+                  # This is to handle the anonymization of lists, such as Resources in the AWS backup plans JSON
+                  $anonymizedCollection = @()
+                  foreach ($item in $originalValue) {
+                      if (-not $global:anonymizeDict.ContainsKey("$item")) {
+                          $global:anonymizeDict["$item"] = Get-NextAnonymizedValue($propertyName)
+                      }
+                      $anonymizedCollection += $global:anonymizeDict["$item"]
+                  }
+                  $DataObject.$propertyName = $anonymizedCollection
+                } else{
+                  if (-not $global:anonymizeDict.ContainsKey("$($originalValue)")) {
                       $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+                }
               }
+          } elseif($propertyName -eq "BackupPlans") {
+            $originalValue = $DataObject.$propertyName
+            if($originalValue -ne $null -and $originalValue -ne ""){
+              $plans = $originalValue.split(', ')
+              $newVal = ""
+              $count = 0
+              foreach($plan in $plans){
+                if (-not $global:anonymizeDict.ContainsKey("$plan")) {
+                  $global:anonymizeDict[$plan] = Get-NextAnonymizedValue("BackupPlanName")
+                }
+                if($count -ne 0){
+                  $newVal += " ,"
+                }
+                $newVal += $global:anonymizeDict[$plan]
+                $count++
+              }
+              $DataObject.$propertyName = $newVal
+            }
           }
           elseif ($property.Value -is [PSObject]) {
               $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
