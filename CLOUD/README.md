@@ -181,6 +181,8 @@ The anonymization feature allows you to anonymize specific fields in the output 
  
 - A CSV file corresponding each anonymized key to value is outputted when you run any of the 3 scripts. Note this will not be contained in the ZIP file, and is only outside of the ZIP file. This will help you correspond the numbers outputted to the resources, even if you choose to send anonymized data to Rubrik.
 
+- The output log will also not be in the ZIP; the output log will be created outside the ZIP, and one can manually 'clean/sanitize' sensitive information from that log before sending it to one's Rubrik representative.
+
 ---
 
 ## FAQ
