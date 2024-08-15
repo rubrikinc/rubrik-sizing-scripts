@@ -337,7 +337,8 @@ $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("y
 $outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputFSXfilesystems = "aws_fsx_filesystem_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputFSX = "aws_fsx_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputDDB = "aws_ddb_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
@@ -350,6 +351,7 @@ $outputFiles = @(
     $outputRDS,
     $outputS3,
     $outputEFS,
+    $outputFSXfilesystems,
     $outputFSX,
     $outputDDB,
     $outputBackupCosts,
@@ -698,12 +700,174 @@ function getAWSData($cred) {
     }
     Write-Progress -Activity 'Processing EFS:' -PercentComplete 100 -Completed
 
-    Write-Host "Getting FSx info for region: $awsRegion"  -ForegroundColor Green
+    Write-Host "Getting FSx File System info for region: $awsRegion"  -ForegroundColor Green
+
+    $fsxFileSystemListFromAPI = $null
+    try{
+      $fsxFileSystemListFromAPI = Get-FSXFileSystem -Credential $cred -region $awsRegion -ErrorAction Stop
+    } catch {
+      Write-Host "Failed to get FSX File System Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+    Write-Host "Found" $fsxFileSystemListFromAPI.Count "FSx FileSystems."  -ForegroundColor Green
+    $counter = 0
+    foreach ($fileSystem in $fsxFileSystemListFromAPI) {
+      $counter++
+      Write-Progress -Activity 'Processing FSx FileSystem:' -Status $fileSystem.FileSystemId -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
+      $fsxObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Region" = $awsRegion
+        "FileSystemId" = $filesystem.FileSystemId
+        "FileSystemDNSName" = $filesystem.DNSName
+        "FileSystemType" = $filesystem.FileSystemType.Value
+        "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
+        "FileSystemOwnerId" = $filesystem.OwnerId
+        "FileSystemStorageType" = $filesystem.StorageType
+        "Name" = $filesystem.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+        "OnTapType" = ($filesystem.OntapConfiguration -ne $null)
+        "WindowsType" = ($filesystem.WindowsConfiguration -ne $null)
+        "LustreType" = ($filesystem.LustreConfiguration -ne $null)
+        "OpenZFSType" = ($filesystem.OpenZFSConfiguration -ne $null)
+        "StorageCapacityBytes" = $filesystem.StorageCapacity * 1073741824
+        "StorageCapacityGiB" = $filesystem.StorageCapacity
+        "StorageCapacityTiB" = [math]::round($($filesystem.StorageCapacity / 1024), 7)
+        "StorageCapacityGB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000), 7)
+        "StorageCapacityTB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000000), 7)
+      }
+      $namespace = "AWS/FSx"
+      $dimensions = @(
+        @{
+          Name = "FileSystemId"
+          Value = $filesystem.FileSystemId
+        }
+      )
+      $metrics = $null
+      if($fsxObj.OnTapType -eq $true){
+        $metricName = "StorageUsed"
+        $metrics = $null
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+        $maxStorageUsed = $storageUsed.Maximum
+
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedBytes" -Value $maxStorageUsed -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 7)) -Force
+
+      } elseif($fsxObj.WindowsType -eq $true){
+        $metricName = "StorageCapacityUtilization"
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $storageCapacityUtil = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+        $maxStorageCapacityUtil = $storageCapacityUtil.Maximum
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageCapacityUtilizationPercentage" -Value $maxStorageCapacityUtil -Force
+
+      } elseif($fsxObj.LustreType -eq $true){
+
+        # Getting Sum instead of Maximum for these statistics as Maximum is max for any disk,
+        # whereas sum sums the space across all disks
+        $metricName = "PhysicalDiskUsage"
+        
+        $metrics = $null
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $physicalDiskUsage = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
+        $maxPhysicalDiskUsage = $storageUsed.Sum
+
+        $metricName = "LogicalDiskUsage"
+        
+        $metrics = $null
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $logicalDiskUsage = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
+        $maxLogicalDiskUsage = $storageUsed.Sum
+
+        $metricName = "FreeDataStorageCapacity"
+        $metrics = $null
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $freeDataStorageCapacity = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
+        $minFreeDataStorageCapacity = $storageUsed.Sum
+
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageBytes" -Value $maxPhysicalDiskUsage -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824 / 1024), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000000), 7)) -Force
+
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageBytes" -Value $maxLogicalDiskUsage -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824 / 1024), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000000), 7)) -Force
+
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityBytes" -Value $minFreeDataStorageCapacity -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824 / 1024), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000000), 7)) -Force
+
+      } elseif($fsxObj.OpenZFSType -eq $true) {
+        $metricName = "UsedStorageCapacity"
+        $metrics = $null
+        try{
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }
+        $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+        $maxStorageUsed = $storageUsed.Maximum
+
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityBytes" -Value $maxStorageUsed -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 7)) -Force
+
+      }
+
+      foreach ($tag in $fileSystem.Tags) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
+        } 
+      }
+      $fsxFileSystemList.Add($fsxObj) | Out-Null
+    }
+    Write-Progress -Activity 'Processing FSx FileSystems:' -PercentComplete 100 -Completed
+
+
+
+    Write-Host "Getting FSx Volume info for region: $awsRegion"  -ForegroundColor Green
     $fsxListFromAPI = $null
     try{
       $fsxListFromAPI = Get-FSXVolume -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get FSX Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get FSX Volume Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
     Write-Host "Found" $fsxListFromAPI.Count "FSx volumes."  -ForegroundColor Green
@@ -1099,6 +1263,7 @@ $ec2UnattachedVolList = New-Object collections.arraylist
 $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
+$fsxFileSystemList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
 $ddbList = New-Object collections.arraylist
 $backupCostsList = New-Object collections.arraylist
@@ -1381,6 +1546,11 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $efsTotalBackupGB = ($efsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
   $efsTotalBackupTB = ($efsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
+  $fsxFileSystemTotalCapacityGiB = ($fsxFileSystemList.StorageCapacityGiB | Measure-Object -Sum).sum
+  $fsxFileSystemTotalCapacityTiB = ($fsxFileSystemList.StorageCapacityTiB | Measure-Object -Sum).sum 
+  $fsxFileSystemTotalCapacityGB = ($fsxFileSystemList.StorageCapacityGB | Measure-Object -Sum).sum
+  $fsxFileSystemTotalCapacityTB = ($fsxFileSystemList.StorageCapacityTB | Measure-Object -Sum).sum
+
   $fsxTotalUsedGiB = ($fsxList.StorageUsedGiB | Measure-Object -Sum).sum
   $fsxTotalUsedTiB = ($fsxList.StorageUsedTiB | Measure-Object -Sum).sum 
   $fsxTotalUsedGB = ($fsxList.StorageUsedGB | Measure-Object -Sum).sum
@@ -1534,6 +1704,7 @@ if ($Anonymize) {
   $rdsList = Anonymize-Collection -Collection $rdsList
   $s3List = Anonymize-Collection -Collection $s3List
   $efsList = Anonymize-Collection -Collection $efsList
+  $fsxFileSystemList = Anonymize-Collection -Collection $fsxFileSystemList
   $fsxList = Anonymize-Collection -Collection $fsxList
   $ddbList = Anonymize-Collection -Collection $ddbList
   $backupPlanList = Anonymize-Collection -Collection $backupPlanList
@@ -1561,6 +1732,10 @@ $s3ListAg | Export-CSV -path $outputS3
 addTagsToAllObjectsInList($efsList)
 Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
 $efsList | Export-CSV -path $outputEFS
+
+addTagsToAllObjectsInList($fsxFileSystemList)
+Write-Host "CSV file output to: $outputFSXfilesystems"  -ForegroundColor Green
+$fsxFileSystemList | Export-CSV -path $outputFSXfilesystems
 
 addTagsToAllObjectsInList($fsxList)
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
@@ -1600,6 +1775,11 @@ Write-Host "Total provisioned capacity of all EFS file systems: $efsTotalGiB GiB
 Write-Host "Provisioned capacity of all backed up EFS file systems: $efsTotalBackupGiB GiB or $efsTotalBackupGB GB or $efsTotalBackupTiB TiB or $efsTotalBackupTB TB"  -ForegroundColor Green
 
 Write-Host
+Write-Host "Total # of FSx FileSystems: $($fsxFileSystemList.count)"  -ForegroundColor Green
+Write-Host "Total storage capacity of all FSx File Systems: $fsxFileSystemTotalCapacityGiB GiB or $fsxFileSystemTotalCapacityGB GB or $fsxFileSystemTotalCapacityTiB TiB or $fsxFileSystemTotalCapacityTB TB"  -ForegroundColor Green
+
+Write-Host
+Write-Host "This volume data is a subset of FSX FileSystem Data above" -ForegroundColor Green
 Write-Host "Total # of FSx volumes: $($fsxList.count)"  -ForegroundColor Green
 Write-Host "Total used storage of all FSx volumes: $fsxTotalUsedGiB GiB or $fsxTotalUsedGB GB or $fsxTotalUsedTiB TiB or $fsxTotalUsedTB TB"  -ForegroundColor Green
 Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB or $fsxTotalCapacityGB GB or $fsxTotalCapacityTiB TiB or $fsxTotalCapacityTB TB"  -ForegroundColor Green
