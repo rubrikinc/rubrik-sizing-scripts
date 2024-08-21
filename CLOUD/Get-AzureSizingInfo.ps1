@@ -792,6 +792,7 @@ foreach ($sub in $subs) {
   } #if ($SkipAzureSQLandMI -ne $true)
 
   if ($SkipAzureStorageAccounts -ne $true) {
+    Write-Host "Getting Storage Account information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azSAs = Get-AzStorageAccount -ErrorAction Stop
@@ -1043,6 +1044,7 @@ foreach ($sub in $subs) {
   } # if ($SkipAzureStorageAccounts -ne $true)
 
   if ($SkipAzureBackup -ne $true) {
+    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azVaults = Get-AzRecoveryServicesVault -ErrorAction Stop
@@ -1054,7 +1056,6 @@ foreach ($sub in $subs) {
 
     #Loop over all vaults in the subscription and get Azure Backup Details
     $azVaultNum=1
-    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     foreach ($azVault in $azVaults) {
       Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
       $azVaultNum++
