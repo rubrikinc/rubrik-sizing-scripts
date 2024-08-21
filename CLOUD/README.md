@@ -73,7 +73,7 @@ To run the AWS sizing script, ensure you have the following:
 
 ### Running the AWS Script
 
-1. Open AWS CloudShell and start PowerShell by running:
+1. Open [AWS CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/welcome.html) and start PowerShell by running:
     ```shell
     pwsh
     ```
@@ -108,7 +108,7 @@ To run the Azure sizing script, ensure you have the following:
 ### Running the Azure Script
 
 1. **From Azure Cloud Shell (preferred):**
-    - Login to the Azure portal and open Azure Cloud Shell.
+    - Login to the Azure portal and open [Azure Cloud Shell](https://learn.microsoft.com/en-us/azure/cloud-shell/get-started/classic?source=recommendations&tabs=azurecli).
     - Install the necessary module:
         ```powershell
         Install-Module Az.CostManagement
@@ -145,7 +145,7 @@ To run the GCP sizing script, ensure you have the following:
 ### Running the GCP Script
 
 1. **From GCP Cloud Shell:**
-    - Login and initialize GCP Cloud Shell:
+    - Login and initialize [GCP Cloud Shell](https://cloud.google.com/shell):
         ```shell
         gcloud init
         ```
