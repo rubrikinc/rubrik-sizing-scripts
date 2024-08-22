@@ -828,7 +828,7 @@ foreach ($sub in $subs) {
         -ResourceId $azSAResourceId `
         -MetricName UsedCapacity `
         -AggregationType Maximum `
-        -StartTime (Get-Date).AddDays(-1)).Data.Average
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum
       $metrics = @("BlobCapacity", "ContainerCount", "BlobCount")
       $azSABlob = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId "$($azSAResourceId)/blobServices/default" `
