@@ -827,23 +827,23 @@ foreach ($sub in $subs) {
       $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId $azSAResourceId `
         -MetricName UsedCapacity `
-        -AggregationType Average `
+        -AggregationType Maximum `
         -StartTime (Get-Date).AddDays(-1)).Data.Average
       $metrics = @("BlobCapacity", "ContainerCount", "BlobCount")
       $azSABlob = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId "$($azSAResourceId)/blobServices/default" `
         -MetricNames $metrics `
-        -AggregationType Average `
+        -AggregationType Maximum `
         -StartTime (Get-Date).AddDays(-1))
       $metrics = @("FileCapacity", "FileShareCount", "FileCount")
       $azSAFile = Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId "$($azSAResourceId)/fileServices/default" `
         -MetricNames $metrics `
-        -AggregationType Average `
+        -AggregationType Maximum `
         -StartTime (Get-Date).AddDays(-1)
       $UsedCapacityBytes = ($azSAUsedCapacity | Select-Object -Last 1)
-      $UsedBlobCapacityBytes = (($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)
-      $UsedFileShareCapacityBytes = (($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)
+      $UsedBlobCapacityBytes = (($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Maximum | Select-Object -Last 1)
+      $UsedFileShareCapacityBytes = (($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Maximum | Select-Object -Last 1)
 
       $azSAObj = [ordered] @{}
       $azSAObj.Add("StorageAccount",$azSA.StorageAccountName)
@@ -865,15 +865,15 @@ foreach ($sub in $subs) {
       $azSAObj.Add("UsedBlobCapacityTiB",[math]::round($($UsedBlobCapacityBytes / 1073741824 / 1024), 4))
       $azSAObj.Add("UsedBlobCapacityGB",[math]::round($($UsedBlobCapacityBytes / 1000000000), 3))
       $azSAObj.Add("UsedBlobCapacityTB",[math]::round($($UsedBlobCapacityBytes / 1000000000000), 7))
-      $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Maximum | Select-Object -Last 1))
+      $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Maximum | Select-Object -Last 1))
       $azSAObj.Add("UsedFileShareCapacityBytes",$UsedFileShareCapacityBytes)
       $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824), 0))
       $azSAObj.Add("UsedFileShareCapacityTiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824 / 1024), 4))
       $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($($UsedFileShareCapacityBytes / 1000000000), 3))
       $azSAObj.Add("UsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 7))
-      $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Maximum | Select-Object -Last 1))
+      $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Maximum | Select-Object -Last 1))
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($azSA.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
