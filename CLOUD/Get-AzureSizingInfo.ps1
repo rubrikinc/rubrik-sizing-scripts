@@ -91,6 +91,9 @@ Do not collect data on Azure Storage Accounts. This includes not collecting data
 .PARAMETER SkipAzureVMandManagedDisks
 Do not collect data on Azure VMs or Managed Disks.
 
+.PARAMETER SkipAzureCosmosDB
+Do not collect data on Azure CosmosDB.
+
 .PARAMETER Subscriptions
 A comma separated list of subscriptions to gather data from.
 
@@ -213,6 +216,9 @@ param (
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureVMandManagedDisks,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureCosmosDB,
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -314,6 +320,7 @@ $outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
 $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
 $outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
+$outputAzCosmosDB = "azure_cosmos_db-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -339,6 +346,7 @@ $azVaultVMSQLItems = @()
 $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
 $backupCostDetails = @()
+$cosmosDBs = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -794,6 +802,71 @@ foreach ($sub in $subs) {
     } # foreach ($MI in $sqlManagedInstances)
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
+
+  Write-Host "Getting CosmosDB information in $($sub.Name)" -ForeGroundColor Green
+  if($SkipAzureCosmosDB -ne $true) {
+    $resourceGroups = Get-AzResourceGroup
+    $rgCounter = 0
+    foreach ($rg in $resourceGroups) {
+      $rgCounter++
+      Write-Progress -Id 5 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
+      $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
+
+      foreach ($account in $cosmosDBAccounts) {
+
+        $dbAccountObj = [ordered] @{}
+        $dbAccountObj.Add("Subscription",$sub.Name)
+        $dbAccountObj.Add("Tenant",$tenant.Name)
+        $dbAccountObj.Add("Name",$account.Name)
+        $dbAccountObj.Add("Location",$account.Location)
+        $dbAccountObj.Add("Id",$account.Id)
+        $dbAccountObj.Add("Kind",$account.Kind)
+        $dbAccountObj.Add("InstanceId",$account.InstanceId)
+        $dbAccountObj.Add("BackupPolicyBackupIntervalInMinutes",$account.BackupPolicy.BackupIntervalInMinutes)
+        $dbAccountObj.Add("BackupPolicyBackupRetentionIntervalInHours",$account.BackupPolicy.BackupRetentionIntervalInHours)
+        $dbAccountObj.Add("BackupPolicyBackupType",$account.BackupPolicy.BackupType)
+        $dbAccountObj.Add("BackupPolicyBackupStorageRedundancy",$account.BackupPolicy.BackupStorageRedundancy)
+        $dbAccountObj.Add("BackupPolicyTier",$account.BackupPolicy.Tier)
+        $dbAccountObj.Add("MinimalTlsVersion",$account.MinimalTlsVersion)
+        $dbAccountObj.Add("NameDatabaseAccountOfferType",$account.NameDatabaseAccountOfferType)
+
+
+        $id = $account.Id
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName DocumentCount `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("DocumentCount",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName DataUsage `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("DataUsage",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName PhysicalPartitionSizeInfo `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("PhysicalPartitionSizeInfo",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName PhysicalPartitionCount `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("PhysicalPartitionCount",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName IndexUsage `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("IndexUsage",$azSAUsedCapacity)
+
+        $cosmosDBs += New-Object -TypeName PSObject -Property $dbAccountObj
+      }
+    }
+  } # if($SkipAzureCosmosDB -ne $true)
 
   if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "Getting Storage Account information in $($sub.Name)" -ForeGroundColor Green
@@ -1546,6 +1619,20 @@ if ($SkipAzureBackup -ne $true) {
   $backupCostDetails | Export-Csv -Path $outputAzVaultBackupCostsItems
 
 } # if ($SkipAzureBackup -ne $true)
+
+if ($SkipAzureCosmosDB -ne $true) {
+  Write-Host "Total # of Azure Cosmos DB Accounts: $('{0:N0}' -f $cosmosDBs.values.count)" -ForeGroundColor Green
+
+  $cosmosDBsToCsv = $cosmosDBs.values
+
+  if ($Anonymize) {
+    $cosmosDBsToCsv = Anonymize-Collection -Collection $cosmosDBs
+  }
+
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzCosmosDB - Azure Cosmos DB CSV file."}
+  $cosmosDBsToCsv | Export-CSV -path $outputAzCosmosDB -NoTypeInformation
+
+} #if ($SkipAzureCosmosDB -ne $true)
 
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
