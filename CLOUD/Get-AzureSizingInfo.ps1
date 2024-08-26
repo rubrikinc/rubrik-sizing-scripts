@@ -653,6 +653,26 @@ foreach ($sub in $subs) {
             $sqlObj.Add("InstanceType",$sqlDB.SkuName)
             $sqlObj.Add("Status",$sqlDB.Status)
 
+            $sqlAllocatedBytes = (
+              (Get-AzMetric -WarningAction SilentlyContinue `
+              -ResourceId $sqlDB.ResourceId `
+              -MetricName "allocated_data_storage" `
+              -AggregationType Maximum `
+              -StartTime (Get-Date).AddDays(-1))
+            )
+            $sqlUsedBytes = (
+                (Get-AzMetric  -WarningAction SilentlyContinue `
+                -ResourceId $sqlDB.ResourceId `
+                -MetricName "storage" `
+                -AggregationType Maximum `
+                -StartTime (Get-Date).AddDays(-1))
+            )
+            $sqlAllocatedAvg = ($sqlAllocatedBytes.Data.Maximum | Select-Object -Last 1)
+            $sqlUsedAvg = ($sqlUsedBytes.Data.Maximum | Select-Object -Last 1)
+
+            $sqlObj.Add("Allocated_Bytes", $sqlAllocatedAvg)
+            $sqlObj.Add("Utilized_Bytes", $sqlUsedAvg)
+
             $ltrPolicy = @{}
             try {
               if ($sqlDB.DatabaseName -eq "master"){
@@ -785,6 +805,17 @@ foreach ($sub in $subs) {
       $sqlObj.Add("InstanceType",$MI.Sku.Name)
       $sqlObj.Add("Status",$MI.Status)
       $sqlObj.Add("Databases", $databasesCounter)
+
+      $sqlUsedBytes = (
+          (Get-AzMetric  -WarningAction SilentlyContinue `
+          -ResourceId $MI.Id `
+          -MetricName "storage_space_used_mb" `
+          -AggregationType Maximum `
+          -StartTime (Get-Date).AddDays(-1))
+      )
+      $sqlUsedAvg = ($sqlUsedBytes.Data.Maximum | Select-Object -Last 1)
+      $sqlObj.Add("storage_space_used_mb", $sqlUsedAvg)
+
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($MI.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
