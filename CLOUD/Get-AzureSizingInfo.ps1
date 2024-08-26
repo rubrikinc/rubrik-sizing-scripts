@@ -355,7 +355,7 @@ switch ($PSCmdlet.ParameterSetName) {
     foreach ($subscription in $Subscriptions.split(',')) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
@@ -369,7 +369,7 @@ switch ($PSCmdlet.ParameterSetName) {
     foreach ($subscription in $SubscriptionIds.split(',')) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
@@ -380,7 +380,7 @@ switch ($PSCmdlet.ParameterSetName) {
   'AllSubscriptions' {
     Write-Host "Finding all subscription(s)..." -ForegroundColor Green
     try {
-      $subs =  Get-AzSubscription -ErrorAction Stop
+      $subs =  Get-AzSubscription -TenantId $context.Tenant.Id -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information."
       $_
@@ -392,7 +392,7 @@ switch ($PSCmdlet.ParameterSetName) {
     # If no subscription is specified, only use the current subscription
     Write-Host "Gathering subscription information for $($context.Subscription.Name) ..." -ForegroundColor Green
     try {
-      $subs = Get-AzSubscription -SubscriptionName $context.Subscription.Name -ErrorAction Stop
+      $subs = Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $context.Subscription.Name -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information from current subscription: $($context.Subscription.Name)"
       $_
@@ -406,7 +406,7 @@ switch ($PSCmdlet.ParameterSetName) {
     $subs = @()
     foreach ($managementGroup in $ManagementGroups) {
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
       } catch {
         Write-Error "Unable to gather subscriptions from Management Group: $($managementGroup)"
         $_
@@ -426,7 +426,7 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
     Write-Error $_
@@ -448,7 +448,7 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
     Write-Error $_
@@ -1734,7 +1734,7 @@ Write-Host
 
 # Reset subscription context back to original.
 try {
-  Set-AzContext -SubscriptionName $context.subscription.Name -ErrorAction Stop | Out-Null
+  Set-AzContext -SubscriptionName $context.subscription.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
 } catch {
   Write-Error "Unable to reset AzContext back to original context."
   $_
