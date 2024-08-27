@@ -1,5 +1,5 @@
 #requires -Version 7.0
-#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2
+#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService
 
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -69,7 +69,10 @@
                     "backup:GetBackupSelection",
                     "ce:GetCostAndUsage",
                     "dynamodb:ListTables",
-                    "dynamodb:DescribeTable"
+                    "dynamodb:DescribeTable",
+                    "kms:ListKeys",
+                    "secretsmanager:ListSecrets",
+                    "sqs:ListQueues"
                 ],
                 "Resource": "*"
             }
@@ -340,6 +343,9 @@ $outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSXfilesystems = "aws_fsx_filesystem_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputFSX = "aws_fsx_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputDDB = "aws_ddb_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputKMS = "aws_kms_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputSQS = "aws_sqs_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputSecrets = "aws_secrets_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
 $archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
@@ -354,6 +360,9 @@ $outputFiles = @(
     $outputFSXfilesystems,
     $outputFSX,
     $outputDDB,
+    $outputKMS,
+    $outputSecrets,
+    $outputSQS,
     $outputBackupCosts,
     $outputBackupPlansJSON,
     "output.log"
@@ -956,6 +965,47 @@ function getAWSData($cred) {
     }
     Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
 
+    Write-Host "Getting KMS, secrets, SQS numbers for region: $awsRegion"  -ForegroundColor Green
+    try{
+      $numberOfKMS = (Get-KMSKeyList -Region $awsRegion -ErrorAction Stop).Count
+      $keyObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Region" = $awsRegion
+        "Keys" = $numberOfKMS
+      }
+      $kmsList.Add($keyObj) | Out-Null
+    } catch{
+      Write-Host "Failed to get # of KMS keys for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+    try{
+      $numberOfSecrets = (Get-SECSecretList -Region $awsRegion -ErrorAction Stop).Count
+      $secretsObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Region" = $awsRegion
+        "Secrets" = $numberOfSecrets
+      }
+      $secretsList.Add($secretsObj) | Out-Null
+    } catch{
+      Write-Host "Failed to get # of secrets for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+    try{
+      $numberOfSQSQueues = (Get-SQSQueue -Region $awsRegion -ErrorAction Stop).Count
+      $sqsObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Region" = $awsRegion
+        "Queues" = $numberOfSQSQueues
+      }
+      $sqsList.Add($sqsObj) | Out-Null
+    } catch{
+      Write-Host "Failed to get # of SQS Queues for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
     Write-Host "Getting DDB info for region: $awsRegion"  -ForegroundColor Green
     $ddbListFromAPI = $null
     try{
@@ -1266,6 +1316,9 @@ $efsList = New-Object collections.arraylist
 $fsxFileSystemList = New-Object collections.arraylist
 $fsxList = New-Object collections.arraylist
 $ddbList = New-Object collections.arraylist
+$secretsList = New-Object collections.arraylist
+$kmsList = New-Object collections.arraylist
+$sqsList = New-Object collections.arraylist
 $backupCostsList = New-Object collections.arraylist
 $backupPlanList = New-Object collections.arraylist
 
@@ -1574,6 +1627,10 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $ddbTotalGB = ($ddbList.TableSizeGB | Measure-Object -Sum).sum
   $ddbTotalTB = ($ddbList.TableSizeTB | Measure-Object -Sum).sum
 
+  $totalSecrets = ($secretsList.Secrets | Measure-Object -Sum).sum
+  $totalKeys = ($kmsList.Keys | Measure-Object -Sum).sum
+  $totalQueues = ($sqsList.Queues | Measure-Object -Sum).sum
+
   $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
 
 function addTagsToAllObjectsInList($list) {
@@ -1709,6 +1766,9 @@ if ($Anonymize) {
   $ddbList = Anonymize-Collection -Collection $ddbList
   $backupPlanList = Anonymize-Collection -Collection $backupPlanList
   $backupCostsList = Anonymize-Collection -Collection $backupCostsList
+  $secretsList = Anonymize-Collection -Collection $secretsList
+  $kmsList = Anonymize-Collection -Collection $kmsList
+  $sqsList = Anonymize-Collection -Collection $sqsList
 }
 
 # Export to CSV
@@ -1743,6 +1803,15 @@ $fsxList | Export-CSV -path $outputFSX
 
 Write-Host "CSV file output to: $outputDDB"  -ForegroundColor Green
 $ddbList | Export-CSV -path $outputDDB
+
+Write-Host "CSV file output to: $outputSecrets"  -ForegroundColor Green
+$secretsList | Export-CSV -path $outputSecrets
+
+Write-Host "CSV file output to: $outputSQS"  -ForegroundColor Green
+$sqsList | Export-CSV -path $outputSQS
+
+Write-Host "CSV file output to: $outputKMS"  -ForegroundColor Green
+$kmsList | Export-CSV -path $outputKMS
 
 Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
 $backupCostsList | Export-CSV -path $outputBackupCosts
@@ -1785,6 +1854,11 @@ Write-Host "Total used storage of all FSx volumes: $fsxTotalUsedGiB GiB or $fsxT
 Write-Host "Total storage capacity of all FSx volumes: $fsxTotalCapacityGiB GiB or $fsxTotalCapacityGB GB or $fsxTotalCapacityTiB TiB or $fsxTotalCapacityTB TB"  -ForegroundColor Green
 Write-Host "Used storage of all backed up FSx volumes: $fsxTotalBackupUsedGiB GiB or $fsxTotalBackupUsedGB GB or $fsxTotalBackupUsedTiB TiB or $fsxTotalBackupUsedTB TB"  -ForegroundColor Green
 Write-Host "Storage capacity of all backed up FSx volumes: $fsxTotalBackupCapacityGiB GiB or $fsxTotalBackupCapacityGB GB or $fsxTotalBackupCapacityTiB TiB or $fsxTotalBackupCapacityTB TB"  -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of KMS Keys: $($totalKeys)"  -ForegroundColor Green
+Write-Host "Total # of Secrets: $($totalSecrets)"  -ForegroundColor Green
+Write-Host "Total # of SQS Queues: $($totalQueues)"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of DDB Tables: $($ddbList.count)"  -ForegroundColor Green

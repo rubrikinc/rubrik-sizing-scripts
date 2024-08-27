@@ -34,7 +34,7 @@ To run the AWS sizing script, ensure you have the following:
 - AWS account with the necessary permissions.
 - AWS PowerShell modules installed:
     ```powershell
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService
     ```
 - Appropriate IAM permissions:
     ```json
@@ -63,7 +63,12 @@ To run the AWS sizing script, ensure you have the following:
                     "backup:ListBackupSelections",
                     "backup:GetBackupPlan",
                     "backup:GetBackupSelection",
-                    "ce:GetCostAndUsage"
+                    "ce:GetCostAndUsage",
+                    "dynamodb:ListTables",
+                    "dynamodb:DescribeTable",
+                    "kms:ListKeys",
+                    "secretsmanager:ListSecrets",
+                    "sqs:ListQueues"
                 ],
                 "Resource": "*"
             }
@@ -215,4 +220,4 @@ One can read the detailed parameter list and how to interact with them in the do
     Set-AWSCredential -AccessKey 'YourAccessKey' -SecretKey 'YourSecretKey' -Region 'YourRegion'
     ```
 
-For any further queries or issues, refer to the detailed documentation or contact your Rubrik representative.
+For any further queries or issues, refer to the detailed documentation at the top of each script or contact your Rubrik representative.
