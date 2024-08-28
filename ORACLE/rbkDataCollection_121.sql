@@ -358,7 +358,7 @@ commit;
 -- format data collected for csv output
 --set markup csv on
 set linesize 32000
-set colsep ,
+set colsep ,,
 set headsep off
 set head off
 set trimspool on
@@ -371,45 +371,46 @@ spool rbkDiscovery.csv append
 
 -- select * from rubrikDataCollection;
 -- 20230322 - reordering query output to logically group data - smcelhinney
-select con_id ||','||
-        conName ||','||
-        dbSizeMB ||','||
-        allocated_dbSizeMB ||','||
-        dailyChangeRate ||','||
-        dailyRedoSize ||','||
-        datafileCount ||','||
-        tablespaceCount ||','||
-        encryptedTablespaceCount ||','||
-        encryptedDataSizeMB ||','||
-        biggestBigfileMB ||','||
-        bigfileTablespaceCount ||','||
-        bigfileDataSizeMB ||','||
-        blockSize ||','||
-        hostName ||','||
-        instName ||','||
-        dbVersion ||','||
-        dbEdition ||','||
-        platformName ||','||
-        dbName ||','||
-        dbUniqueName ||','||
-        dbID ||','||
-        flashbackEnabled ||','||
-        archiveLogEnabled ||','||
-        spfile ||','||
-        patchLevel ||','||
-        cpuCount ||','||
-        racEnabled ||','||
-        sgaMaxSize ||','||
-        sgaTarget ||','||
-        pgaAggregateTarget ||','||
-        physMemory ||','||
-        dNFSenabled ||','||
-        GoldenGate ||','||
-        exadataEnabled ||','||
-        bctEnabled ||','||
-        LogArchiveConfig ||','||
-        ArchiveLagTarget ||','||
-        logfileCount ||','||
+-- 20240827 - changing column seperator to prevent data shift due to DG setting in LogArchiveConfig - smcelhinney 
+select con_id ||',,'||
+        conName ||',,'||
+        dbSizeMB ||',,'||
+        allocated_dbSizeMB ||',,'||
+        dailyChangeRate ||',,'||
+        dailyRedoSize ||',,'||
+        datafileCount ||',,'||
+        tablespaceCount ||',,'||
+        encryptedTablespaceCount ||',,'||
+        encryptedDataSizeMB ||',,'||
+        biggestBigfileMB ||',,'||
+        bigfileTablespaceCount ||',,'||
+        bigfileDataSizeMB ||',,'||
+        blockSize ||',,'||
+        hostName ||',,'||
+        instName ||',,'||
+        dbVersion ||',,'||
+        dbEdition ||',,'||
+        platformName ||',,'||
+        dbName ||',,'||
+        dbUniqueName ||',,'||
+        dbID ||',,'||
+        flashbackEnabled ||',,'||
+        archiveLogEnabled ||',,'||
+        spfile ||',,'||
+        patchLevel ||',,'||
+        cpuCount ||',,'||
+        racEnabled ||',,'||
+        sgaMaxSize ||',,'||
+        sgaTarget ||',,'||
+        pgaAggregateTarget ||',,'||
+        physMemory ||',,'||
+        dNFSenabled ||',,'||
+        GoldenGate ||',,'||
+        exadataEnabled ||',,'||
+        bctEnabled ||',,'||
+        LogArchiveConfig ||',,'||
+        ArchiveLagTarget ||',,'||
+        logfileCount ||',,'||
         tempfileCount
  from rubrikDataCollection;
 
