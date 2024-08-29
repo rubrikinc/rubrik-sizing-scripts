@@ -1353,20 +1353,30 @@ if ($PSCmdlet.ParameterSetName -eq 'DefaultProfile') {
 elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   # Get AWS Info based on user supplied list of profiles
   [string[]]$awsProfiles = $UserSpecifiedProfileNames.split(',')
+  $accountCounter = 0
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     $cred = Get-AWSCredential -ProfileName $awsProfile
+
+    Write-Progress -Activity 'Processing profile:' -Status $awsProfile -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
+    $accountCounter++
+
     getAWSData $cred
   }
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
   $awsProfiles = $(Get-AWSCredential -ListProfileDetail).ProfileName
+  $accountCounter = 0
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     Set-AWSCredential -ProfileName $awsProfile
     $cred = Get-AWSCredential -ProfileName $awsProfile
+
+    Write-Progress -Activity 'Processing profile:' -Status $awsProfile -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
+    $accountCounter++
+
     getAWSData $cred
   }
 }
@@ -1387,6 +1397,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     $awsAccounts = Get-ORGAccountList
   }
 
+  $accountCounter = 0
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.ID) account name: $($awsAccount.Name)"
@@ -1400,6 +1411,10 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
       Write-Error "Unable to gather data from AWS account $($awsAccount.Id)."
       continue
     }
+
+    Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    $accountCounter++
+
     getAWSData $cred
   }
 }
@@ -1465,6 +1480,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
     $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion
   }
 
+  $accountCounter = 0
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
@@ -1488,6 +1504,10 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
       Write-Error "Unable to get SSO session for AWS account $($awsAccount.Id)."
       continue
     }
+
+    Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    $accountCounter++
+
     getAWSData $cred
   }
 } 
@@ -1504,6 +1524,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
     Write-Host "Source Profile/Credential is: $caller"
     [string[]]$awsAccounts = $UserSpecifiedAccounts.split(',')
   
+    $accountCounter = 0
     foreach ($awsAccount in $awsAccounts) {
       Write-Host
       Write-Host "Searching account: $awsAccount"
@@ -1517,6 +1538,10 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
         Write-Error "Unable to gather data from AWS account $awsAccount."
         continue
       }
+
+      Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+      $accountCounter++
+
       getAWSData $cred
     }
   }
