@@ -346,6 +346,8 @@ $outputDDB = "aws_ddb_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputKMS = "aws_kms_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSQS = "aws_sqs_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputSecrets = "aws_secrets_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputEKSClusters = "aws_eks_clusters_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$outputEKSNodegroups = "aws_eks_nodegroups_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
 $archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
@@ -363,6 +365,8 @@ $outputFiles = @(
     $outputKMS,
     $outputSecrets,
     $outputSQS,
+    $outputEKSClusters,
+    $outputEKSNodegroups,
     $outputBackupCosts,
     $outputBackupPlansJSON,
     "output.log"
@@ -701,7 +705,7 @@ function getAWSData($cred) {
       foreach ($tag in $efs.Tags) { 
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
         if($key -ne "Name"){ 
-          $efsObj | Add-Member -MemberType NoteProperty -Name $key -Value $tag.Value -Force 
+          $efsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
         } 
       }
 
@@ -709,6 +713,95 @@ function getAWSData($cred) {
     }
     Write-Progress -Activity 'Processing EFS:' -PercentComplete 100 -Completed
 
+    Write-Host "Getting EKS info for region: $awsRegion"  -ForegroundColor Green
+    $eksListFromAPI = $null
+    try{
+      $eksListFromAPI = Get-EKSClusterList -Credential $cred -region $awsRegion -ErrorAction Stop
+    } catch {
+      Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }    
+    Write-Host "Found" $eksListFromAPI.Count "EKS Clusters."  -ForegroundColor Green
+
+    $counter = 0
+    foreach ($eks in $eksListFromAPI) {
+      try{
+        $eks = Get-EKSCluster -Credential $cred -region $awsRegion -Name $eks -ErrorAction Stop
+      } catch {
+        Write-Host "Failed to get EKS NodeGroup for nodegroup $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }  
+      $counter++
+      Write-Progress -Activity 'Processing EKS Cluster:' -Status $eks.Name -PercentComplete (($counter / $eksListFromAPI.Count) * 100)
+      $eksObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "Name" = $eks.Name
+        "Version" = $eks.Version
+        "PlatformVersion" = $eks.PlatformVersion
+        "Status" = $eks.Status.Value
+        "Arn" = $eks.Arn
+        "RoleArn" = $eks.RoleArn
+        "Region" = $awsRegion
+      }
+      # Note: As of August 2024, cannot add EKS to a backup plan, hence those fields are not here
+
+      $tagCounter = 0
+      foreach($key in $eks.Tags.Keys){
+        $value = $eks.Tags.Values.Split('\n')[$tagCounter]
+        $key = $key -replace '[^a-zA-Z0-9]', '_' 
+        $eksObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force 
+        $tagCounter++
+      }
+      
+      $eksList.Add($eksObj) | Out-Null
+
+      $eksNodeGroupListFromCluster = $null
+      try{
+        $eksNodeGroupListFromCluster = Get-EKSNodegroupList -Credential $cred -region $awsRegion -ClusterName $eks.Name -ErrorAction Stop
+      } catch {
+        Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }    
+      # Write-Host "Found" $eksNodeGroupListFromCluster.Count "EKS Nodegroups in Cluster $($eks.Name)."  -ForegroundColor Green
+
+      foreach($nodeGroup in $eksNodeGroupListFromCluster){
+        try{
+          $eksNodeGroup = Get-EKSNodegroup -Credential $cred -region $awsRegion -ClusterName $eks.Name -NodegroupName $nodeGroup -ErrorAction Stop
+        } catch {
+          Write-Host "Failed to get EKS NodeGroup for nodegroup $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
+        }   
+        $eksNodeGroupObj = [PSCustomObject] @{
+          "AwsAccountId" = $awsAccountInfo.Account
+          "AwsAccountAlias" = $awsAccountAlias
+          "NodegroupName" = $eksNodeGroup.NodegroupName
+          "ClusterName" = $eksNodeGroup.ClusterName
+          "DiskSize" = $eksNodeGroup.DiskSize
+          "CapacityType" = $eksNodeGroup.CapacityType
+          "AmiType" = $eksNodeGroup.AmiType
+          "NodegroupArn" = $eksNodeGroup.NodegroupArn
+          "NodeRole" = $eksNodeGroup.NodeRole
+          "Status" = $eksNodeGroup.Status
+          "ReleaseVersion" = $eksNodeGroup.ReleaseVersion
+          "Version" = $eksNodeGroup.Version
+          "Region" = $awsRegion
+        }
+
+        $tagCounter = 0
+        foreach($key in $eksNodeGroup.Tags.Keys){
+          $value = $eksNodeGroup.Tags.Values.Split('\n')[$tagCounter]
+          $key = $key -replace '[^a-zA-Z0-9]', '_' 
+          $eksNodeGroupObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force  
+          $tagCounter++
+        }
+  
+        $eksNodeGroupList.Add($eksNodeGroupObj) | Out-Null
+      }
+
+    }
+    Write-Progress -Activity 'Processing EKS:' -PercentComplete 100 -Completed
+    
     Write-Host "Getting FSx File System info for region: $awsRegion"  -ForegroundColor Green
 
     $fsxFileSystemListFromAPI = $null
@@ -1321,6 +1414,8 @@ $kmsList = New-Object collections.arraylist
 $sqsList = New-Object collections.arraylist
 $backupCostsList = New-Object collections.arraylist
 $backupPlanList = New-Object collections.arraylist
+$eksNodeGroupList = New-Object collections.arraylist
+$eksList = New-Object collections.arraylist
 
 try{
 if ($RegionToQuery) {
@@ -1840,6 +1935,12 @@ $kmsList | Export-CSV -path $outputKMS
 
 Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
 $backupCostsList | Export-CSV -path $outputBackupCosts
+
+Write-Host "CSV file output to: $outputEKSClusters"  -ForegroundColor Green
+$eksList | Export-CSV -path $outputEKSClusters
+
+Write-Host "CSV file output to: $outputEKSNodegroups"  -ForegroundColor Green
+$eksNodeGroupList | Export-CSV -path $outputEKSNodegroups
 
 # Export to JSON
 Write-Host "JSON file output to: $outputBackupPlansJSON"  -ForegroundColor Green
