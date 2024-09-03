@@ -104,7 +104,7 @@ if($Anonymize){
 
 # Filename of the CSV output
 $output = "gce_vmdisk_info-$date_string.csv"
-$archiveFile = "gcp_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$archiveFile = "gcp_sizing_results_$date_string.zip"
 
 # List of output files
 $outputFiles = @(
