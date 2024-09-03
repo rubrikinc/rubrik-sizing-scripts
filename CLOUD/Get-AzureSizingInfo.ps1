@@ -252,12 +252,6 @@ param (
   [string]$NotAnonymizeFields
 )
 
-if (Test-Path "./output.log") {
-  Remove-Item -Path "./output.log"
-}
-
-Start-Transcript -Path "./output.log"
-
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
@@ -269,6 +263,23 @@ $azConfig = Get-AzConfig -DisplayBreakingChangeWarning
 Update-AzConfig -DisplayBreakingChangeWarning $false | Out-Null
 
 $date = Get-Date
+$date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
+
+$output_log = "output_azure_$date_string.log"
+
+if (Test-Path "./$output_log") {
+  Remove-Item -Path "./$output_log"
+}
+
+if($Anonymize){
+  "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
+  $log_for_anon_customers = "output_azure_not_anonymized_$date_string.log"
+  Start-Transcript -Path "./$log_for_anon_customers"
+} else{
+  Start-Transcript -Path "./$output_log"
+}
+
+
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
@@ -1342,7 +1353,7 @@ Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Na
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", 
+  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", "AzureBackupRGName", "ResourceGroupName", "DatabaseName", "ManagedInstanceName", "InstanceName",
                                   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
                                   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
                                   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
@@ -1363,22 +1374,27 @@ if ($Anonymize) {
   }
 
   $global:anonymizeDict = @{}
-  $global:anonymizeCounter = 0
+  $global:anonymizeCounter = @{}
 
-  function Get-NextAnonymizedValue {
-      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  function Get-NextAnonymizedValue ($anonField) {
+      $charSet = "0123456789"
       $base = $charSet.Length
       $newValue = ""
-      $global:anonymizeCounter++
+      if (-not $global:anonymizeCounter.ContainsKey($anonField)) {
+        $global:anonymizeCounter[$anonField] = 0
+      }
+      $global:anonymizeCounter[$anonField]++
 
-      $counter = $global:anonymizeCounter
+      $counter = $global:anonymizeCounter[$anonField]
       while ($counter -gt 0) {
           $counter--
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
+      
+      $paddedValue = $newValue.PadLeft(5, '0')
 
-      return $newValue
+      return "$($anonField)-$($paddedValue)"
   }
 
   function Anonymize-Data {
@@ -1388,18 +1404,53 @@ if ($Anonymize) {
 
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
-          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName
 
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
 
               if ($null -ne $originalValue) {
-                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
-                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
+                  # This is to handle the anonymization of list objects
+                  $anonymizedCollection = @()
+                  foreach ($item in $originalValue) {
+                      if (-not $global:anonymizeDict.ContainsKey("$item")) {
+                          $global:anonymizeDict["$item"] = Get-NextAnonymizedValue($propertyName)
+                      }
+                      $anonymizedCollection += $global:anonymizeDict["$item"]
+                  }
+                  $DataObject.$propertyName = $anonymizedCollection
+                } else{
+                  if (-not $global:anonymizeDict.ContainsKey("$($originalValue)")) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+                }
               }
-          }
+          } 
+          elseif ($propertyName -like "Label/Tag:*") {
+            # Must anonymize both the tag name and value
+
+            $tagValue = $DataObject.$propertyName
+            $anonymizedTagKey = ""
+            
+            $tagName = $propertyName.Substring(10)
+            
+            if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("Label/TagName")
+            }
+            $anonymizedTagKey = 'Label/Tag:' + $global:anonymizeDict["$tagName"]
+            
+            $anonymizedTagValue = $null
+            if ($null -ne $tagValue) {
+                if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
+                    $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue($anonymizedTagKey)
+                }
+                $anonymizedTagValue = $global:anonymizeDict[$tagValue]
+            }
+            $DataObject.PSObject.Properties.Remove($propertyName)
+            $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
+        }
           elseif ($property.Value -is [PSObject]) {
               $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
           }
@@ -1456,7 +1507,7 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   $vmListToCsv = $vmList.values
 
   if ($Anonymize) {
-    $vmListToCsv = Anonymize-Collection -Collection $vmList
+    $vmListToCsv = Anonymize-Collection -Collection $vmListToCsv
   }
 
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
@@ -1668,7 +1719,9 @@ if ($SkipAzureCosmosDB -ne $true) {
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
-Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
+if ($SkipAzureBackup -ne $true) {
+  Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
+}
 Write-Host
 
 Write-Host
@@ -1683,12 +1736,13 @@ if($Anonymize){
     } 
   } | Sort-Object -Property AnonymizedValue
 
-  $anonKeyValuesFileName = "azure_anonymized_keys_to_actual_values.csv"
+  $anonKeyValuesFileName = "azure_anonymized_keys_to_actual_values-$date_string.csv"
 
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
   Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
-  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
+  Write-Host "These files are not part of the zip file generated" -ForegroundColor Cyan
   Write-Host
 }
 
@@ -1700,7 +1754,7 @@ if($Anonymize){
   Stop-Transcript
 }
 
-$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="output.log - Log file"}
+$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$output_log - Log file"}
 
 # Extract only the unique file names from the array of objects for compression
 $filePaths = $outputFiles | ForEach-Object { $_.Files.Split(' - ')[0] }  | Sort-Object -Unique
@@ -1727,9 +1781,6 @@ Write-Host "Results have been compressed into $archiveFile and original files ha
 Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
-if($Anonymize){
-  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
-}
 Write-Host
 
 # Reset subscription context back to original.

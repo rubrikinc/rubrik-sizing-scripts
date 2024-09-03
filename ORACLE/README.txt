@@ -2,7 +2,7 @@
 #
 # Rubrik Data Collection for Oracle Tooling
 # 
-# Version: 1.1
+# Version: 1.2
 #
 # Developer: Shawn McElhinney
 #

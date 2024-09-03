@@ -76,12 +76,6 @@ param (
   [string]$NotAnonymizeFields
 )
 
-if (Test-Path "./output.log") {
-  Remove-Item -Path "./output.log"
-}
-
-Start-Transcript -Path "./output.log"
-
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
@@ -91,15 +85,31 @@ $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
 try{
 $date = Get-Date
+$date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
+
+$output_log = "output_gcp_$date_string.log"
+
+if (Test-Path "./$output_log") {
+  Remove-Item -Path "./$output_log"
+}
+
+if($Anonymize){
+  "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
+  $log_for_anon_customers = "output_gcp_not_anonymized_$date_string.log"
+  Start-Transcript -Path "./$log_for_anon_customers"
+} else{
+  Start-Transcript -Path "./$output_log"
+}
+
 
 # Filename of the CSV output
-$output = "gce_vmdisk_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
+$output = "gce_vmdisk_info-$date_string.csv"
 $archiveFile = "gcp_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 # List of output files
 $outputFiles = @(
     $output,
-    "output.log"
+    $output_log
 )
 
 
@@ -225,22 +235,27 @@ if ($Anonymize) {
   }
 
   $global:anonymizeDict = @{}
-  $global:anonymizeCounter = 0
+  $global:anonymizeCounter = @{}
 
-  function Get-NextAnonymizedValue {
-      $charSet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  function Get-NextAnonymizedValue ($anonField) {
+      $charSet = "0123456789"
       $base = $charSet.Length
       $newValue = ""
-      $global:anonymizeCounter++
+      if (-not $global:anonymizeCounter.ContainsKey($anonField)) {
+        $global:anonymizeCounter[$anonField] = 0
+      }
+      $global:anonymizeCounter[$anonField]++
 
-      $counter = $global:anonymizeCounter
+      $counter = $global:anonymizeCounter[$anonField]
       while ($counter -gt 0) {
           $counter--
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
+      
+      $paddedValue = $newValue.PadLeft(5, '0')
 
-      return $newValue
+      return "$($anonField)-$($paddedValue)"
   }
 
   function Anonymize-Data {
@@ -250,16 +265,28 @@ if ($Anonymize) {
 
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
-          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Label/Tag:*"
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Tag:*"
 
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
 
               if ($null -ne $originalValue) {
-                  if (-not $global:anonymizeDict.ContainsKey($originalValue)) {
-                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue
+                if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
+                  # This is to handle the anonymization of list objects
+                  $anonymizedCollection = @()
+                  foreach ($item in $originalValue) {
+                      if (-not $global:anonymizeDict.ContainsKey("$item")) {
+                          $global:anonymizeDict["$item"] = Get-NextAnonymizedValue($propertyName)
+                      }
+                      $anonymizedCollection += $global:anonymizeDict["$item"]
+                  }
+                  $DataObject.$propertyName = $anonymizedCollection
+                } else{
+                  if (-not $global:anonymizeDict.ContainsKey("$($originalValue)")) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+                }
               }
           }
           elseif ($property.Value -is [PSObject]) {
@@ -331,12 +358,13 @@ if($Anonymize){
     } 
   } | Sort-Object -Property AnonymizedValue
 
-  $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values.csv"
+  $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values-$date_string.csv"
 
   $transformedDict | Export-CSV -Path $anonKeyValuesFileName
   Write-Host
   Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
-  Write-Host "This file is not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
+  Write-Host "These files are not part of the zip file generated" -ForegroundColor Cyan
   Write-Host
 }
 
@@ -370,7 +398,3 @@ Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
-
-if($Anonymize){
-  Write-Host "NOTE: If any errors occurred, the log may not be anonymized" -ForegroundColor Cyan
-}
