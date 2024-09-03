@@ -344,22 +344,22 @@ if($Anonymize){
 }
 
 # Filenames of the CSVs output
-$outputEc2Instance = "aws_ec2_instance_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputFSXfilesystems = "aws_fsx_filesystem_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputFSX = "aws_fsx_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputDDB = "aws_ddb_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputKMS = "aws_kms_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputSQS = "aws_sqs_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputSecrets = "aws_secrets_numbers-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEKSClusters = "aws_eks_clusters_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEKSNodegroups = "aws_eks_nodegroups_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
-$archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$outputEc2Instance = "aws_ec2_instance_info-$date_string.csv"
+$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
+$outputRDS = "aws_rds_info-$date_string.csv"
+$outputS3 = "aws_s3_info-$date_string.csv"
+$outputEFS = "aws_efs_info-$date_string.csv"
+$outputFSXfilesystems = "aws_fsx_filesystem_info-$date_string.csv"
+$outputFSX = "aws_fsx_volume_info-$date_string.csv"
+$outputDDB = "aws_ddb_info-$date_string.csv"
+$outputKMS = "aws_kms_numbers-$date_string.csv"
+$outputSQS = "aws_sqs_numbers-$date_string.csv"
+$outputSecrets = "aws_secrets_numbers-$date_string.csv"
+$outputEKSClusters = "aws_eks_clusters_info-$date_string.csv"
+$outputEKSNodegroups = "aws_eks_nodegroups_info-$date_string.csv"
+$outputBackupCosts = "aws_backup_costs-$date_string.csv"
+$outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
+$archiveFile = "aws_sizing_results_$date_string.zip"
 
 # List of output files
 $outputFiles = @(
