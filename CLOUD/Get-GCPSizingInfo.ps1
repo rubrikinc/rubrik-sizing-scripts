@@ -31,6 +31,8 @@ Check your current gcloud context:
 - gcloud auth list
 - gcloud config list
 
+IAM permissions needed: "compute.instances.list,compute.disks.get,resourcemanager.projects.get"
+
 .NOTES
 Written by Steven Tong for community usage
 GitHub: stevenctong
@@ -132,47 +134,59 @@ if ($projectFile -ne '')
   # Else if a comma separated list of projects was provided on the command line, use that
   $projectList = $projects -split ','
 } else {
-  # If no project is provided use the current project
+  # If no project is provided, try to fetch all projects accessible via this account, else use the current project
+  Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
   try{
-    $projectList += & gcloud config get-value project
+    $projectList = & gcloud projects list --format="value(projectId)"
   } catch {
-    Write-Host "Failed to get project" -foregroundcolor Red
+    Write-Host "Failed to get projects" -foregroundcolor Red
+    Write-Host "Error: $_" -foregroundcolor Red
+    $projectList += & gcloud config get-value project
+    Write-Host "Failed to get project list, using current project: $projectList" -foregroundcolor green
+    Write-Host
   }
   
-  Write-Host "No project list provided, using current project: $projectList" -foregroundcolor green
+  Write-Host "Projects found: $projectList" -foregroundcolor green
 }
 
 # Loop through each project and grab the VM and disk info
 foreach ($project in $projectList)
 {
+  gcloud config set project $project
   Write-Host "Getting GCE VM info for current project: $project" -foregroundcolor green
 
   # gcloud SDK command to get each VM disk info a given project
+  $projectInfo = $null
   try{
     $projectInfo = & gcloud compute instances list --project=$project --format=json | jq '[ .[] | . as $vm | .disks[] | { vmName: $vm.name, vmID: $vm.id, status: $vm.status, diskName: .deviceName, diskSizeGb: .diskSizeGb} ]'
   } catch {
     Write-Host "Failed to get instances in project $project"
   }
-  $projectInfo = $projectInfo | ConvertFrom-Json
+  if($projectInfo -ne $null){
 
-  # Loop through each VM disk info and add it to the VM hash entry
-  foreach ($vm in $projectInfo)
-  {
-    # If the object key doesn't exist, then create it along with initial details of the VM info
-    if ($vmHash.containsKey($vm.'vmName') -eq $false)
+    $projectInfo = $projectInfo | ConvertFrom-Json
+
+    # Loop through each VM disk info and add it to the VM hash entry
+    foreach ($vm in $projectInfo)
     {
-      $vmHash.($vm.'vmName') = @{}
-      $vmHash.($vm.'vmName').'Project' = $project
-      $vmHash.($vm.'vmName').'VM' = $vm.'vmName'
-      $vmHash.($vm.'vmName').'DiskSizeGb' = [int]$vm.'diskSizeGb'
-      $vmHash.($vm.'vmName').'NumDisks' = 1
-      $vmHash.($vm.'vmName').'Status' = $vm.'status'
-    } else
-    {
-      $vmHash.($vm.'vmName').'DiskSizeGb' += [int]$vm.'diskSizeGb'
-      $vmHash.($vm.'vmName').'NumDisks' += 1
+      # If the object key doesn't exist, then create it along with initial details of the VM info
+      if ($vmHash.containsKey($vm.'vmName') -eq $false)
+      {
+        $vmHash.($vm.'vmName') = @{}
+        $vmHash.($vm.'vmName').'Project' = $project
+        $vmHash.($vm.'vmName').'VM' = $vm.'vmName'
+        $vmHash.($vm.'vmName').'DiskSizeGb' = [int]$vm.'diskSizeGb'
+        $vmHash.($vm.'vmName').'NumDisks' = 1
+        $vmHash.($vm.'vmName').'Status' = $vm.'status'
+      } else
+      {
+        $vmHash.($vm.'vmName').'DiskSizeGb' += [int]$vm.'diskSizeGb'
+        $vmHash.($vm.'vmName').'NumDisks' += 1
+      }
     }
+  } else{
+    Write-Host "Failed to (/did not) get instances in project $project" -ForeGroundColor Red
   }
 }
 

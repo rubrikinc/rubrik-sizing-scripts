@@ -91,6 +91,9 @@ Do not collect data on Azure Storage Accounts. This includes not collecting data
 .PARAMETER SkipAzureVMandManagedDisks
 Do not collect data on Azure VMs or Managed Disks.
 
+.PARAMETER SkipAzureCosmosDB
+Do not collect data on Azure CosmosDB.
+
 .PARAMETER Subscriptions
 A comma separated list of subscriptions to gather data from.
 
@@ -213,6 +216,9 @@ param (
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureVMandManagedDisks,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzureCosmosDB,
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -325,6 +331,7 @@ $outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
 $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
 $outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
+$outputAzCosmosDB = "azure_cosmos_db-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -350,6 +357,7 @@ $azVaultVMSQLItems = @()
 $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
 $backupCostDetails = @()
+$cosmosDBs = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -358,7 +366,7 @@ switch ($PSCmdlet.ParameterSetName) {
     foreach ($subscription in $Subscriptions.split(',')) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
@@ -372,7 +380,7 @@ switch ($PSCmdlet.ParameterSetName) {
     foreach ($subscription in $SubscriptionIds.split(',')) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
         $_
@@ -383,7 +391,7 @@ switch ($PSCmdlet.ParameterSetName) {
   'AllSubscriptions' {
     Write-Host "Finding all subscription(s)..." -ForegroundColor Green
     try {
-      $subs =  Get-AzSubscription -ErrorAction Stop
+      $subs =  Get-AzSubscription -TenantId $context.Tenant.Id -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information."
       $_
@@ -395,7 +403,7 @@ switch ($PSCmdlet.ParameterSetName) {
     # If no subscription is specified, only use the current subscription
     Write-Host "Gathering subscription information for $($context.Subscription.Name) ..." -ForegroundColor Green
     try {
-      $subs = Get-AzSubscription -SubscriptionName $context.Subscription.Name -ErrorAction Stop
+      $subs = Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $context.Subscription.Name -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information from current subscription: $($context.Subscription.Name)"
       $_
@@ -409,7 +417,7 @@ switch ($PSCmdlet.ParameterSetName) {
     $subs = @()
     foreach ($managementGroup in $ManagementGroups) {
       try {
-        $subs = $subs + $(Get-AzSubscription -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
       } catch {
         Write-Error "Unable to gather subscriptions from Management Group: $($managementGroup)"
         $_
@@ -429,7 +437,7 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
     Write-Error $_
@@ -451,7 +459,7 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
     Write-Error $_
@@ -547,9 +555,15 @@ foreach ($sub in $subs) {
     foreach ($sqlVm in $sqlVms) {
       Write-Progress -Id 3 -Activity "Getting SQL VM information for: $($sqlVm.Name)" -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
       $sqlVmNum++
-      if ($vmToUpdate = $vmList.values | Where-Object { $_.Name -eq $sqlVm.Name }) {
-        $vmToUpdate.HasMSSQL = "Yes"
-      } 
+      $vmKey = Generate-VMKey -vmName $sqlVm.Name -subName $sub.Name -tenantName $tenant.Name -region $sqlVm.Location
+      if($vmList.containsKey($vmKey)){
+        $vmList[$vmKey].HasMSSQL = "Yes"
+      } else{
+        Write-Host "Not reporting sizing for SQL VM: $vmKey"
+      }
+      # if ($vmToUpdate = $vmList.values | Where-Object { $_.Name -eq $sqlVm.Name }) {
+      #   $vmToUpdate.HasMSSQL = "Yes"
+      # } 
     }
     Write-Progress -Id 3 -Activity "Getting VM information for: $($vm.Name)" -Completed
   } #if ($SkipAzureVMandManagedDisks -ne $true) 
@@ -650,12 +664,34 @@ foreach ($sub in $subs) {
             $sqlObj.Add("InstanceType",$sqlDB.SkuName)
             $sqlObj.Add("Status",$sqlDB.Status)
 
+            $sqlAllocatedBytes = (
+              (Get-AzMetric -WarningAction SilentlyContinue `
+              -ResourceId $sqlDB.ResourceId `
+              -MetricName "allocated_data_storage" `
+              -AggregationType Maximum `
+              -StartTime (Get-Date).AddDays(-1))
+            )
+            $sqlUsedBytes = (
+                (Get-AzMetric  -WarningAction SilentlyContinue `
+                -ResourceId $sqlDB.ResourceId `
+                -MetricName "storage" `
+                -AggregationType Maximum `
+                -StartTime (Get-Date).AddDays(-1))
+            )
+            $sqlAllocatedAvg = ($sqlAllocatedBytes.Data.Maximum | Select-Object -Last 1)
+            $sqlUsedAvg = ($sqlUsedBytes.Data.Maximum | Select-Object -Last 1)
+
+            $sqlObj.Add("Allocated_Bytes", $sqlAllocatedAvg)
+            $sqlObj.Add("Utilized_Bytes", $sqlUsedAvg)
+
             $ltrPolicy = @{}
             try {
-              if ($sqlDB.DatabaseName -ne "master"){
-                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
-              } else{
+              if ($sqlDB.DatabaseName -eq "master"){
                 $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              } elseif($sqlObj.InstanceType -eq "DataWarehouse"){
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              } else{
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
               }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
@@ -669,10 +705,12 @@ foreach ($sub in $subs) {
 
             $strPolicy = @{}
             try {
-              if ($sqlDB.DatabaseName -ne "master"){
-                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
-              } else{
+              if ($sqlDB.DatabaseName -eq "master"){
                 $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              } elseif($sqlObj.InstanceType -eq "DataWarehouse"){
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+              } else{
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
               }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
@@ -778,6 +816,17 @@ foreach ($sub in $subs) {
       $sqlObj.Add("InstanceType",$MI.Sku.Name)
       $sqlObj.Add("Status",$MI.Status)
       $sqlObj.Add("Databases", $databasesCounter)
+
+      $sqlUsedBytes = (
+          (Get-AzMetric  -WarningAction SilentlyContinue `
+          -ResourceId $MI.Id `
+          -MetricName "storage_space_used_mb" `
+          -AggregationType Maximum `
+          -StartTime (Get-Date).AddDays(-1))
+      )
+      $sqlUsedAvg = ($sqlUsedBytes.Data.Maximum | Select-Object -Last 1)
+      $sqlObj.Add("storage_space_used_mb", $sqlUsedAvg)
+
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($MI.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
@@ -796,7 +845,73 @@ foreach ($sub in $subs) {
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
 
+  Write-Host "Getting CosmosDB information in $($sub.Name)" -ForeGroundColor Green
+  if($SkipAzureCosmosDB -ne $true) {
+    $resourceGroups = Get-AzResourceGroup
+    $rgCounter = 0
+    foreach ($rg in $resourceGroups) {
+      $rgCounter++
+      Write-Progress -Id 5 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
+      $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
+
+      foreach ($account in $cosmosDBAccounts) {
+
+        $dbAccountObj = [ordered] @{}
+        $dbAccountObj.Add("Subscription",$sub.Name)
+        $dbAccountObj.Add("Tenant",$tenant.Name)
+        $dbAccountObj.Add("Name",$account.Name)
+        $dbAccountObj.Add("Location",$account.Location)
+        $dbAccountObj.Add("Id",$account.Id)
+        $dbAccountObj.Add("Kind",$account.Kind)
+        $dbAccountObj.Add("InstanceId",$account.InstanceId)
+        $dbAccountObj.Add("BackupPolicyBackupIntervalInMinutes",$account.BackupPolicy.BackupIntervalInMinutes)
+        $dbAccountObj.Add("BackupPolicyBackupRetentionIntervalInHours",$account.BackupPolicy.BackupRetentionIntervalInHours)
+        $dbAccountObj.Add("BackupPolicyBackupType",$account.BackupPolicy.BackupType)
+        $dbAccountObj.Add("BackupPolicyBackupStorageRedundancy",$account.BackupPolicy.BackupStorageRedundancy)
+        $dbAccountObj.Add("BackupPolicyTier",$account.BackupPolicy.Tier)
+        $dbAccountObj.Add("MinimalTlsVersion",$account.MinimalTlsVersion)
+        $dbAccountObj.Add("NameDatabaseAccountOfferType",$account.NameDatabaseAccountOfferType)
+
+
+        $id = $account.Id
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName DocumentCount `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("DocumentCount",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName DataUsage `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("DataUsage",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName PhysicalPartitionSizeInfo `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("PhysicalPartitionSizeInfo",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName PhysicalPartitionCount `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("PhysicalPartitionCount",$azSAUsedCapacity)
+        $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $id `
+        -MetricName IndexUsage `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
+        $dbAccountObj.Add("IndexUsage",$azSAUsedCapacity)
+
+        $cosmosDBs += New-Object -TypeName PSObject -Property $dbAccountObj
+      }
+    }
+  } # if($SkipAzureCosmosDB -ne $true)
+
   if ($SkipAzureStorageAccounts -ne $true) {
+    Write-Host "Getting Storage Account information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azSAs = Get-AzStorageAccount -ErrorAction Stop
@@ -827,23 +942,23 @@ foreach ($sub in $subs) {
       $azSAUsedCapacity = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId $azSAResourceId `
         -MetricName UsedCapacity `
-        -AggregationType Average `
-        -StartTime (Get-Date).AddDays(-1)).Data.Average
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1)).Data.Maximum
       $metrics = @("BlobCapacity", "ContainerCount", "BlobCount")
       $azSABlob = (Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId "$($azSAResourceId)/blobServices/default" `
         -MetricNames $metrics `
-        -AggregationType Average `
+        -AggregationType Maximum `
         -StartTime (Get-Date).AddDays(-1))
       $metrics = @("FileCapacity", "FileShareCount", "FileCount")
       $azSAFile = Get-AzMetric -WarningAction SilentlyContinue `
         -ResourceId "$($azSAResourceId)/fileServices/default" `
         -MetricNames $metrics `
-        -AggregationType Average `
+        -AggregationType Maximum `
         -StartTime (Get-Date).AddDays(-1)
       $UsedCapacityBytes = ($azSAUsedCapacity | Select-Object -Last 1)
-      $UsedBlobCapacityBytes = (($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Average | Select-Object -Last 1)
-      $UsedFileShareCapacityBytes = (($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Average | Select-Object -Last 1)
+      $UsedBlobCapacityBytes = (($azSABlob | where-object {$_.id -like "*BlobCapacity"}).Data.Maximum | Select-Object -Last 1)
+      $UsedFileShareCapacityBytes = (($azSAFile | where-object {$_.id -like "*FileCapacity"}).Data.Maximum | Select-Object -Last 1)
 
       $azSAObj = [ordered] @{}
       $azSAObj.Add("StorageAccount",$azSA.StorageAccountName)
@@ -865,15 +980,15 @@ foreach ($sub in $subs) {
       $azSAObj.Add("UsedBlobCapacityTiB",[math]::round($($UsedBlobCapacityBytes / 1073741824 / 1024), 4))
       $azSAObj.Add("UsedBlobCapacityGB",[math]::round($($UsedBlobCapacityBytes / 1000000000), 3))
       $azSAObj.Add("UsedBlobCapacityTB",[math]::round($($UsedBlobCapacityBytes / 1000000000000), 7))
-      $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("BlobContainerCount",(($azSABlob | where-object {$_.id -like "*ContainerCount"}).Data.Maximum | Select-Object -Last 1))
+      $azSAObj.Add("BlobCount",(($azSABlob | where-object {$_.id -like "*BlobCount"}).Data.Maximum | Select-Object -Last 1))
       $azSAObj.Add("UsedFileShareCapacityBytes",$UsedFileShareCapacityBytes)
       $azSAObj.Add("UsedFileShareCapacityGiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824), 0))
       $azSAObj.Add("UsedFileShareCapacityTiB",[math]::round($($UsedFileShareCapacityBytes / 1073741824 / 1024), 4))
       $azSAObj.Add("UsedFileShareCapacityGB",[math]::round($($UsedFileShareCapacityBytes / 1000000000), 3))
       $azSAObj.Add("UsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 7))
-      $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Average | Select-Object -Last 1))
-      $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Average | Select-Object -Last 1))
+      $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Maximum | Select-Object -Last 1))
+      $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Maximum | Select-Object -Last 1))
       # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
       if ($azSA.Labels.Count -ne 0) {
         $uniqueAzLabels | Foreach-Object {
@@ -1048,6 +1163,7 @@ foreach ($sub in $subs) {
   } # if ($SkipAzureStorageAccounts -ne $true)
 
   if ($SkipAzureBackup -ne $true) {
+    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azVaults = Get-AzRecoveryServicesVault -ErrorAction Stop
@@ -1059,7 +1175,6 @@ foreach ($sub in $subs) {
 
     #Loop over all vaults in the subscription and get Azure Backup Details
     $azVaultNum=1
-    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     foreach ($azVault in $azVaults) {
       Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
       $azVaultNum++
@@ -1587,6 +1702,20 @@ if ($SkipAzureBackup -ne $true) {
 
 } # if ($SkipAzureBackup -ne $true)
 
+if ($SkipAzureCosmosDB -ne $true) {
+  Write-Host "Total # of Azure Cosmos DB Accounts: $('{0:N0}' -f $cosmosDBs.values.count)" -ForeGroundColor Green
+
+  $cosmosDBsToCsv = $cosmosDBs.values
+
+  if ($Anonymize) {
+    $cosmosDBsToCsv = Anonymize-Collection -Collection $cosmosDBs
+  }
+
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzCosmosDB - Azure Cosmos DB CSV file."}
+  $cosmosDBsToCsv | Export-CSV -path $outputAzCosmosDB -NoTypeInformation
+
+} #if ($SkipAzureCosmosDB -ne $true)
+
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
@@ -1656,7 +1785,7 @@ Write-Host
 
 # Reset subscription context back to original.
 try {
-  Set-AzContext -SubscriptionName $context.subscription.Name -ErrorAction Stop | Out-Null
+  Set-AzContext -SubscriptionName $context.subscription.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
 } catch {
   Write-Error "Unable to reset AzContext back to original context."
   $_
