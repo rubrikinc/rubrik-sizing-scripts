@@ -137,6 +137,23 @@
 
   .PARAMETER UserSpecifiedProfileNames
     A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
+  
+  .PARAMETER Anonymize
+    Anonymize data collected.
+
+  .PARAMETER AnonymizeFields
+    A comma separated list of fields in resulting csvs and jsons to anonymize. The list must be encased in
+    quotes, with no spaces between fields.
+
+  .PARAMETER NotAnonymizeFields
+    A comma separated list of fields in resulting csvs and jsons to not anonymize (only required for fields which are by default being 
+    anonymized). The list must be encased in quotes, with no spaces between fields.
+    Note that we currently anonymize the following fields:
+    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
+    "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
+    "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
+    "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
+    "RequestId"
 
   .EXAMPLE  
     >>>
@@ -271,14 +288,26 @@ param (
   # Region to use to for querying AWS.
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [string]$RegionToQuery
+  [string]$RegionToQuery,
+  # Option to anonymize the output files.
+  [Parameter(Mandatory=$false)]
+  [switch]$Anonymize,
+  # Choose to anonymize additional fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$AnonymizeFields,
+  # Choose to not anonymize certain fields
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$NotAnonymizeFields
 )
 
-if (Test-Path "./output.log") {
-  Remove-Item -Path "./output.log"
-}
+# Save the current culture so it can be restored later
+$CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
-Start-Transcript -Path "./output.log"
+# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+[System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
 # Print Powershell Version
 Write-Debug "$($PSVersionTable | Out-String)"
@@ -291,19 +320,34 @@ $defaultQueryRegion = "us-east-1"
 $defaultGovCloudQueryRegion = "us-gov-east-1"
 
 $date = Get-Date
+$date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
 $utcEndTime = $date.ToUniversalTime()
 $utcStartTime = $utcEndTime.AddDays(-7)
 
+$output_log = "output_aws_$date_string.log"
+
+if (Test-Path "./$output_log") {
+  Remove-Item -Path "./$output_log"
+}
+
+if($Anonymize){
+  "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
+  $log_for_anon_customers = "output_aws_not_anonymized_$date_string.log"
+  Start-Transcript -Path "./$log_for_anon_customers"
+} else{
+  Start-Transcript -Path "./$output_log"
+}
+
 # Filenames of the CSVs output
-$outputEc2Instance = "aws_ec2_instance_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputRDS = "aws_rds_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputS3 = "aws_s3_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputEFS = "aws_efs_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputFSX = "aws_fsx_info-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupCosts = "aws_backup_costs-$($date.ToString("yyyy-MM-dd_HHmm")).csv"
-$outputBackupPlansJSON = "aws-backup-plans-info-$($date.ToString("yyyy-MM-dd_HHmm")).json"
-$archiveFile = "aws_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
+$outputEc2Instance = "aws_ec2_instance_info-$date_string.csv"
+$outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
+$outputRDS = "aws_rds_info-$date_string.csv"
+$outputS3 = "aws_s3_info-$date_string.csv"
+$outputEFS = "aws_efs_info-$date_string.csv"
+$outputFSX = "aws_fsx_info-$date_string.csv"
+$outputBackupCosts = "aws_backup_costs-$date_string.csv"
+$outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
+$archiveFile = "aws_sizing_results_$date_string.zip"
 
 # List of output files
 $outputFiles = @(
@@ -315,7 +359,7 @@ $outputFiles = @(
     $outputFSX,
     $outputBackupCosts,
     $outputBackupPlansJSON,
-    "output.log"
+    $output_log
 )
 
 # Function to do the work
@@ -1309,6 +1353,173 @@ function addTagsToAllObjectsInList($list) {
   }
 }
 
+if ($Anonymize) {
+  Write-Host
+  Write-Host "Anonymizing..." -ForegroundColor Green
+
+  $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", "BackupPlanName", "DestinationBackupVaultArn", "Project", "TargetBackupVaultName", "CreatorRequestId", "Resources",
+                                  "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
+                                  "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
+                                  "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
+                                  "RequestId")
+  if($AnonymizeFields){
+    [string[]]$anonFieldsList = $AnonymizeFields.split(',')
+    foreach($field in $anonFieldsList){
+      if (-not $global:anonymizeProperties.Contains($field)) {
+        $global:anonymizeProperties += $field
+      }
+    }
+  }
+  if($NotAnonymizeFields){
+    [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
+    $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+  }
+
+  $global:anonymizeDict = @{}
+  $global:anonymizeCounter = @{}
+
+  function Get-NextAnonymizedValue ($anonField) {
+      $charSet = "0123456789"
+      $base = $charSet.Length
+      $newValue = ""
+      if (-not $global:anonymizeCounter.ContainsKey($anonField)) {
+        $global:anonymizeCounter[$anonField] = 0
+      }
+      $global:anonymizeCounter[$anonField]++
+
+      $counter = $global:anonymizeCounter[$anonField]
+      while ($counter -gt 0) {
+          $counter--
+          $newValue = $charSet[$counter % $base] + $newValue
+          $counter = [math]::Floor($counter / $base)
+      }
+      
+      $paddedValue = $newValue.PadLeft(5, '0')
+
+      return "$($anonField)-$($paddedValue)"
+  }
+
+  function Anonymize-Data {
+      param (
+          [PSObject]$DataObject
+      )
+
+      foreach ($property in $DataObject.PSObject.Properties) {
+          $propertyName = $property.Name
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName
+
+          if ($shouldAnonymize) {
+              $originalValue = $DataObject.$propertyName
+
+              if ($null -ne $originalValue) {
+                if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
+                  # This is to handle the anonymization of lists, such as Resources in the AWS backup plans JSON
+                  $anonymizedCollection = @()
+                  foreach ($item in $originalValue) {
+                      if (-not $global:anonymizeDict.ContainsKey("$item")) {
+                          $global:anonymizeDict["$item"] = Get-NextAnonymizedValue($propertyName)
+                      }
+                      $anonymizedCollection += $global:anonymizeDict["$item"]
+                  }
+                  $DataObject.$propertyName = $anonymizedCollection
+                } else{
+                  if (-not $global:anonymizeDict.ContainsKey("$($originalValue)")) {
+                      $global:anonymizeDict[$originalValue] = Get-NextAnonymizedValue($propertyName)
+                  }
+                  $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
+                }
+              }
+          } elseif ($propertyName -like "Tag:*") {
+            # Must anonymize both the tag name and value
+
+            $tagValue = $DataObject.$propertyName
+            $anonymizedTagKey = ""
+            
+            $tagName = $propertyName.Substring(4)
+            
+            if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
+            }
+            $anonymizedTagKey = 'Tag:' + $global:anonymizeDict["$tagName"]
+            
+            $anonymizedTagValue = $null
+            if ($null -ne $tagValue) {
+                if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
+                    $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue($anonymizedTagKey)
+                }
+                $anonymizedTagValue = $global:anonymizeDict[$tagValue]
+            }
+            $DataObject.PSObject.Properties.Remove($propertyName)
+            $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
+        } elseif($propertyName -eq "BackupPlans") {
+            $originalValue = $DataObject.$propertyName
+            if($originalValue -ne $null -and $originalValue -ne ""){
+              $plans = $originalValue.split(', ')
+              $newVal = ""
+              $count = 0
+              foreach($plan in $plans){
+                if (-not $global:anonymizeDict.ContainsKey("$plan")) {
+                  $global:anonymizeDict[$plan] = Get-NextAnonymizedValue("BackupPlanName")
+                }
+                if($count -ne 0){
+                  $newVal += " ,"
+                }
+                $newVal += $global:anonymizeDict[$plan]
+                $count++
+              }
+              $DataObject.$propertyName = $newVal
+            }
+          }
+          elseif ($property.Value -is [PSObject]) {
+              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+          }
+          elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
+              $anonymizedCollection = @()
+              foreach ($item in $property.Value) {
+                  if ($item -is [PSObject]) {
+                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedCollection += $anonymizedItem
+                  } else {
+                      $anonymizedCollection += $item
+                  }
+              }
+              $DataObject.$propertyName = $anonymizedCollection
+          }
+      }
+
+      return $DataObject
+  }
+
+  function Anonymize-Collection {
+      param (
+          [System.Collections.IEnumerable]$Collection
+      )
+
+      $anonymizedCollection = @()
+      foreach ($item in $Collection) {
+          if ($item -is [PSObject]) {
+              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedCollection += $anonymizedItem
+          } else {
+              $anonymizedCollection += $item
+          }
+      }
+
+      return $anonymizedCollection
+  }
+
+  # Anonymize each list
+  $ec2List = Anonymize-Collection -Collection $ec2List
+  $ec2UnattachedVolList = Anonymize-Collection -Collection $ec2UnattachedVolList
+  $rdsList = Anonymize-Collection -Collection $rdsList
+  $s3List = Anonymize-Collection -Collection $s3List
+  $s3ListAg = Anonymize-Collection -Collection $s3ListAg
+  $efsList = Anonymize-Collection -Collection $efsList
+  $fsxList = Anonymize-Collection -Collection $fsxList
+  $backupPlanList = Anonymize-Collection -Collection $backupPlanList
+  $backupCostsList = Anonymize-Collection -Collection $backupCostsList
+}
+
 # Export to CSV
 Write-Host ""
 
@@ -1415,12 +1626,31 @@ $s3BackupTotalTBsFormatted | ForEach-Object {
 }
 
 Write-Host
-Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $backupTotalNetUnblendedCost"  -ForegroundColor Green
+Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $("$")$backupTotalNetUnblendedCost"  -ForegroundColor Green
 Write-Host "See CSV for further breakdown of cost for Backup"  -ForegroundColor Green
 
 Write-Host
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
+
+if($Anonymize){
+  # Exporting as rows as new value - old value
+  $transformedDict = $global:anonymizeDict.GetEnumerator() | ForEach-Object {
+    [PSCustomObject]@{
+      AnonymizedValue = $_.Value
+      ActualValue   = $_.Key
+    } 
+  } | Sort-Object -Property AnonymizedValue
+
+  $anonKeyValuesFileName = "aws_anonymized_keys_to_actual_values-$date_string.csv"
+
+  $transformedDict | Export-CSV -Path $anonKeyValuesFileName
+  Write-Host
+  Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
+  Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
+  Write-Host "These files are not part of the zip file generated" -ForegroundColor Cyan
+  Write-Host
+}
 
 } catch{
   Write-Error "An error occurred and the script has exited prematurely:"
@@ -1444,6 +1674,9 @@ foreach ($file in $outputFiles) {
 Write-Host
 Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
+
+[System.Threading.Thread]::CurrentThread.CurrentCulture = $CurrentCulture
+[System.Threading.Thread]::CurrentThread.CurrentUICulture = $CurrentCulture
 
 Write-Host
 Write-Host
