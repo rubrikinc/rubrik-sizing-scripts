@@ -510,9 +510,9 @@ function getAWSData($cred) {
           $s3SizeTiB = $s3SizeGiB / 1024
         }
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGB") -NotePropertyValue $([math]::round($s3SizeGB, 3))
-        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($s3SizeTB, 7))
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($s3SizeTB, 4))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGiB") -NotePropertyValue $([math]::round($s3SizeGiB, 3))
-        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($s3SizeTiB, 7))
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($s3SizeTiB, 4))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize
       }
       foreach ($numObjStorage in $numObjStorages.GetEnumerator()) {
@@ -564,9 +564,9 @@ function getAWSData($cred) {
         "Name" = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
         "Volumes" = $volumes.count
         "SizeGiB" = $volSize
-        "SizeTiB" = [math]::round($($volSize / 1024), 7)
+        "SizeTiB" = [math]::round($($volSize / 1024), 4)
         "SizeGB" = [math]::round($($volSize * 1.073741824), 3)
-        "SizeTB" = [math]::round($($volSize * 0.001073741824), 7)
+        "SizeTB" = [math]::round($($volSize * 0.001073741824), 4)
         "Region" = $awsRegion
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
@@ -614,9 +614,9 @@ function getAWSData($cred) {
         "VolumeId" = $ec2UnattachedVolume.VolumeId
         "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
         "SizeGiB" = $ec2UnattachedVolume.Size
-        "SizeTiB" = [math]::round($($ec2UnattachedVolume.Size / 1024), 7)
+        "SizeTiB" = [math]::round($($ec2UnattachedVolume.Size / 1024), 4)
         "SizeGB" = [math]::round($($ec2UnattachedVolume.Size * 1.073741824), 3)
-        "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 7)
+        "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 4)
         "Region" = $awsRegion
         "VolumeType" = $ec2UnattachedVolume.VolumeType
         "BackupPlans" = ""
@@ -654,9 +654,9 @@ function getAWSData($cred) {
         "RDSInstance" = $rds.DBInstanceIdentifier
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
         "SizeGiB" = $rds.AllocatedStorage
-        "SizeTiB" = [math]::round($($rds.AllocatedStorage / 1024), 7)
+        "SizeTiB" = [math]::round($($rds.AllocatedStorage / 1024), 4)
         "SizeGB" = [math]::round($($rds.AllocatedStorage * 1.073741824), 3)
-        "SizeTB" = [math]::round($($rds.AllocatedStorage * 0.001073741824), 7)
+        "SizeTB" = [math]::round($($rds.AllocatedStorage * 0.001073741824), 4)
         "Region" = $awsRegion
         "InstanceType" = $rds.DBInstanceClass
         "Platform" = $rds.Engine
@@ -696,10 +696,10 @@ function getAWSData($cred) {
         "FileSystemProtection" = $efs.FileSystemProtection.ReplicationOverwriteProtection.Value
         "Name" = $efs.Name
         "SizeInBytes" = $efs.SizeInBytes.Value
-        "SizeGiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824), 7)
-        "SizeTiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824 / 1024), 7)
-        "SizeGB" = [math]::round($($efs.SizeInBytes.Value / 1000000000), 7)
-        "SizeTB" = [math]::round($($efs.SizeInBytes.Value / 1000000000000), 7)
+        "SizeGiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824), 4)
+        "SizeTiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824 / 1024), 4)
+        "SizeGB" = [math]::round($($efs.SizeInBytes.Value / 1000000000), 4)
+        "SizeTB" = [math]::round($($efs.SizeInBytes.Value / 1000000000000), 4)
         "NumberOfMountTargets" = $efs.NumberOfMountTargets
         "OwnerId" = $efs.OwnerId
         "PerformanceMode" = $efs.PerformanceMode
@@ -842,9 +842,9 @@ function getAWSData($cred) {
         "OpenZFSType" = ($filesystem.OpenZFSConfiguration -ne $null)
         "StorageCapacityBytes" = $filesystem.StorageCapacity * 1073741824
         "StorageCapacityGiB" = $filesystem.StorageCapacity
-        "StorageCapacityTiB" = [math]::round($($filesystem.StorageCapacity / 1024), 7)
-        "StorageCapacityGB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000), 7)
-        "StorageCapacityTB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000000), 7)
+        "StorageCapacityTiB" = [math]::round($($filesystem.StorageCapacity / 1024), 4)
+        "StorageCapacityGB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000), 4)
+        "StorageCapacityTB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000000), 4)
       }
       $namespace = "AWS/FSx"
       $dimensions = @(
@@ -867,10 +867,10 @@ function getAWSData($cred) {
         $maxStorageUsed = $storageUsed.Maximum
 
         $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedBytes" -Value $maxStorageUsed -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 4)) -Force
 
       } elseif($fsxObj.WindowsType -eq $true){
         $metricName = "StorageCapacityUtilization"
@@ -924,22 +924,22 @@ function getAWSData($cred) {
         $minFreeDataStorageCapacity = $storageUsed.Sum
 
         $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageBytes" -Value $maxPhysicalDiskUsage -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824 / 1024), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824 / 1024), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000000), 4)) -Force
 
         $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageBytes" -Value $maxLogicalDiskUsage -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824 / 1024), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824 / 1024), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000000), 4)) -Force
 
         $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityBytes" -Value $minFreeDataStorageCapacity -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824 / 1024), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824 / 1024), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000000), 4)) -Force
 
       } elseif($fsxObj.OpenZFSType -eq $true) {
         $metricName = "UsedStorageCapacity"
@@ -954,10 +954,10 @@ function getAWSData($cred) {
         $maxStorageUsed = $storageUsed.Maximum
 
         $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityBytes" -Value $maxStorageUsed -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 7)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 7)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 4)) -Force
 
       }
 
@@ -1043,15 +1043,15 @@ function getAWSData($cred) {
         "VolumeType" = $fsx.VolumeType
         "LifeCycle" = $fsx.LifeCycle
         "StorageUsedBytes" = $maxStorageUsed
-        "StorageUsedGiB" = [math]::round($($maxStorageUsed / 1073741824), 7)
-        "StorageUsedTiB" = [math]::round($($maxStorageUsed / 1073741824 / 1024), 7)
-        "StorageUsedGB" = [math]::round($($maxStorageUsed / 1000000000), 7)
-        "StorageUsedTB" = [math]::round($($maxStorageUsed / 1000000000000), 7)
+        "StorageUsedGiB" = [math]::round($($maxStorageUsed / 1073741824), 4)
+        "StorageUsedTiB" = [math]::round($($maxStorageUsed / 1073741824 / 1024), 4)
+        "StorageUsedGB" = [math]::round($($maxStorageUsed / 1000000000), 4)
+        "StorageUsedTB" = [math]::round($($maxStorageUsed / 1000000000000), 4)
         "StorageCapacityBytes" = $maxStorageCapacity
-        "StorageCapacityGiB" = [math]::round($($maxStorageCapacity / 1073741824), 7)
-        "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 7)
-        "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 7)
-        "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 7)
+        "StorageCapacityGiB" = [math]::round($($maxStorageCapacity / 1073741824), 4)
+        "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 4)
+        "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 4)
+        "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 4)
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
@@ -1137,10 +1137,10 @@ function getAWSData($cred) {
         "TableArn" = $ddbItem.TableArn
         "TableSizeBytes" = $ddbItem.TableSizeBytes
         "TableStatus" = $ddbItem.TableStatus.Value
-        "TableSizeGiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824), 7)
-        "TableSizeTiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824 / 1024), 7)
-        "TableSizeGB" = [math]::round($($ddbItem.TableSizeBytes/ 1000000000), 7)
-        "TableSizeTB" = [math]::round($($ddbItem.TableSizeBytes / 1000000000000), 7)
+        "TableSizeGiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824), 4)
+        "TableSizeTiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824 / 1024), 4)
+        "TableSizeGB" = [math]::round($($ddbItem.TableSizeBytes/ 1000000000), 4)
+        "TableSizeTB" = [math]::round($($ddbItem.TableSizeBytes / 1000000000000), 4)
         "ItemCount" = $ddbItem.ItemCount
         "DeletionProtectionEnabled" = $ddbItem.DeletionProtectionEnabled
         "GlobalTableVersion" = $ddbItem.GlobalTableVersion
