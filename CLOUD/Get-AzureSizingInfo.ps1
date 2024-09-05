@@ -76,6 +76,10 @@ may take a long time when large blob stores are located.
 .PARAMETER ManagementGroups
 A comma separated list of Azure Management Groups to gather data from.
 
+.PARAMETER GetKeyVaultAmounts
+Gets number of key vaults, and amount of certificates, keys, and secrets in each key vault. One must add the 
+permission 'Key Vault Reader' to each subscription in order to use the flag
+
 .PARAMETER SkipAzureBackup
 Do not collect data on Azure Backup Vaults, Policies, Items, and cost.
 
@@ -201,6 +205,9 @@ param (
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$GetContainerDetails,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$GetKeyVaultAmounts,
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureBackup,
@@ -332,6 +339,7 @@ $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_ite
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
 $outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
 $outputAzCosmosDB = "azure_cosmos_db-$($fileDate).csv"
+$outputAzKeyVault = "azure_key_vault-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -358,6 +366,7 @@ $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
 $backupCostDetails = @()
 $cosmosDBs = @()
+$keyVaultList = @()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -845,8 +854,8 @@ foreach ($sub in $subs) {
     Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -Completed
   } #if ($SkipAzureSQLandMI -ne $true)
 
-  Write-Host "Getting CosmosDB information in $($sub.Name)" -ForeGroundColor Green
   if($SkipAzureCosmosDB -ne $true) {
+    Write-Host "Getting CosmosDB information in $($sub.Name)" -ForeGroundColor Green
     $resourceGroups = Get-AzResourceGroup
     $rgCounter = 0
     foreach ($rg in $resourceGroups) {
@@ -1347,6 +1356,60 @@ foreach ($sub in $subs) {
     }
 
   } # if ($SkipAzureBackup -ne $true)
+
+  # Intentionally skipping this by default; one must pass in the flag to collect this information
+  # Can be changed to be collected by default later
+  # Note the difference between null values and 0 values for num items as documented below
+  if($GetKeyVaultAmounts -eq $true){
+    Write-Host "Getting Key Vault information in $($sub.Name)" -ForeGroundColor Green
+    $keyVaults = $null
+    try{
+      $keyVaults = Get-AzKeyVault -ErrorAction Stop
+    } catch {
+      Write-Error "Unable to collect Azure Key Vault information for subscription: $($sub.Name) under tenant $($tenant.Name)"
+      $_
+      Continue    
+    }
+    foreach($keyVault in $keyVaults){
+      $vaultDetails = [PSCustomObject]@{
+        VaultName = $keyVault.VaultName
+        Location = $keyVault.Location
+        Tenant = $tenant.Name
+        Subscription  = $sub.Name
+        NumCertificates =  $null
+        NumSecrets =  $null
+        NumKeys = $null
+      }
+      $certificates = $null
+      try{
+        $certificates = Get-AzKeyVaultCertificate -VaultName $keyVault.VaultName -ErrorAction Stop
+        $vaultDetails.NumCertificates = $certificates.count
+      } catch{
+        # Could not collect certificate info. Will not throw errors as often the same error will repeat
+        # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
+        # certificates
+      }
+      $secrets = $null
+      try{
+        $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName -ErrorAction Stop
+        $vaultDetails.NumSecrets = $secrets.count
+      } catch{
+        # Could not collect secrets info. Will not throw errors as often the same error will repeat
+        # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
+        # secrets
+      }
+      $keys = $null
+      try{
+        $keys = Get-AzKeyVaultKey -VaultName $keyVault.VaultName -ErrorAction Stop
+        $vaultDetails.NumKeys = $keys.count
+      } catch{
+        # Could not collect key info. Will not throw errors as often the same error will repeat
+        # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
+        # key
+      }
+      $keyVaultList += $vaultDetails
+    }
+  } # if($GetKeyVaultAmounts -eq $true){
 } # foreach ($sub in $subs)
 Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -Completed
 
@@ -1705,7 +1768,7 @@ if ($SkipAzureBackup -ne $true) {
 if ($SkipAzureCosmosDB -ne $true) {
   Write-Host "Total # of Azure Cosmos DB Accounts: $('{0:N0}' -f $cosmosDBs.values.count)" -ForeGroundColor Green
 
-  $cosmosDBsToCsv = $cosmosDBs.values
+  $cosmosDBsToCsv = $cosmosDBs
 
   if ($Anonymize) {
     $cosmosDBsToCsv = Anonymize-Collection -Collection $cosmosDBs
@@ -1715,6 +1778,20 @@ if ($SkipAzureCosmosDB -ne $true) {
   $cosmosDBsToCsv | Export-CSV -path $outputAzCosmosDB -NoTypeInformation
 
 } #if ($SkipAzureCosmosDB -ne $true)
+
+if($GetKeyVaultAmounts -eq $true){
+  Write-Host "Total # of Azure Key Vaults: $('{0:N0}' -f $keyVaultList.values.count)" -ForeGroundColor Green
+
+  $keyVaultListToCsv = $keyVaultList
+
+  if ($Anonymize) {
+    $keyVaultListToCsv = Anonymize-Collection -Collection $keyVaultList
+  }
+
+  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzKeyVault - Azure Key Vault CSV file."}
+  $keyVaultListToCsv | Export-CSV -path $outputAzKeyVault -NoTypeInformation
+}
+
 
 Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
@@ -1799,3 +1876,4 @@ if ($azConfig.Value -eq $true) {
     $_
   }
 }
+
