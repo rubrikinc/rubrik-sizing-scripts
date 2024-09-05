@@ -24,6 +24,8 @@ If you are running using gcloud SDK then you must use the following to login:
 - gcloud init
 See: https://cloud.google.com/tools/powershell/docs/quickstart
 
+If running locally, must do 'Install-Module GoogleCloud'
+
 Get a list of projects using:
 - Get-gcpproject | select name,projectid
 
@@ -103,12 +105,17 @@ if($Anonymize){
 
 
 # Filename of the CSV output
-$output = "gce_vmdisk_info-$date_string.csv"
+$outputVM = "gce_vm_info-$date_string.csv"
+$outputAttachedDisks = "gce_attached_disk_info-$date_string.csv"
+$outputUnattachedDisks = "gce_unattached_disk_info-$date_string.csv"
+
 $archiveFile = "gcp_sizing_results_$date_string.zip"
 
 # List of output files
 $outputFiles = @(
-    $output,
+    $outputVM,
+    $outputAttachedDisks,
+    $outputUnattachedDisks,
     $output_log
 )
 
@@ -116,10 +123,6 @@ $outputFiles = @(
 Write-Host "Current glcoud context`n" -foregroundcolor green
 & gcloud auth list
 & gcloud config list --format 'value(core)'
-
-# Each GCE VM will be a key in a hash table
-# Value will be hash table containing the disk details for that object
-$vmHash = @{}
 
 # Clear out variable in case it exists
 $projectList = ''
@@ -134,92 +137,123 @@ if ($projectFile -ne '')
   # Else if a comma separated list of projects was provided on the command line, use that
   $projectList = $projects -split ','
 } else {
-  # If no project is provided, try to fetch all projects accessible via this account, else use the current project
   Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
   try{
-    $projectList = & gcloud projects list --format="value(projectId)"
+    $projectList = Get-GcpProject
   } catch {
     Write-Host "Failed to get projects" -foregroundcolor Red
     Write-Host "Error: $_" -foregroundcolor Red
-    $projectList += & gcloud config get-value project
-    Write-Host "Failed to get project list, using current project: $projectList" -foregroundcolor green
-    Write-Host
   }
   
-  Write-Host "Projects found: $projectList" -foregroundcolor green
+  Write-Host "Projects found: $($projectList.ProjectId)" -foregroundcolor green
 }
 
+$vmList = New-Object collections.arraylist
+$attachedDiskList = New-Object collections.arraylist
+$unattachedDiskList = New-Object collections.arraylist
 # Loop through each project and grab the VM and disk info
 foreach ($project in $projectList)
 {
-  gcloud config set project $project
-  Write-Host "Getting GCE VM info for current project: $project" -foregroundcolor green
+  gcloud config set project $($project.ProjectId)
+  Write-Host "Getting GCE VM info for current project: $($project.ProjectId)" -foregroundcolor green
 
-  # gcloud SDK command to get each VM disk info a given project
   $projectInfo = $null
   try{
-    $projectInfo = & gcloud compute instances list --project=$project --format=json | jq '[ .[] | . as $vm | .disks[] | { vmName: $vm.name, vmID: $vm.id, status: $vm.status, diskName: .deviceName, diskSizeGb: .diskSizeGb} ]'
+    $projectInfo = Get-GceInstance -Project $($project.ProjectId) 
+
   } catch {
-    Write-Host "Failed to get instances in project $project"
+    Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
+    Write-Host $_ -foregroundcolor red
   }
-  if($projectInfo -ne $null){
+   
+ 
+  foreach ($vm in $projectInfo)
+  {
 
-    $projectInfo = $projectInfo | ConvertFrom-Json
+    $diskCount = 0
+    $diskSizeGb = 0
+    $numDiskEncryption = 0
+    $sizeEncryptedDisksGb = 0
 
-    # Loop through each VM disk info and add it to the VM hash entry
-    foreach ($vm in $projectInfo)
-    {
-      # If the object key doesn't exist, then create it along with initial details of the VM info
-      if ($vmHash.containsKey($vm.'vmName') -eq $false)
-      {
-        $vmHash.($vm.'vmName') = @{}
-        $vmHash.($vm.'vmName').'Project' = $project
-        $vmHash.($vm.'vmName').'VM' = $vm.'vmName'
-        $vmHash.($vm.'vmName').'DiskSizeGb' = [int]$vm.'diskSizeGb'
-        $vmHash.($vm.'vmName').'NumDisks' = 1
-        $vmHash.($vm.'vmName').'Status' = $vm.'status'
-      } else
-      {
-        $vmHash.($vm.'vmName').'DiskSizeGb' += [int]$vm.'diskSizeGb'
-        $vmHash.($vm.'vmName').'NumDisks' += 1
+    foreach($disk in $vm.Disks){
+      $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
+      $diskObj = [PSCustomObject] @{
+        "Project" = $($project.ProjectId)
+        "Zone" = $diskInfo.Zone.split('/')[-1]
+        "VMName" = $vm.Name
+        "DiskName" = $diskInfo.Name
+        "Id" = $diskInfo.Id
+        "SizeGb" = $diskInfo.SizeGb
+        "SizeTb" = $diskInfo.SizeGb / 1000
+        "DiskEncryptionKey" = $diskInfo.DiskEncryptionKey
+        "SourceImageSource" = $null
+        "SourceImageName" = $null
       }
+      if($diskInfo.SourceImage -ne $null){
+        $diskObj.SourceImageSource = $diskInfo.SourceImage.split('/')[-4]
+        $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
+      }
+
+      $diskCount++
+      $diskSizeGb += $diskInfo.SizeGb
+      if($diskInfo.DiskEncryptionKey){
+        $numDiskEncryption++
+        $sizeEncryptedDisksGb += $diskInfo.SizeGb
+      }
+
+      $attachedDiskList.Add($diskObj) | Out-Null
+      
     }
-  } else{
-    Write-Host "Failed to (/did not) get instances in project $project" -ForeGroundColor Red
-  }
-}
 
-# Final list of VMs with the details we want
-$vmList = @()
+    $vmObj = [PSCustomObject] @{
+      "Project" = $($project.ProjectId)
+      "Zone" = $vm.Zone.split('/')[-1]
+      "Name" = $vm.Name
+      "TotalDiskCount" = $diskCount
+      "TotalDiskSizeGb" = $diskSizeGb
+      "TotalDiskSizeTb" = $diskSizeGb / 1000
+      "EncryptedDisksCount" = $numDiskEncryption
+      "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
+      "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
+      "Status" = $vm.Status
+    }
 
-# Total number of objects to process
-$vmCount = $vmHash.count
-$count = 0
+    $vmList.Add($vmObj) | Out-Null
 
-# Iterate through the hash table that has key for each object, along with disk details
-foreach ($i in $vmHash.getEnumerator())
-{
-  $count += 1
-  Write-Host "Processing [ $count / $vmCount ] : $($i.Value.VM)"
-
-  # Create VM object that we want
-  $vmObj = [PSCustomObject] @{
-      "VM" = $i.value.VM
-      "NumDisks" = $i.value.NumDisks
-      "SizeGiB" = $i.value.DiskSizeGb
-      "SizeTiB" = [math]::round($($i.value.DiskSizeGb / 1024), 7)
-      "SizeGB" = [math]::round($($i.value.DiskSizeGb * 1.073741824), 3)
-      "SizeTB" = [math]::round($($i.value.DiskSizeGb * 0.001073741824), 7)
-      "Project" = $i.value.Project
-      "Status" = $i.value.Status
   }
 
-  $vmList += $vmObj
+  $allDisks = $null
+  try{
+    $allDisks = Get-GceDisk -Project $($project.ProjectId) 
+  } catch{
+    Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
+    Write-Host $_ -foregroundcolor red
+  }
+  foreach($disk in $allDisks){
+    if ($disk.Users -eq $null){
+      $diskObj = [PSCustomObject] @{
+        "Project" = $($project.ProjectId)
+        "Zone" = $disk.Zone.split('/')[-1]
+        "DiskName" = $disk.Name
+        "Id" = $disk.Id
+        "SizeGb" = $disk.SizeGb
+        "SizeTb" = $disk.SizeGb / 1000
+        "DiskEncryptionKey" = $disk.DiskEncryptionKey
+        "SourceImageSource" = $null
+        "SourceImageName" = $null
+      }
+      if($disk.SourceImage -ne $null){
+        $diskObj.SourceImageSource = $disk.SourceImage.split('/')[-4]
+        $diskObj.SourceImageName = $disk.SourceImage.split('/')[-1]
+      }
+      $unattachedDiskList.Add($diskObj) | Out-Null
+    }
+  }
 }
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("VM", "Project")
+  $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey")
 
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
@@ -252,7 +286,7 @@ if ($Anonymize) {
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
-      
+
       $paddedValue = $newValue.PadLeft(5, '0')
 
       return "$($anonField)-$($paddedValue)"
@@ -328,22 +362,29 @@ if ($Anonymize) {
   }
 
   $vmList = Anonymize-Collection -Collection $vmList
+  $attachedDiskList = Anonymize-Collection -Collection $attachedDiskList
+  $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
 }
 
-$totalGiB = ($vmList.sizeGiB | Measure -Sum).sum
-$totalGB = ($vmList.sizeGB | Measure -Sum).sum
-$totalTiB = ($vmList.sizeTiB | Measure -Sum).sum
-$totalTB = ($vmList.sizeTB | Measure -Sum).sum
+$totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.sizeGb | Measure -Sum).sum
+$totalTB = ($attachedDiskList.sizeTb | Measure -Sum).sum + ($unattachedDiskList.sizeTb | Measure -Sum).sum
 
 Write-Host
 Write-Host "Total # of GCE VMs: $($vmList.count)" -foregroundcolor green
-Write-Host "Total # of disks: $(($vmList.numDisks | Measure -Sum).sum)" -foregroundcolor green
-Write-Host "Total capacity of all disks: $totalGiB GiB or $totalGB GB or $totalTiB TiB or $totalTB TB" -foregroundcolor green
+Write-Host "Total # of attached disks: $($attachedDiskList.count)" -foregroundcolor green
+Write-Host "Total # of unattached disks: $($unattachedDiskList.count)" -foregroundcolor green
+Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foregroundcolor green
 
 # Export to CSV
-Write-Host ""
-Write-Host "CSV file output to: $output" -foregroundcolor green
-$vmList | Export-CSV -path $output
+Write-Host
+Write-Host "CSV file output to: $outputVM" -foregroundcolor green
+$vmList | Export-CSV -path $outputVM
+Write-Host
+Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
+$attachedDiskList | Export-CSV -path $outputAttachedDisks
+Write-Host
+Write-Host "CSV file output to: $outputUnattachedDisks" -foregroundcolor green
+$unattachedDiskList | Export-CSV -path $outputUnattachedDisks
 
 Write-Host
 Write-Host
