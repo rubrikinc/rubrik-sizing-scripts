@@ -195,6 +195,11 @@ foreach ($project in $projectList)
         $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
       }
 
+      foreach ($tag in $diskInfo.Labels) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+      }
+
       $diskCount++
       $diskSizeGb += $diskInfo.SizeGb
       if($diskInfo.DiskEncryptionKey){
@@ -218,11 +223,15 @@ foreach ($project in $projectList)
       "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
       "Status" = $vm.Status
     }
+    foreach ($tag in $vm.Labels) { 
+      $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+      $vmObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+    }
 
     $vmList.Add($vmObj) | Out-Null
 
   }
-
+  
   $allDisks = $null
   try{
     $allDisks = Get-GceDisk -Project $($project.ProjectId) 
@@ -247,10 +256,39 @@ foreach ($project in $projectList)
         $diskObj.SourceImageSource = $disk.SourceImage.split('/')[-4]
         $diskObj.SourceImageName = $disk.SourceImage.split('/')[-1]
       }
+      foreach ($tag in $disk.Labels) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+      }
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
   }
 }
+
+function addTagsToAllObjectsInList($list) {
+  # Determine all unique tag keys
+  $allTagKeys = @{}
+  foreach ($obj in $list) {
+      $properties = $obj.PSObject.Properties
+      foreach ($property in $properties) {
+          if (-not $allTagKeys.ContainsKey($property.Name)) {
+              $allTagKeys[$property.Name] = $true
+          }
+      }
+  }
+  
+  $allTagKeys = $allTagKeys.Keys
+  
+  # Ensure each object has all possible tag keys
+  foreach ($obj in $list) {
+      foreach ($key in $allTagKeys) {
+          if (-not $obj.PSObject.Properties.Name.Contains($key)) {
+              $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
+          }
+      }
+  }
+}
+
 
 if ($Anonymize) {
   $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey")
@@ -323,6 +361,29 @@ if ($Anonymize) {
                 }
               }
           }
+          elseif ($propertyName -like "Label/Tag:*") {
+            # Must anonymize both the tag name and value
+
+            $tagValue = $DataObject.$propertyName
+            $anonymizedTagKey = ""
+            
+            $tagName = $propertyName.Substring(10)
+            
+            if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("Label/TagName")
+            }
+            $anonymizedTagKey = 'Label/Tag:' + $global:anonymizeDict["$tagName"]
+            
+            $anonymizedTagValue = $null
+            if ($null -ne $tagValue) {
+                if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
+                  $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("Label/TagValue")#$anonymizedTagKey
+                }
+                $anonymizedTagValue = $global:anonymizeDict[$tagValue]
+            }
+            $DataObject.PSObject.Properties.Remove($propertyName)
+            $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
+        }
           elseif ($property.Value -is [PSObject]) {
               $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
           }
@@ -377,12 +438,15 @@ Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foreground
 
 # Export to CSV
 Write-Host
+addTagsToAllObjectsInList($vmList)
 Write-Host "CSV file output to: $outputVM" -foregroundcolor green
 $vmList | Export-CSV -path $outputVM
 Write-Host
+addTagsToAllObjectsInList($attachedDiskList)
 Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
 $attachedDiskList | Export-CSV -path $outputAttachedDisks
 Write-Host
+addTagsToAllObjectsInList($unattachedDiskList)
 Write-Host "CSV file output to: $outputUnattachedDisks" -foregroundcolor green
 $unattachedDiskList | Export-CSV -path $outputUnattachedDisks
 
