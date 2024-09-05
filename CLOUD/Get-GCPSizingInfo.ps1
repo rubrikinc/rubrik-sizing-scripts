@@ -195,9 +195,12 @@ foreach ($project in $projectList)
         $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
       }
 
-      foreach ($tag in $diskInfo.Labels) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+      $tagCounter = 0
+      foreach($key in $diskInfo.Labels.Keys){
+        $value = $diskInfo.Labels.Values.Split('\n')[$tagCounter]
+        $key = $key -replace '[^a-zA-Z0-9]', '_' 
+        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+        $tagCounter++
       }
 
       $diskCount++
@@ -223,9 +226,12 @@ foreach ($project in $projectList)
       "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
       "Status" = $vm.Status
     }
-    foreach ($tag in $vm.Labels) { 
-      $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-      $vmObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+    $tagCounter = 0
+    foreach($key in $vm.Labels.Keys){
+      $value = $vm.Labels.Values.Split('\n')[$tagCounter]
+      $key = $key -replace '[^a-zA-Z0-9]', '_' 
+      $vmObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+      $tagCounter++
     }
 
     $vmList.Add($vmObj) | Out-Null
@@ -256,9 +262,12 @@ foreach ($project in $projectList)
         $diskObj.SourceImageSource = $disk.SourceImage.split('/')[-4]
         $diskObj.SourceImageName = $disk.SourceImage.split('/')[-1]
       }
-      foreach ($tag in $disk.Labels) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $tag.Value -Force 
+      $tagCounter = 0
+      foreach($key in $disk.Labels.Keys){
+        $value = $disk.Labels.Values.Split('\n')[$tagCounter]
+        $key = $key -replace '[^a-zA-Z0-9]', '_' 
+        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+        $tagCounter++
       }
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
