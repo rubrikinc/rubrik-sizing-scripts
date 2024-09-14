@@ -150,11 +150,11 @@
     Anonymize data collected.
 
   .PARAMETER AnonymizeFields
-    A comma separated list of fields in resulting csvs and jsons to anonymize. The list must be encased in
+    A comma separated list of fields in resulting csvs and JSONs to anonymize. The list must be encased in
     quotes, with no spaces between fields.
 
   .PARAMETER NotAnonymizeFields
-    A comma separated list of fields in resulting csvs and jsons to not anonymize (only required for fields which are by default being 
+    A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
     anonymized). The list must be encased in quotes, with no spaces between fields.
     Note that we currently anonymize the following fields:
     "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
