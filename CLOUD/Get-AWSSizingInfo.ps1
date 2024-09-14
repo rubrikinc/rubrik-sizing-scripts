@@ -277,13 +277,18 @@ param (
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedProfileNames,
-  # Get info from a comma separated list of user supplied accounts when using a cross account role.
+  # Get list of user supplied AWS accounts from a comma separated list on the command line.
   [Parameter(ParameterSetName='AWSSSO')]
-  [Parameter(ParameterSetName='CrossAccountRole',
-    Mandatory=$true)]
+  [Parameter(ParameterSetName='CrossAccountRole')]
   [Parameter(ParameterSetName='OrganizationAccountAccessRole')]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedAccounts,
+  # Get list of user supplied AWS accounts from a file.
+  [Parameter(ParameterSetName='AWSSSO')]
+  [Parameter(ParameterSetName='CrossAccountRole')]
+  [Parameter(ParameterSetName='OrganizationAccountAccessRole')]
+  [ValidateNotNullOrEmpty()]
+  [string]$UserSpecifiedAccountsFile,
   # Limit search for data to specific regions.
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -1498,7 +1503,14 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     exit 1
   } 
   Write-Host "Source Profile/Credential is: $caller"
-  if ($UserSpecifiedAccounts) {
+  if ($UserSpecifiedAccounts -and $UserSpecifiedAccountsFile) {
+    Write-Error "Only -UserSpecifiedAccounts or -UserSpecifiedAccountsFile can be specified, not both."
+    exit 1
+  }
+  if ($UserSpecifiedAccountsFile) {
+    $userAwsAccounts = Get-Content -Path $UserSpecifiedAccountsFile
+    $awsAccounts = Get-ORGAccountList | Where-Object {$_.ID -in $($userAwsAccounts)}
+  } elseif ($UserSpecifiedAccounts) {
     $awsAccounts = Get-ORGAccountList | Where-Object {$_.ID -in $UserSpecifiedAccounts.split(',')}
   } else {
     $awsAccounts = Get-ORGAccountList
@@ -1581,7 +1593,14 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
       }
   }
 
-  if ($UserSpecifiedAccounts) {
+  if ($UserSpecifiedAccounts -and $UserSpecifiedAccountsFile) {
+    Write-Error "Only -UserSpecifiedAccounts or -UserSpecifiedAccountsFile can be specified, not both."
+    exit 1
+  }
+  if ($UserSpecifiedAccountsFile) {
+    $userAwsAccounts = Get-Content -Path $UserSpecifiedAccountsFile
+    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion | Where-Object {$_.AccountId -in  $($userAwsAccounts)}
+  } elseif ($UserSpecifiedAccounts) {
     $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion | Where-Object {$_.AccountId -in $UserSpecifiedAccounts.split(',')}
   } else {
     $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion
@@ -1629,9 +1648,21 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
       exit 1
     }
     Write-Host "Source Profile/Credential is: $caller"
-    [string[]]$awsAccounts = $UserSpecifiedAccounts.split(',')
-  
-    $accountCounter = 0
+
+    if ($UserSpecifiedAccounts -and $UserSpecifiedAccountsFile) {
+      Write-Error "Only -UserSpecifiedAccounts or -UserSpecifiedAccountsFile can be specified, not both."
+      exit 1
+    }
+    if ($UserSpecifiedAccountsFile) {
+      $awsAccounts = Get-Content -Path $UserSpecifiedAccountsFile
+    } elseif ($UserSpecifiedAccounts) {
+      [string[]]$awsAccounts = $UserSpecifiedAccounts.split(',')
+    }
+    else {
+      Write-Error "-UserSpecifiedAccounts or -UserSpecifiedAccountsFile parameter must be specified."
+      exit 1
+    }
+    $accountCounter = 1
     foreach ($awsAccount in $awsAccounts) {
       Write-Host
       Write-Host "Searching account: $awsAccount"
