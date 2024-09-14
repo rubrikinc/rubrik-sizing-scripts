@@ -127,15 +127,15 @@
 
   .PARAMETER SSORegion
     When set, the script will authenticate AWS using AWS SSO. -SSORegion is used to specify the region in which to authenticate
-    with AWS SSO. Also requires the 'SSORoleName' and 'SSOStartURL' parameters.
+    with AWS SSO. Also requires the 'SSOParameterSetName' and 'SSOStartURL' parameters.
 
-  .PARAMETER SSORoleName
-    When set , the script will authenticate with AWS using AWS SSO. The script will use the SSO Role specified by -SSORoleName
+  .PARAMETER SSOParameterSetName
+    When set , the script will authenticate with AWS using AWS SSO. The script will use the SSO Parameter Set specified by -SSOParameterSetName
     to access the AWS accounts. Also requires the 'SSORegion' and 'SSOStartURL' parameters.
 
   .PARAMETER SSOStartURL
     When set, the script will authenticate with AWS using AWS SSO. The script will use the SSO URL specified by SSOStartURL
-    to access the AWS accounts. Also requires the 'SSORegion' and 'SSORoleName' parameters.
+    to access the AWS accounts. Also requires the 'SSORegion' and 'SSOParameterSetName' parameters.
 
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
@@ -230,7 +230,7 @@
     [cloudshell-user@ip ~]$ pwsh
     PowerShell 7.3.4
 
-    PS /home/cloudshell-user> ./Get-AWSSizingInfo.ps1 -SSORoleName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
+    PS /home/cloudshell-user> ./Get-AWSSizingInfo.ps1 -SSOParameterSetName AdministratorAccess -SSOStartURL "https://mycompany.awsapps.com/start#/"
 
 #>
 [CmdletBinding(DefaultParameterSetName = 'DefaultProfile')]
@@ -260,7 +260,7 @@ param (
   [Parameter(ParameterSetName='AWSSSO',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
-  [string]$SSORoleName,
+  [string]$SSOParameterSetName,
   [Parameter(ParameterSetName='AWSSSO',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -1573,7 +1573,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
         Write-Host ""
         Write-Error "An error occurred:"
         Write-Error $_
-        Write-Error "Unable to authenticate with SSO $($SSOStartURL) using SSO role $($SSORoleName) in region $($SSORegion)."
+        Write-Error "Unable to authenticate with SSO $($SSOStartURL) using SSO parameter set $($SSOParameterSetName) in region $($SSORegion)."
         exit 1
       }
   }
@@ -1589,12 +1589,12 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
     try {
-      $ssoCred = Get-SSORoleCredential -AccessToken $Token.AccessToken -AccountId $awsAccount.AccountId -RoleName $SSORoleName -region $SSORegion
+      $ssoCred = Get-SSORoleCredential -AccessToken $Token.AccessToken -AccountId $awsAccount.AccountId -RoleName $SSOParameterSetName -region $SSORegion
     } catch {
       Write-Host ""
       Write-Error "An error occurred:"
       Write-Error $_
-      Write-Error "Unable to get SSO Credentials for AWS account $($awsAccount.AccountId) using SSO Role $($SSORoleName)."
+      Write-Error "Unable to get SSO Credentials for AWS account $($awsAccount.AccountId) using SSO parameter set $($SSOParameterSetName)."
       continue
     }
     try {
