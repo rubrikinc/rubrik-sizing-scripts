@@ -318,7 +318,7 @@ param (
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
-# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+# Set the culture to en-US; this is to ensure that output to CSV is formatted properly
 [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
