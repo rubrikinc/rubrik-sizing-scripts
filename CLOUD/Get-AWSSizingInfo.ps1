@@ -433,10 +433,10 @@ function getAWSData($cred) {
     }
     $s3Buckets = $($cwBucketInfo | Select-Object -ExpandProperty Dimensions | Where-Object -Property Name -eq "BucketName" | select-object -Property Value -Unique).value
     Write-Host "Found" $s3Buckets.Count "S3 bucket(s)."  -ForegroundColor Green
-    $counter = 0
+    $counter = 1
     foreach ($s3Bucket in $s3Buckets) {
+      Write-Progress -ID 2 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing bucket:' -Status $s3Bucket -PercentComplete (($counter / $s3Buckets.Count) * 100)
       $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new() 
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
@@ -534,7 +534,7 @@ function getAWSData($cred) {
 
       $s3List.Add($s3obj) | Out-Null
     }  
-    Write-Progress -Activity 'Processing bucket:' -PercentComplete 100 -Completed
+    Write-Progress -ID 2 -Activity "Processing bucket: $($s3Bucket)" -Completed
 
     Write-Host "Getting EC2 instance info for region: $awsRegion"  -ForegroundColor Green
     $ec2Instances = $null
@@ -547,10 +547,10 @@ function getAWSData($cred) {
 
     Write-Host "Found" $ec2Instances.Count "EC2 instance(s)."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($ec2 in $ec2Instances) {
+      Write-Progress -ID 3 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($counter) of $($ec2Instances.Count)" -PercentComplete (($counter / $ec2Instances.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing EC2 Instances:' -Status $ec2.InstanceId -PercentComplete (($counter / $ec2Instances.Count) * 100)
       $volSize = 0
       # Contains list of attached volumes to the current EC2 instance
       $volumes = $ec2.BlockDeviceMappings.ebs
@@ -597,7 +597,7 @@ function getAWSData($cred) {
 
       $ec2List.Add($ec2obj) | Out-Null
     }
-    Write-Progress -Activity 'Processing EC2 Instances:' -PercentComplete 100 -Completed
+    Write-Progress -ID 3 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Completed
 
     Write-Host "Getting unattached EC2 volume info for region: $awsRegion"  -ForegroundColor Green
     $ec2UnattachedVolumes = $null
@@ -609,11 +609,10 @@ function getAWSData($cred) {
     }
     Write-Host "Found" $ec2UnattachedVolumes.Count "unattached EC2 volume(s)."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
+      Write-Progress -ID 4 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($counter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($counter / $ec2UnattachedVolumes.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing unattached EC2 volumes:' -Status $ec2UnattachedVolume.VolumeId -PercentComplete (($counter / $ec2UnattachedVolumes.Count) * 100)
-
       $volSize = 0
 
       $ec2UnVolObj = [PSCustomObject] @{
@@ -639,7 +638,7 @@ function getAWSData($cred) {
       }
 
       $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
-      Write-Progress -Activity 'Processing unattached EC2 volumes:' -PercentComplete 100 -Completed
+      Write-Progress -ID 4 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Completed
     }
     
     Write-Host "Getting RDS info for region: $awsRegion"  -ForegroundColor Green
@@ -652,10 +651,10 @@ function getAWSData($cred) {
     }
     Write-Host "Found" $rdsDBs.Count "RDS database(s)."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($rds in $rdsDBs) {
+      Write-Progress -ID 5 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing RDS databases:' -Status $$rds.DBInstanceIdentifier -PercentComplete (($counter / $rdsDBs.Count) * 100)
       $rdsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -686,7 +685,7 @@ function getAWSData($cred) {
 
       $rdsList.Add($rdsObj) | Out-Null
     }
-    Write-Progress -Activity 'Processing RDS databases:' -PercentComplete 100 -Completed
+    Write-Progress -ID 5 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Completed
 
     Write-Host "Getting EFS info for region: $awsRegion"  -ForegroundColor Green
     $efsListFromAPI = $null
@@ -698,10 +697,10 @@ function getAWSData($cred) {
     }    
     Write-Host "Found" $efsListFromAPI.Count "EFS file systems."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($efs in $efsListFromAPI) {
+      Write-Progress -ID 6 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($counter) of $($efsListFromAPI.Count)" -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing EFS file systems:' -Status $$efs.FileSystemId -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
       $efsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -733,7 +732,7 @@ function getAWSData($cred) {
 
       $efsList.Add($efsObj) | Out-Null
     }
-    Write-Progress -Activity 'Processing EFS:' -PercentComplete 100 -Completed
+    Write-Progress -ID 6 -Activity "Processing EFS file system: $($efs.Name)" -Completed
 
     Write-Host "Getting EKS info for region: $awsRegion"  -ForegroundColor Green
     $eksListFromAPI = $null
@@ -745,16 +744,16 @@ function getAWSData($cred) {
     }    
     Write-Host "Found" $eksListFromAPI.Count "EKS Clusters."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($eks in $eksListFromAPI) {
       try{
         $eks = Get-EKSCluster -Credential $cred -region $awsRegion -Name $eks -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get EKS NodeGroup for nodegroup $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }  
+      Write-Progress -ID 7 -Activity "Processing EKS Cluster: $($eks.Name)" -Status "EKS Cluster $($counter) of $($eksListFromAPI.Count)" -PercentComplete (($counter / $eksListFromAPI.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing EKS Cluster:' -Status $eks.Name -PercentComplete (($counter / $eksListFromAPI.Count) * 100)
       $eksObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -785,13 +784,13 @@ function getAWSData($cred) {
         Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }    
-      # Write-Host "Found" $eksNodeGroupListFromCluster.Count "EKS Nodegroups in Cluster $($eks.Name)."  -ForegroundColor Green
+      # Write-Host "Found" $eksNodeGroupListFromCluster.Count "EKS node groups in Cluster $($eks.Name)."  -ForegroundColor Green
 
       foreach($nodeGroup in $eksNodeGroupListFromCluster){
         try{
           $eksNodeGroup = Get-EKSNodegroup -Credential $cred -region $awsRegion -ClusterName $eks.Name -NodegroupName $nodeGroup -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get EKS NodeGroup for nodegroup $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+          Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }   
         $eksNodeGroupObj = [PSCustomObject] @{
@@ -822,7 +821,7 @@ function getAWSData($cred) {
       }
 
     }
-    Write-Progress -Activity 'Processing EKS:' -PercentComplete 100 -Completed
+    Write-Progress -ID 7 -Activity "Processing EKS Cluster: $($eks.Name)" -Completed
     
     Write-Host "Getting FSx File System info for region: $awsRegion"  -ForegroundColor Green
 
@@ -834,10 +833,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
     Write-Host "Found" $fsxFileSystemListFromAPI.Count "FSx FileSystems."  -ForegroundColor Green
-    $counter = 0
+    $counter = 1
     foreach ($fileSystem in $fsxFileSystemListFromAPI) {
+      Write-Progress -ID 8 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($counter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing FSx FileSystem:' -Status $fileSystem.FileSystemId -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
       $fsxObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -982,7 +981,7 @@ function getAWSData($cred) {
       }
       $fsxFileSystemList.Add($fsxObj) | Out-Null
     }
-    Write-Progress -Activity 'Processing FSx FileSystems:' -PercentComplete 100 -Completed
+    Write-Progress -ID 8 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Completed
 
 
 
@@ -996,10 +995,10 @@ function getAWSData($cred) {
     }
     Write-Host "Found" $fsxListFromAPI.Count "FSx volumes."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($fsx in $fsxListFromAPI) {
+      Write-Progress -ID 9 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -PercentComplete (($counter / $fsxListFromAPI.Count) * 100)
       $counter++
-      Write-Progress -Activity 'Processing FSx Volume:' -Status $fsx.VolumeId -PercentComplete (($counter / $fsxListFromAPI.Count) * 100)
       $namespace = "AWS/FSx"
       $metricName = "StorageUsed"
       $dimensions = @(
@@ -1078,7 +1077,7 @@ function getAWSData($cred) {
 
       $fsxList.Add($fsxObj) | Out-Null
     }
-    Write-Progress -Activity 'Processing FSx Volumes:' -PercentComplete 100 -Completed
+    Write-Progress -ID 9 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -Completed
 
     Write-Host "Getting KMS, secrets, SQS numbers for region: $awsRegion"  -ForegroundColor Green
     try{
@@ -1179,10 +1178,10 @@ function getAWSData($cred) {
     }
     Write-Host "Found" $BackupPlans.Count "Backup Plans."  -ForegroundColor Green
 
-    $counter = 0
+    $counter = 1
     foreach ($plan in $BackupPlans) {
       $counter++
-      Write-Progress -Activity 'Processing Backup Plan:' -Status $plan.BackupPlanId -PercentComplete (($counter / $BackupPlans.Count) * 100)
+      Write-Progress -ID 10 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
       try{
         $BackupPlanObject = (Get-BAKBackupPlan -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
       } catch {
@@ -1197,8 +1196,10 @@ function getAWSData($cred) {
         Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
+      $planCounter = 0
       foreach ($selection in $Selections) {
-        Write-Progress -Activity 'Processing Backup Plan/Selection:' -Status "$($plan.BackupPlanId) - $($selection.SelectionId)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
+        Write-Progress -ID 11 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($planCounter) of $($BackupPlans.Count)" -PercentComplete (($planCounter / $BackupPlans.Count) * 100)
+        $planCounter++
         try{
           $foundSelection = Get-BakBackupSelection -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
         } catch {
@@ -1364,8 +1365,10 @@ function getAWSData($cred) {
           }
         }
       }
+      Write-Progress -ID 11 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Completed
       $backupPlanList.Add($BackupPlanObject) | Out-Null
     }
+    Write-Progress -ID 10 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Completed
   }
   
   $filter = @{
@@ -1386,7 +1389,6 @@ function getAWSData($cred) {
   $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
   Write-Host "Getting Cost and Usage of Backup in Account: $awsAccountAlias" -ForegroundColor Green
-  Write-Progress -Activity 'Processing Cost and Usage of Backup:' -PercentComplete (0)
   $result = @{ResultsByTime = @()}
   try{
     $result = Get-CECostAndUsage `
@@ -1399,10 +1401,10 @@ function getAWSData($cred) {
     Write-Host "Error: $_" -ForeGroundColor Red
   }
 
-  $counter = 0
+  $counter = 1
   foreach ($resultItem in $result.ResultsByTime) {
+    Write-Progress -ID 12 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Status "Item $($counter) of $($result.ResultsByTime.Count)" -PercentComplete (($counter / $result.ResultsByTime.count) * 100)
     $counter++
-    Write-Progress -Activity 'Processing Cost and Usage of Backup for Month:' -Status $resultItem.TimePeriod.Start -PercentComplete (($counter / $result.ResultsByTime.count) * 100)
     $monthCostObj = [PSCustomObject] @{
       "AwsAccountId" = $awsAccountInfo.Account
       "AwsAccountAlias" = $awsAccountAlias
@@ -1418,7 +1420,8 @@ function getAWSData($cred) {
         $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
     }
     $backupCostsList.Add($monthCostObj) | Out-Null
-  }  
+  }
+  Write-Progress -ID 12 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Completed 
 }
 
 # Contains list of EC2 instances and RDS with capacity info
@@ -1470,32 +1473,34 @@ if ($PSCmdlet.ParameterSetName -eq 'DefaultProfile') {
 elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   # Get AWS Info based on user supplied list of profiles
   [string[]]$awsProfiles = $UserSpecifiedProfileNames.split(',')
-  $accountCounter = 0
+  $accountCounter = 1
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     $cred = Get-AWSCredential -ProfileName $awsProfile
 
-    Write-Progress -Activity 'Processing profile:' -Status $awsProfile -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
+    Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)"  -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
 
     getAWSData $cred
   }
+  Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Completed
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
   $awsProfiles = $(Get-AWSCredential -ListProfileDetail).ProfileName
-  $accountCounter = 0
+  $accountCounter = 1
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     Set-AWSCredential -ProfileName $awsProfile
     $cred = Get-AWSCredential -ProfileName $awsProfile
 
-    Write-Progress -Activity 'Processing profile:' -Status $awsProfile -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
+    Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)" -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
 
     getAWSData $cred
   }
+  Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Completed
 }
 elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
 # Verify that there is a credential/profile to work with.
@@ -1521,7 +1526,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
     $awsAccounts = Get-ORGAccountList
   }
 
-  $accountCounter = 0
+  $accountCounter = 1
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.ID) account name: $($awsAccount.Name)"
@@ -1536,11 +1541,12 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
       continue
     }
 
-    Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
     $accountCounter++
 
     getAWSData $cred
   }
+  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
 }
 elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   try {
@@ -1611,7 +1617,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
     $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion
   }
 
-  $accountCounter = 0
+  $accountCounter = 1
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
@@ -1636,11 +1642,12 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
       continue
     }
 
-    Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
     $accountCounter++
 
     getAWSData $cred
   }
+  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
   # Verify that there is a credential/profile to work with.
@@ -1682,11 +1689,12 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
         continue
       }
 
-      Write-Progress -Activity 'Processing account:' -Status $awsAccount -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+      Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
       $accountCounter++
 
       getAWSData $cred
     }
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
   }
 
 $ec2TotalGiB = ($ec2list.sizeGiB | Measure-Object -Sum).sum
