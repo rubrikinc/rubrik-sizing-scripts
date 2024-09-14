@@ -659,7 +659,7 @@ function getAWSData($cred) {
       $rdsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
-        "RDSInstance" = $rds.DBInstanceIdentifier
+        "DBName" = $rds.DBName
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
         "SizeGiB" = $rds.AllocatedStorage
         "SizeTiB" = [math]::round($($rds.AllocatedStorage / 1024), 4)
@@ -667,9 +667,14 @@ function getAWSData($cred) {
         "SizeTB" = [math]::round($($rds.AllocatedStorage * 0.001073741824), 4)
         "Region" = $awsRegion
         "InstanceType" = $rds.DBInstanceClass
-        "Platform" = $rds.Engine
+        "Engine" = $rds.Engine
+        "EngineVersion" = $rds.EngineVersion
+        "DBInstanceStatus" = $rds.DBInstanceStatus
         "BackupPlans" = ""
         "InBackupPlan" = $false
+        "BackupRetentionPeriod" = $rds.BackupRetentionPeriod
+        "PreferredBackupWindow" = $rds.PreferredBackupWindow
+        "StorageType" = $rds.StorageType
       }
 
       foreach ($tag in $rds.TagList) { 
