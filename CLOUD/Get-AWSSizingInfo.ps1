@@ -359,7 +359,7 @@ $outputS3 = "aws_s3_info-$date_string.csv"
 $outputEFS = "aws_efs_info-$date_string.csv"
 $outputFSXfilesystems = "aws_fsx_filesystem_info-$date_string.csv"
 $outputFSX = "aws_fsx_volume_info-$date_string.csv"
-$outputDDB = "aws_ddb_info-$date_string.csv"
+$outputDDB = "aws_DynamoDB_info-$date_string.csv"
 $outputKMS = "aws_kms_numbers-$date_string.csv"
 $outputSQS = "aws_sqs_numbers-$date_string.csv"
 $outputSecrets = "aws_secrets_numbers-$date_string.csv"
@@ -1116,15 +1116,15 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    Write-Host "Getting DDB info for region: $awsRegion"  -ForegroundColor Green
+    Write-Host "Getting DynamoDB info for region: $awsRegion"  -ForegroundColor Green
     $ddbListFromAPI = $null
     try{
       $ddbListFromAPI = Get-DDBTableList -Credential $cred -region $awsRegion -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get DDB Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get DynamoDB Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-    Write-Host "Found" $ddbListFromAPI.Count "DDB Tables."  -ForegroundColor Green
+    Write-Host "Found" $ddbListFromAPI.Count "DynamoDB Tables."  -ForegroundColor Green
 
     foreach($ddbName in $ddbListFromAPI){
 
@@ -1132,7 +1132,7 @@ function getAWSData($cred) {
       try{
         $ddbItem = Get-DDBTable -TableName $ddbName -Credential $cred -region $awsRegion -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get DDB Table $($ddbName) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get DynamoDB Table $($ddbName) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
 
@@ -2088,8 +2088,8 @@ Write-Host "Total # of Secrets: $($totalSecrets)"  -ForegroundColor Green
 Write-Host "Total # of SQS Queues: $($totalQueues)"  -ForegroundColor Green
 
 Write-Host
-Write-Host "Total # of DDB Tables: $($ddbList.count)"  -ForegroundColor Green
-Write-Host "Total table size of all DDB Tables: $ddbTotalGiB GiB or $ddbTotalGB GB or $ddbTotalTiB TiB or $ddbTotalTB TB"  -ForegroundColor Green
+Write-Host "Total # of DynamoDB Tables: $($ddbList.count)"  -ForegroundColor Green
+Write-Host "Total table size of all DynamoDB Tables: $ddbTotalGiB GiB or $ddbTotalGB GB or $ddbTotalTiB TiB or $ddbTotalTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
