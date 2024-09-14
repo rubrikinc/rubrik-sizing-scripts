@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create a cross-account role to run Rubrik's Sizing Script using StackSets
+
+Parameters:
+  ScriptAWSAccountId:
+    Type: String
+    Description: The AWS account ID where the Rubrik Sizing Script is run from.
+    AllowedPattern: '^\d{12}$'
+    ConstraintDescription: 'The Script AWS Account ID must be a 12-digit number.'
+
+  RoleName:
+    Type: String
+    Default: 'RubrikSizingScripts'
+    Description: Name of the AWS IAM role to create
+    AllowedPattern: '^[a-zA-Z0-9+=,.@_-]+$'
+    ConstraintDescription: 'The role name can only contain alphanumeric characters and the following: +=,.@_-'
+
+Resources:
+  CrossAccountRole:
+    Type: 'AWS::IAM::Role'
+    Properties: 
+      RoleName: !Ref RoleName
+      AssumeRolePolicyDocument: 
+        Version: '2012-10-17'
+        Statement: 
+          - Effect: 'Allow'
+            Principal: 
+              AWS: 
+                - !Sub 'arn:aws:iam::${ScriptAWSAccountId}:root'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'RubrikSizingScriptPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: 'VisualEditor0'
+                Effect: 'Allow'
+                Action: 
+                  - 'backup:ListBackupPlans'
+                  - 'backup:ListBackupSelections'
+                  - 'backup:GetBackupPlan'
+                  - 'backup:GetBackupSelection'
+                  - 'ce:GetCostAndUsage'
+                  - 'cloudwatch:GetMetricStatistics'
+                  - 'cloudwatch:ListMetrics'
+                  - 'dynamodb:ListTables'
+                  - 'dynamodb:DescribeTable'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeVolumes'
+                  - 'eks:DescribeCluster'
+                  - 'eks:ListClusters'
+                  - 'eks:ListNodegroups'
+                  - 'elasticfilesystem:DescribeFileSystems'
+                  - 'fsx:DescribeFileSystems'
+                  - 'fsx:DescribeVolumes'
+                  - 'iam:ListAccountAliases'
+                  - 'kms:ListKeys'
+                  - 'organizations:ListAccounts'
+                  - 'rds:DescribeDBInstances'
+                  - 's3:GetBucketLocation'
+                  - 's3:ListAllMyBuckets'
+                  - 'secretsmanager:ListSecrets'
+                  - 'sts:AssumeRole'
+                  - 'sqs:ListQueues'
+                Resource: '*'
+
+Outputs:
+  RoleARN:
+    Description: The ARN of the created cross-account role
+    Value: !GetAtt CrossAccountRole.Arn
