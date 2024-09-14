@@ -108,11 +108,11 @@ A comma separated list of ids of the subscriptions to gather data from.
 Anonymize data collected.
 
 .PARAMETER AnonymizeFields
-  A comma separated list of fields in resulting csvs and jsons to anonymize. The list must be encased in
+  A comma separated list of fields in resulting CSVs and JSONs to anonymize. The list must be encased in
   quotes, with no spaces between fields.
 
 .PARAMETER NotAnonymizeFields
-  A comma separated list of fields in resulting csvs and jsons to not anonymize (only required for fields which are by default being 
+  A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
   anonymized). The list must be encased in quotes, with no spaces between fields.
   Note that we currently anonymize the following fields:
   "SubscriptionId", "Subscription", "Tenant", "Name", 
@@ -262,7 +262,7 @@ param (
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
-# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+# Set the culture to en-US; this is to ensure that output to CSV is formatted properly
 [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
