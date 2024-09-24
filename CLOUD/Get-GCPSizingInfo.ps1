@@ -119,9 +119,9 @@ $outputFiles = @(
     $output_log
 )
 
+& gcloud auth login
 
 Write-Host "Current glcoud context`n" -foregroundcolor green
-& gcloud auth list
 & gcloud config list --format 'value(core)'
 
 # Clear out variable in case it exists
@@ -155,7 +155,6 @@ $unattachedDiskList = New-Object collections.arraylist
 # Loop through each project and grab the VM and disk info
 foreach ($project in $projectList)
 {
-  gcloud config set project $($project.ProjectId)
   Write-Host "Getting GCE VM info for current project: $($project.ProjectId)" -foregroundcolor green
 
   $projectInfo = $null
@@ -166,8 +165,7 @@ foreach ($project in $projectList)
     Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
     Write-Host $_ -foregroundcolor red
   }
-   
- 
+
   foreach ($vm in $projectInfo)
   {
 
