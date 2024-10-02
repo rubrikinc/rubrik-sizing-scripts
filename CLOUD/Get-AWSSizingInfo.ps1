@@ -1840,11 +1840,12 @@ if ($Anonymize) {
   Write-Host
   Write-Host "Anonymizing..." -ForegroundColor Green
 
-  $global:anonymizeProperties = @("AwsAccountId", "AwsAccountAlias", "BucketName", "Name", "BackupPlanName", "DestinationBackupVaultArn", "Project", "TargetBackupVaultName", "CreatorRequestId", "Resources",
-                                  "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
-                                  "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
-                                  "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
-                                  "RequestId", "TableName", "TableId", "TableArn")
+  $global:anonymizeProperties = @("Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",   
+                                  "BucketName", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn", 
+                                  "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "InstanceId", "Name", "NodegroupArn", 
+                                  "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources", 
+                                  "RoleArn", "RuleId", "RuleName", "TableArn", "TableId", "TableName", "TargetBackupVaultName",
+                                  "VersionId", "VolumeId")
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
     foreach($field in $anonFieldsList){
@@ -1992,19 +1993,21 @@ if ($Anonymize) {
   }
 
   # Anonymize each list
+  $backupPlanList = Anonymize-Collection -Collection $backupPlanList
+  $backupCostsList = Anonymize-Collection -Collection $backupCostsList
+  $ddbList = Anonymize-Collection -Collection $ddbList
   $ec2List = Anonymize-Collection -Collection $ec2List
   $ec2UnattachedVolList = Anonymize-Collection -Collection $ec2UnattachedVolList
+  $efsList = Anonymize-Collection -Collection $efsList
+  $eksList = Anonymize-Collection -Collection $eksList
+  $eksNodeGroupList = Anonymize-Collection -Collection $eksNodeGroupList
+  $fsxFileSystemList = Anonymize-Collection -Collection $fsxFileSystemList
+  $fsxList = Anonymize-Collection -Collection $fsxList
+  $kmsList = Anonymize-Collection -Collection $kmsList
   $rdsList = Anonymize-Collection -Collection $rdsList
   $s3List = Anonymize-Collection -Collection $s3List
   $s3ListAg = Anonymize-Collection -Collection $s3ListAg
-  $efsList = Anonymize-Collection -Collection $efsList
-  $fsxFileSystemList = Anonymize-Collection -Collection $fsxFileSystemList
-  $fsxList = Anonymize-Collection -Collection $fsxList
-  $ddbList = Anonymize-Collection -Collection $ddbList
-  $backupPlanList = Anonymize-Collection -Collection $backupPlanList
-  $backupCostsList = Anonymize-Collection -Collection $backupCostsList
   $secretsList = Anonymize-Collection -Collection $secretsList
-  $kmsList = Anonymize-Collection -Collection $kmsList
   $sqsList = Anonymize-Collection -Collection $sqsList
 }
 
