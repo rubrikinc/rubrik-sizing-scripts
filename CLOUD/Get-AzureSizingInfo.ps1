@@ -1263,7 +1263,7 @@ foreach ($sub in $subs) {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
                 }
               } else {
-                  Write-Host "VM: $vmName not found in the vmList."
+                  Write-Host "Found VM $($vmName) in VM backup policy $($policy.Name), however, the VM is not registered in Azure."
               }
             }
         }
@@ -1287,7 +1287,7 @@ foreach ($sub in $subs) {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
                 }
               } else {
-                  Write-Host "VM: $vmName not found in the vmList."
+                  Write-Host "SQL VM: Found VM $($vmName) in SQL backup policy $($policy.Name), however, the VM is not registered in Azure."
               }
             }
         }
