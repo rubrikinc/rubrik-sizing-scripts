@@ -27,6 +27,16 @@ This repository contains scripts designed to collect and report on cloud resourc
 
 ## AWS
 
+### Authenticaition
+
+1. Use the local AWS profile (IAM user) to login to just one account.
+1. Use a list of local AWS profiles to login to and query multiple accounts.
+1. Use a cross account role with a list of AWS accounts that you provide to assume role into each account.
+1. Use a cross account role with an AWS Org and have the script automatically discover all of your accounts and query each one.
+1. Have the script query AWS SSO for a list of accounts. Each account will be accessed via the AWS SSO parameter set that is specified. 
+
+<Add examples>
+
 ### AWS Prerequisites
 
 To run the AWS sizing script, ensure you have the following:
@@ -111,6 +121,40 @@ In both cases run the sizing script with the appropriate options and send the da
 1. The script will output a summary to the console and create a zip file with CSV and JSON files, along with a LOG of the console output. 
 1. Please download the ZIP file and send it to your Rubrik representative.
 
+
+### Troubleshooting
+
+#### Explicit deny in a service control policy
+
+- Problem:
+
+  When running the script against AWS SSO or an AWS Org the following type of error may occur:
+
+  ```
+  Failed to get Backup Plans Info for region us-east-2 in account 123456789012
+  Error: User: arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_1234567890abcdef/firstname.lastname@company.com is not authorized to perform: backup:ListBackupPlans with an explicit deny in a service control policy
+  ```
+
+- Solution:
+
+  An AWS service control policy is in place that prevents running commands in the region that is listed. Use the -Regions parameter to restrict the script to only run in regions that are supported by the organization. 
+
+
+#### Invalid grant provided
+
+- Problem:
+
+When using AWS SSO the following error may occur while authorizing the script in SSO:
+
+```
+Allow access to your data? invalid_grant
+Invalid grant provided
+```
+
+- Solution:
+
+AWS SSO is not being accessed in the correct region. By default, the script uses `us-east-1` to communicate with AWS SSO. To look up the proper region for AWS SSO select `Access Keys` next to the Parameter Set that is being used. The next screen will specify a region where the access keys can be used. This is the region for the AWS SSO. Next specify the `-SSORegion` flag and use the region that was discovered. 
+
 ---
 
 ## Azure
@@ -123,7 +167,7 @@ To run the Azure sizing script, ensure you have the following:
 - PowerShell 7 installed if running locally.
 - Required Azure PowerShell modules installed:
     ```powershell
-    Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement
+    Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement,Az.CosmosDB
     ```
 
 ### Running the Azure Script
