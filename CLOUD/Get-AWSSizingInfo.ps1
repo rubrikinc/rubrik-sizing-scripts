@@ -280,13 +280,13 @@ param (
   # Get list of user supplied AWS accounts from a comma separated list on the command line.
   [Parameter(ParameterSetName='AWSSSO')]
   [Parameter(ParameterSetName='CrossAccountRole')]
-  [Parameter(ParameterSetName='OrganizationAccountAccessRole')]
+  [Parameter(ParameterSetName='AWSOrganization')]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedAccounts,
   # Get list of user supplied AWS accounts from a file.
   [Parameter(ParameterSetName='AWSSSO')]
   [Parameter(ParameterSetName='CrossAccountRole')]
-  [Parameter(ParameterSetName='OrganizationAccountAccessRole')]
+  [Parameter(ParameterSetName='AWSOrganization')]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedAccountsFile,
   # Limit search for data to specific regions.
