@@ -1,0 +1,6 @@
+"AwsAccountId","AwsAccountAlias","Name","Version","PlatformVersion","Status","Arn","RoleArn","Region","Tag:TagName-00004","Tag:TagName-00031","Tag:TagName-00005","Tag:TagName-00032","Tag:TagName-00033","Tag:TagName-00002","Tag:TagName-00034","Tag:TagName-00035"
+"AwsAccountId-00000","AwsAccountAlias-00000","TagValue-00027","1.30","eks.7","ACTIVE","Arn-00000","RoleArn-00000","us-west-2","TagValue-00072","TagValue-00027","TagValue-00073","TagValue-00027","TagValue-00074","TagValue-00075","TagValue-00076","TagValue-00077"
+"AwsAccountId-00000","AwsAccountAlias-00000","Name-00020","1.27","eks.22","ACTIVE","Arn-00001","RoleArn-00001","us-east-2",,,,,,,,
+"AwsAccountId-00001","AwsAccountAlias-00001","Name-00021","1.29","eks.12","ACTIVE","Arn-00002","RoleArn-00002","us-east-2",,,,,,,,
+"AwsAccountId-00001","AwsAccountAlias-00001","Name-00022","1.27","eks.22","ACTIVE","Arn-00003","RoleArn-00003","us-east-2",,,,,,,,
+"AwsAccountId-00002","AwsAccountAlias-00002","TagValue-00044","1.29","eks.12","ACTIVE","Arn-00004","RoleArn-00004","us-east-2",,,,,,,,
