@@ -495,6 +495,13 @@ function getAWSData($cred) {
         $numObjStorages.Add($numObjStorageType, $maxBucketObjs)
       }
 
+      try {
+        $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $cred -Region $awsRegion
+      } catch {
+        Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account)." -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+      }
+
       $s3obj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -530,6 +537,17 @@ function getAWSData($cred) {
           $numObjStorageNum = $($numObjStorage.Value)
         }
         Add-Member -InputObject $s3obj -MemberType NoteProperty -Name ("NumberOfObjects-" + $($numObjStorage.Name)) -Value $numObjStorageNum
+      }
+
+      foreach ($tag in $bucketTags) { 
+
+        # Powershell objects have restrictions on key names, 
+        # so I use Regular Expressions to substitute non valid parts 
+        # like ' ' or '-' to '_' 
+        # This may cause small subtle changes from the tagname in AWS 
+        # Same applies to all other types of objects
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        Add-Member -InputObject $s3obj -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force  
       }
 
       $s3List.Add($s3obj) | Out-Null
@@ -1728,10 +1746,13 @@ $rdsTotalBackupTiB = ($rdsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum
 $rdsTotalBackupGB = ($rdsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
 $rdsTotalBackupTB = ($rdsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
-
+# Grab only unique properties
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
-$s3ListAg = $s3List | Select-Object $s3Props
+# Move the Tag properties to the end
+$s3PropsOrdered = $s3Props | Where-Object {$_ -notmatch "Tag:.*"}
+$s3PropsOrdered += $s3Props | Where-Object {$_ -match "Tag:.*"}
+$s3ListAg = $s3List | Select-Object $s3PropsOrdered
 $s3TotalTBs = @{}
 
 foreach ($s3TBProp in $s3TBProps) {
