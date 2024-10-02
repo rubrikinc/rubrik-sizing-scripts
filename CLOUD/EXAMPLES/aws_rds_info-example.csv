@@ -1,4 +1,4 @@
-"AwsAccountId","AwsAccountAlias","RDSInstance","DBInstanceIdentifier","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","InstanceType","Platform", "BackupPlans", "InBackupPlan"
-"012345678901","account1","example_db_1","example_db_1","1","0.0009766","1.074","0.0010737","us-west-2","db.r5.large","aurora-mysql", "plan-test", "TRUE"
-"012345678901","account1","example_db_2","example_db_2","100","0.0976563","107.374","0.1073742","us-west-2","db.m6i.large","mysql"
-"098765432109","account2","example_db_3","example_db_3","20","0.0195313","21.475","0.0214748","us-west-2","db.m6i.xlarge","sqlserver-web"
+"AwsAccountId","AwsAccountAlias","DBName","DBInstanceIdentifier","SizeGiB","SizeTiB","SizeGB","SizeTB","Region","InstanceType","Engine","EngineVersion","DBInstanceStatus","BackupPlans","InBackupPlan","BackupRetentionPeriod","PreferredBackupWindow","StorageType"
+"AwsAccountId-00000","AwsAccountAlias-00000",,"DBInstanceIdentifier-00000","20","0.0195","21.475","0.0215","us-west-2","db.m6i.xlarge","sqlserver-web","15.00.4236.7.v1","available","","False","7","07:08-07:38","gp2"
+"AwsAccountId-00000","AwsAccountAlias-00000",,"DBInstanceIdentifier-00001","20","0.0195","21.475","0.0215","us-east-2","db.t3.micro","sqlserver-ex","15.00.4385.2.v1","available","","False","7","08:12-08:42","gp3"
+"AwsAccountId-00001","AwsAccountAlias-00001",,"DBInstanceIdentifier-00002","1","0.001","1.074","0.0011","us-east-1","db.serverless","aurora-postgresql","15.4","available","","False","7","03:13-03:43","aurora"
