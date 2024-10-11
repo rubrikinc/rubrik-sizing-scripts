@@ -1188,17 +1188,17 @@ function getAWSData($cred) {
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $BackupPlanObject | Add-Member -MemberType NoteProperty -Name "Resources" -Value @()
-      $Selections = $null
+      $selections = $null
       try{
-        $Selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
+        $selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
       } catch {
         Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
-      $planCounter = 0
-      foreach ($selection in $Selections) {
-        Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($planCounter) of $($BackupPlans.Count)" -PercentComplete (($planCounter / $BackupPlans.Count) * 100)
-        $planCounter++
+      $selectionCounter = 1
+      foreach ($selection in $selections) {
+        Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($selectionCounter) of $($BackupPlans.Count)" -PercentComplete (($selectionCounter / $BackupPlans.Count) * 100)
+        $selectionCounter++
         try{
           $foundSelection = Get-BakBackupSelection -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
         } catch {
