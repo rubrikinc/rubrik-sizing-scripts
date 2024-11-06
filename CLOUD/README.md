@@ -77,6 +77,7 @@ To run the AWS sizing script, ensure you have the following:
                       "rds:DescribeDBInstances",
                       "s3:GetBucketLocation",
                       "s3:ListAllMyBuckets",
+                      "s3:GetBucketTagging",
                       "secretsmanager:ListSecrets",
                       "sts:AssumeRole",
                       "sqs:ListQueues"
