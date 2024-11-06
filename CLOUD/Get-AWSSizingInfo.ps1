@@ -1810,7 +1810,14 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $totalKeys = ($kmsList.Keys | Measure-Object -Sum).sum
   $totalQueues = ($sqsList.Queues | Measure-Object -Sum).sum
 
-  $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
+  # If statement is a workaround for error when getting backup plans when payer account 
+  # does not allow access for linked accounts
+  if ($null -eq $backupCostsList.AWSBackupNetUnblendedCost) {
+    Write-Error "No AWS Backup costs found."
+    Write-Error "AWS Cost data not reported"
+  } else {
+    $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
+  }
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -2053,8 +2060,14 @@ $sqsList | Export-CSV -path $outputSQS
 Write-Host "CSV file output to: $outputKMS"  -ForegroundColor Green
 $kmsList | Export-CSV -path $outputKMS
 
-Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
-$backupCostsList | Export-CSV -path $outputBackupCosts
+# If statement is a workaround for error when getting backup plans when payer account
+# does not allow access for linked accounts
+if ($null -eq $backupCostsList.AWSBackupNetUnblendedCost) {
+  Write-Error "AWS Cost data file not saved."
+} else {
+  Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
+  $backupCostsList | Export-CSV -path $outputBackupCosts
+}
 
 Write-Host "CSV file output to: $outputEKSClusters"  -ForegroundColor Green
 $eksList | Export-CSV -path $outputEKSClusters
