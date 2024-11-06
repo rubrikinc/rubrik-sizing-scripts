@@ -1197,7 +1197,7 @@ function getAWSData($cred) {
       }
       $selectionCounter = 1
       foreach ($selection in $selections) {
-        Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($selectionCounter) of $($BackupPlans.Count)" -PercentComplete (($selectionCounter / $BackupPlans.Count) * 100)
+        Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($selectionCounter) of $($selections.Count)" -PercentComplete (($selectionCounter / $selections.Count) * 100)
         $selectionCounter++
         try{
           $foundSelection = Get-BakBackupSelection -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
