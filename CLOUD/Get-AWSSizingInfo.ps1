@@ -388,7 +388,9 @@ $outputFiles = @(
     $outputEKSNodegroups,
     $outputBackupCosts,
     $outputBackupPlansJSON,
-    $output_log
+    $output_log,
+    's3list.csv',
+    '*.out'
 )
 
 # Function to do the work
@@ -1729,12 +1731,19 @@ $rdsTotalBackupGB = ($rdsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
 $rdsTotalBackupTB = ($rdsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
 # Grab only unique properties
+$s3List | Export-CSV -Path "s3List.csv" -NoTypeInformation
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
+$s3Props | out-file -FilePath "s3Props.out"
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
+$s3TBProps | out-file -FilePath "s3TBProps.out"
 # Move the Tag properties to the end
 $s3PropsOrdered = $s3Props | Where-Object {$_ -notmatch "Tag:.*"}
+$s3PropsOrdered | out-file -FilePath "s3PropsOrdered_without_tags.out"
 $s3PropsOrdered += $s3Props | Where-Object {$_ -match "Tag:.*"}
-$s3ListAg = $s3List | Select-Object $s3PropsOrdered
+$s3PropsOrdered | out-file -FilePath "s3PropsOrdered_with_tags.out"
+#$s3ListAg = $s3List | Select-Object $s3PropsOrdered
+$s3listAG | out-file -FilePath "s3ListAg.out"
+$s3ListAg = $s3List
 $s3TotalTBs = @{}
 
 foreach ($s3TBProp in $s3TBProps) {
