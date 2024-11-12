@@ -53,15 +53,24 @@ For a provided CSV list of projects, get all GCE VMs and associated disk info an
 #>
 
 param (
-  [CmdletBinding()]
+
+  # Get all all projects
+  [Parameter(ParameterSetName='GetAllProjects',
+    Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$GetAllProjects,
 
   # Pass in comma separated list of projects
-  [Parameter(Mandatory=$false)]
-  [string]$projects = '',
+  [Parameter(ParameterSetName='Projects',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$Projects,
 
   # Pass pass in a file with a list of projects separated by line breaks, no header required
-  [Parameter(Mandatory=$false)]
-  [string]$projectFile = '',
+  [Parameter(ParameterSetName='ProjectFile',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ProjectFile,
 
   # Option to anonymize the output files.
   [Parameter(Mandatory=$false)]
