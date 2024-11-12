@@ -8,32 +8,72 @@
 Gets all GCE VMs with the # of attached disks and total sizes of all disks.
 
 .DESCRIPTION
-The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs in the specified projects.
+The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs and GCE Disk in the specified projects.
 For each GCE VM it grabs the total number of disks and total size (GiB) for all disks.
 A summary of the total # of VMs, # of disks, and capacity will be output to console.
 
-A CSV file will be exported with the details.
-You should copy/paste the console output to send along with the CSV.
+A CSV file will be exported with the details along with a log file. Send the resulting 
+zip file to Rubrik for analysis.
 
-Pass in an array of project IDs ($projects) or update the value within the script.
+Pass a comma separated list of projects or a CSV file containing the project names
 If no project IDs are specified then it will run in the current config context.
 
-Run in GCP Cloud Shell or Cloud Tools for PowerShell.
+To run this script the following permissions are required by the user in GCP on all 
+projects:
 
-If you are running using gcloud SDK then you must use the following to login:
-- gcloud init
-See: https://cloud.google.com/tools/powershell/docs/quickstart
+  - compute.instances.list
+  - compute.disks.get
+  - resourcemanager.projects.get
 
-If running locally, must do 'Install-Module GoogleCloud'
+This script can be run in one of two ways:
 
-Get a list of projects using:
-- Get-gcpproject | select name,projectid
+1)  The first method of running the script is from the Google Cloud Shell. This is the
+    easiest method, however, may not work for large numbers of projects. If there are
+    more than 100 or so projects the Google Cloud shell may time out when running this
+    script. In that case the second method will need to be used.
 
-Check your current gcloud context:
-- gcloud auth list
-- gcloud config list
+    To run this script in the Google Cloud shell do the following:
 
-IAM permissions needed: "compute.instances.list,compute.disks.get,resourcemanager.projects.get"
+      a) Open a new Google Cloud Shell in the Google Console
+      b) Test access by running the commands:
+        
+        - gcloud auth list
+        - gcloud config list
+        - gcloud projects list
+        - Get-GcpProject | select name,projectid
+
+      c) Upload this script to the Google Cloud Shell by selecting the ellipses and Upload.
+      d) Run the script as described in the examples or help. 
+          The script will run with the users credentials
+          that logged into the Cloud Shell. This user must have the permissions that are
+          discussed above.
+
+2)  The second method of running this script is from a local laptop or a server. This method
+    may be necessary if the Google Cloud Shell times out while running this script. To 
+    Run this script from a local laptop or console, do the following:
+
+      a) Install Powershell 7
+      b) Install the gcloud tool (see https://cloud.google.com/sdk/docs/install for more 
+          details).
+      c) Install the GoogleCloud Powershell module by running the following command
+          from inside Powershell 7:
+          
+          - Install-Module GoogleCloud
+          
+          See: https://cloud.google.com/tools/powershell/docs/quickstart for more details
+      d) Run: gcloud init
+      e) Run: gcloud auth login
+          Login with a user that has the permissions that are discussed above.
+      f) Test access by running the commands:
+        
+        - gcloud auth list
+        - gcloud config list
+        - gcloud projects list
+        - Get-GcpProject | select name,projectid
+
+      g) Run this script as described in the examples or help.
+for more information on installing the Powershell GoogleCloud Module and the
+gcloud application. 
 
 .NOTES
 Written by Steven Tong for community usage
@@ -42,26 +82,39 @@ Date: 11/9/21
 Updated: 2/24/22
 
 .EXAMPLE
-./Get-GCPSizingInfo.ps1
 Get all GCE VMs and associated disk info and output to a CSV file.
 
-./Get-GCPSizingInfo.ps1 -projects 'projectA,projectB'
-For a provided list of projects, get all GCE VMs and associated disk info and output to a CSV file.
+PS> ./Get-GCPSizingInfo.ps1
 
-./Get-GCPSizingInfo.ps1 -projectFile 'projectFile.csv'
-For a provided CSV list of projects, get all GCE VMs and associated disk info and output to a CSV file.
+.EXAMPLE
+For a provided list of projects, get all GCE VMs and associated disk info and output to a CSV file.
+PS> ./Get-GCPSizingInfo.ps1 -Projects 'projectA,projectB'
+
+.EXAMPLE
+For a provided list of projects, get all GCE VMs and associated disk info and output to a CSV file.
+PS> ./Get-GCPSizingInfo.ps1 -ProjectFile 'projectFile.txt'
 #>
 
+[CmdletBinding(DefaultParameterSetName = 'GetAllProjects')]
 param (
-  [CmdletBinding()]
+
+  # Get all all projects
+  [Parameter(ParameterSetName='GetAllProjects',
+    Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$GetAllProjects,
 
   # Pass in comma separated list of projects
-  [Parameter(Mandatory=$false)]
-  [string]$projects = '',
+  [Parameter(ParameterSetName='Projects',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$Projects,
 
   # Pass pass in a file with a list of projects separated by line breaks, no header required
-  [Parameter(Mandatory=$false)]
-  [string]$projectFile = '',
+  [Parameter(ParameterSetName='ProjectFile',
+    Mandatory=$true)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ProjectFile,
 
   # Option to anonymize the output files.
   [Parameter(Mandatory=$false)]
@@ -81,7 +134,7 @@ param (
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
-# Set the culture to en-US; this is to ensure that output to CSV is outputed properly
+# Set the culture to en-US; this is to ensure that output to CSV is written properly
 [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
@@ -119,23 +172,35 @@ $outputFiles = @(
     $output_log
 )
 
-& gcloud auth login
-
-Write-Host "Current glcoud context`n" -foregroundcolor green
-& gcloud config list --format 'value(core)'
-
 # Clear out variable in case it exists
 $projectList = ''
 
 # If a file is provided containing the list of files, then import the file
 if ($projectFile -ne '')
 {
-  $projectObj = Import-CSV -path $projectFile -header "ProjectName"
-  $projectList = $projectObj.ProjectName
+  $projectFileContents = Get-Content -Path $ProjectFile
+  $projectList = @()
+  foreach ($project in $projectFileContents)
+  {
+    try {
+      $projectList += Get-GcpProject -ProjectId $project
+    } catch {
+      Write-Host "Failed to get project $project" -foregroundcolor red
+      Write-Host "Error: $_" -foregroundcolor red
+    }
+  }
 } elseif ($projects -ne '')
 {
   # Else if a comma separated list of projects was provided on the command line, use that
-  $projectList = $projects -split ','
+  $projectList = @()
+  foreach ($project in $projects.split(',')) {
+    try {
+      $projectList += Get-GcpProject -ProjectId $project
+    } catch {
+      Write-Host "Failed to get project $project" -foregroundcolor red
+      Write-Host "Error: $_" -foregroundcolor red
+    }
+  }
 } else {
   Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
@@ -145,41 +210,42 @@ if ($projectFile -ne '')
     Write-Host "Failed to get projects" -foregroundcolor Red
     Write-Host "Error: $_" -foregroundcolor Red
   }
-  
-  Write-Host "Projects found: $($projectList.ProjectId)" -foregroundcolor green
 }
 
-$vmList = New-Object collections.arraylist
+$instanceList = New-Object collections.arraylist
 $attachedDiskList = New-Object collections.arraylist
 $unattachedDiskList = New-Object collections.arraylist
 # Loop through each project and grab the VM and disk info
+$projectCounter = 1
 foreach ($project in $projectList)
 {
-  Write-Host "Getting GCE VM info for current project: $($project.ProjectId)" -foregroundcolor green
-
-  $projectInfo = $null
+  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
+  $projectCounter++
+  $instanceInfo = $null
   try{
-    $projectInfo = Get-GceInstance -Project $($project.ProjectId) 
+    $instanceInfo = Get-GceInstance -Project $($project.ProjectId) 
 
   } catch {
     Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
     Write-Host $_ -foregroundcolor red
   }
 
-  foreach ($vm in $projectInfo)
-  {
+  $instanceCounter = 1
+  foreach ($instance in $instanceInfo) {
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+    $instanceCounter++
 
     $diskCount = 0
     $diskSizeGb = 0
     $numDiskEncryption = 0
     $sizeEncryptedDisksGb = 0
 
-    foreach($disk in $vm.Disks){
+    foreach($disk in $instance.Disks){
       $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $diskInfo.Zone.split('/')[-1]
-        "VMName" = $vm.Name
+        "VMName" = $instance.Name
         "DiskName" = $diskInfo.Name
         "Id" = $diskInfo.Id
         "SizeGb" = $diskInfo.SizeGb
@@ -212,10 +278,10 @@ foreach ($project in $projectList)
       
     }
 
-    $vmObj = [PSCustomObject] @{
+    $instanceObj = [PSCustomObject] @{
       "Project" = $($project.ProjectId)
-      "Zone" = $vm.Zone.split('/')[-1]
-      "Name" = $vm.Name
+      "Zone" = $instance.Zone.split('/')[-1]
+      "Name" = $instance.Name
       "TotalDiskCount" = $diskCount
       "TotalDiskSizeGb" = $diskSizeGb
       "TotalDiskSizeTb" = $diskSizeGb / 1000
@@ -225,17 +291,18 @@ foreach ($project in $projectList)
       "Status" = $vm.Status
     }
     $tagCounter = 0
-    foreach($key in $vm.Labels.Keys){
-      $value = $vm.Labels.Values.Split('\n')[$tagCounter]
+    foreach($key in $instance.Labels.Keys){
+      $value = $instance.Labels.Values.Split('\n')[$tagCounter]
       $key = $key -replace '[^a-zA-Z0-9]', '_' 
-      $vmObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+      $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
       $tagCounter++
     }
 
-    $vmList.Add($vmObj) | Out-Null
+    $instanceList.Add($instanceObj) | Out-Null
 
   }
-  
+  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
+
   $allDisks = $null
   try{
     $allDisks = Get-GceDisk -Project $($project.ProjectId) 
@@ -243,7 +310,11 @@ foreach ($project in $projectList)
     Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
     Write-Host $_ -foregroundcolor red
   }
+
+  $diskCounter = 1
   foreach($disk in $allDisks){
+    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+    $diskCounter++
     if ($disk.Users -eq $null){
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
@@ -270,7 +341,9 @@ foreach ($project in $projectList)
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
   }
+  Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
 }
+Write-Progress -ID 1 -Activity "Processing project: $($project)" -Completed
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -429,7 +502,7 @@ if ($Anonymize) {
       return $anonymizedCollection
   }
 
-  $vmList = Anonymize-Collection -Collection $vmList
+  $instanceList = Anonymize-Collection -Collection $instanceList
   $attachedDiskList = Anonymize-Collection -Collection $attachedDiskList
   $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
 }
@@ -438,16 +511,16 @@ $totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.
 $totalTB = ($attachedDiskList.sizeTb | Measure -Sum).sum + ($unattachedDiskList.sizeTb | Measure -Sum).sum
 
 Write-Host
-Write-Host "Total # of GCE VMs: $($vmList.count)" -foregroundcolor green
+Write-Host "Total # of GCE VMs: $($instanceList.count)" -foregroundcolor green
 Write-Host "Total # of attached disks: $($attachedDiskList.count)" -foregroundcolor green
 Write-Host "Total # of unattached disks: $($unattachedDiskList.count)" -foregroundcolor green
 Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foregroundcolor green
 
 # Export to CSV
 Write-Host
-addTagsToAllObjectsInList($vmList)
+addTagsToAllObjectsInList($instanceList)
 Write-Host "CSV file output to: $outputVM" -foregroundcolor green
-$vmList | Export-CSV -path $outputVM
+$instanceList | Export-CSV -path $outputVM
 Write-Host
 addTagsToAllObjectsInList($attachedDiskList)
 Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
