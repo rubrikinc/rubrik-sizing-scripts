@@ -128,23 +128,35 @@ $outputFiles = @(
     $output_log
 )
 
-& gcloud auth login
-
-Write-Host "Current glcoud context`n" -foregroundcolor green
-& gcloud config list --format 'value(core)'
-
 # Clear out variable in case it exists
 $projectList = ''
 
 # If a file is provided containing the list of files, then import the file
 if ($projectFile -ne '')
 {
-  $projectObj = Import-CSV -path $projectFile -header "ProjectName"
-  $projectList = $projectObj.ProjectName
+  $projectFileContents = Get-Content -Path $ProjectFile
+  $projectList = @()
+  foreach ($project in $projectFileContents)
+  {
+    try {
+      $projectList += Get-GcpProject -ProjectId $project
+    } catch {
+      Write-Host "Failed to get project $project" -foregroundcolor red
+      Write-Host "Error: $_" -foregroundcolor red
+    }
+  }
 } elseif ($projects -ne '')
 {
   # Else if a comma separated list of projects was provided on the command line, use that
-  $projectList = $projects -split ','
+  $projectList = @()
+  foreach ($project in $projects.split(',')) {
+    try {
+      $projectList += Get-GcpProject -ProjectId $project
+    } catch {
+      Write-Host "Failed to get project $project" -foregroundcolor red
+      Write-Host "Error: $_" -foregroundcolor red
+    }
+  }
 } else {
   Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
