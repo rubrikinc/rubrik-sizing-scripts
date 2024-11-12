@@ -166,41 +166,42 @@ if ($projectFile -ne '')
     Write-Host "Failed to get projects" -foregroundcolor Red
     Write-Host "Error: $_" -foregroundcolor Red
   }
-  
-  Write-Host "Projects found: $($projectList.ProjectId)" -foregroundcolor green
 }
 
-$vmList = New-Object collections.arraylist
+$instanceList = New-Object collections.arraylist
 $attachedDiskList = New-Object collections.arraylist
 $unattachedDiskList = New-Object collections.arraylist
 # Loop through each project and grab the VM and disk info
+$projectCounter = 1
 foreach ($project in $projectList)
 {
-  Write-Host "Getting GCE VM info for current project: $($project.ProjectId)" -foregroundcolor green
-
-  $projectInfo = $null
+  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
+  $projectCounter++
+  $instanceInfo = $null
   try{
-    $projectInfo = Get-GceInstance -Project $($project.ProjectId) 
+    $instanceInfo = Get-GceInstance -Project $($project.ProjectId) 
 
   } catch {
     Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
     Write-Host $_ -foregroundcolor red
   }
 
-  foreach ($vm in $projectInfo)
-  {
+  $instanceCounter = 1
+  foreach ($instance in $instanceInfo) {
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+    $instanceCounter++
 
     $diskCount = 0
     $diskSizeGb = 0
     $numDiskEncryption = 0
     $sizeEncryptedDisksGb = 0
 
-    foreach($disk in $vm.Disks){
+    foreach($disk in $instance.Disks){
       $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $diskInfo.Zone.split('/')[-1]
-        "VMName" = $vm.Name
+        "VMName" = $instance.Name
         "DiskName" = $diskInfo.Name
         "Id" = $diskInfo.Id
         "SizeGb" = $diskInfo.SizeGb
@@ -233,10 +234,10 @@ foreach ($project in $projectList)
       
     }
 
-    $vmObj = [PSCustomObject] @{
+    $instanceObj = [PSCustomObject] @{
       "Project" = $($project.ProjectId)
-      "Zone" = $vm.Zone.split('/')[-1]
-      "Name" = $vm.Name
+      "Zone" = $instance.Zone.split('/')[-1]
+      "Name" = $instance.Name
       "TotalDiskCount" = $diskCount
       "TotalDiskSizeGb" = $diskSizeGb
       "TotalDiskSizeTb" = $diskSizeGb / 1000
@@ -246,17 +247,18 @@ foreach ($project in $projectList)
       "Status" = $vm.Status
     }
     $tagCounter = 0
-    foreach($key in $vm.Labels.Keys){
-      $value = $vm.Labels.Values.Split('\n')[$tagCounter]
+    foreach($key in $instance.Labels.Keys){
+      $value = $instance.Labels.Values.Split('\n')[$tagCounter]
       $key = $key -replace '[^a-zA-Z0-9]', '_' 
-      $vmObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+      $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
       $tagCounter++
     }
 
-    $vmList.Add($vmObj) | Out-Null
+    $instanceList.Add($instanceObj) | Out-Null
 
   }
-  
+  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
+
   $allDisks = $null
   try{
     $allDisks = Get-GceDisk -Project $($project.ProjectId) 
@@ -264,7 +266,11 @@ foreach ($project in $projectList)
     Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
     Write-Host $_ -foregroundcolor red
   }
+
+  $diskCounter = 1
   foreach($disk in $allDisks){
+    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+    $diskCounter++
     if ($disk.Users -eq $null){
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
@@ -291,7 +297,9 @@ foreach ($project in $projectList)
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
   }
+  Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
 }
+Write-Progress -ID 1 -Activity "Processing project: $($project)" -Completed
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -450,7 +458,7 @@ if ($Anonymize) {
       return $anonymizedCollection
   }
 
-  $vmList = Anonymize-Collection -Collection $vmList
+  $instanceList = Anonymize-Collection -Collection $instanceList
   $attachedDiskList = Anonymize-Collection -Collection $attachedDiskList
   $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
 }
@@ -459,16 +467,16 @@ $totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.
 $totalTB = ($attachedDiskList.sizeTb | Measure -Sum).sum + ($unattachedDiskList.sizeTb | Measure -Sum).sum
 
 Write-Host
-Write-Host "Total # of GCE VMs: $($vmList.count)" -foregroundcolor green
+Write-Host "Total # of GCE VMs: $($instanceList.count)" -foregroundcolor green
 Write-Host "Total # of attached disks: $($attachedDiskList.count)" -foregroundcolor green
 Write-Host "Total # of unattached disks: $($unattachedDiskList.count)" -foregroundcolor green
 Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foregroundcolor green
 
 # Export to CSV
 Write-Host
-addTagsToAllObjectsInList($vmList)
+addTagsToAllObjectsInList($instanceList)
 Write-Host "CSV file output to: $outputVM" -foregroundcolor green
-$vmList | Export-CSV -path $outputVM
+$instanceList | Export-CSV -path $outputVM
 Write-Host
 addTagsToAllObjectsInList($attachedDiskList)
 Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
