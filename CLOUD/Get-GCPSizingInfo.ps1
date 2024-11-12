@@ -52,6 +52,7 @@ For a provided list of projects, get all GCE VMs and associated disk info and ou
 For a provided CSV list of projects, get all GCE VMs and associated disk info and output to a CSV file.
 #>
 
+[CmdletBinding(DefaultParameterSetName = 'GetAllProjects')]
 param (
 
   # Get all all projects
