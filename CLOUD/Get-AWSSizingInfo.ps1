@@ -439,10 +439,10 @@ function getAWSData($cred) {
     }
 
     $s3Buckets = $($cwBucketInfo | Select-Object -ExpandProperty Dimensions | Where-Object -Property Name -eq "BucketName" | select-object -Property Value -Unique).value
-    $counter = 1
+    $s3Counter = 1
     foreach ($s3Bucket in $s3Buckets) {
-      Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
-      $counter++
+      Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($s3Counter) of $($s3Buckets.Count)" -PercentComplete (($s3Counter / $s3Buckets.Count) * 100)
+      $s3Counter++
       $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new() 
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
@@ -568,10 +568,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $ec2counter = 1
     foreach ($ec2 in $ec2Instances) {
-      Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($counter) of $($ec2Instances.Count)" -PercentComplete (($counter / $ec2Instances.Count) * 100)
-      $counter++
+      Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($ec2Counter) of $($ec2Instances.Count)" -PercentComplete (($ec2Counter / $ec2Instances.Count) * 100)
+      $ec2Counter++
       $volSize = 0
       # Contains list of attached volumes to the current EC2 instance
       $volumes = $ec2.BlockDeviceMappings.ebs
@@ -628,10 +628,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $ebsCounter = 1
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
-      Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($counter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($counter / $ec2UnattachedVolumes.Count) * 100)
-      $counter++
+      Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($ebsCounter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($ebsCounter / $ec2UnattachedVolumes.Count) * 100)
+      $ebsCounter++
       $volSize = 0
 
       $ec2UnVolObj = [PSCustomObject] @{
@@ -668,10 +668,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $rdsCounter = 1
     foreach ($rds in $rdsDBs) {
-      Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
-      $counter++
+      Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($rdsCounter) of $($rdsDBs.Count)" -PercentComplete (($rdsCounter / $rdsDBs.Count) * 100)
+      $rdsCounter++
       $rdsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -712,10 +712,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }    
 
-    $counter = 1
+    $efsCounter = 1
     foreach ($efs in $efsListFromAPI) {
-      Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($counter) of $($efsListFromAPI.Count)" -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
-      $counter++
+      Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($efsCounter) of $($efsListFromAPI.Count)" -PercentComplete (($efsCounter / $efsListFromAPI.Count) * 100)
+      $efsCounter++
       $efsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -757,16 +757,15 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }    
 
-    $counter = 1
+    $eksCounter = 1
     foreach ($eks in $eksListFromAPI) {
       try{
         $eks = Get-EKSCluster -Credential $cred -region $awsRegion -Name $eks -ErrorAction Stop
       } catch {
         Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
-      }  
-      Write-Progress -ID 8 -Activity "Processing EKS Cluster: $($eks.Name)" -Status "EKS Cluster $($counter) of $($eksListFromAPI.Count)" -PercentComplete (($counter / $eksListFromAPI.Count) * 100)
-      $counter++
+      Write-Progress -ID 8 -Activity "Processing EKS Cluster: $($eks.Name)" -Status "EKS Cluster $($eksCounter) of $($eksListFromAPI.Count)" -PercentComplete (($eksCounter / $eksListFromAPI.Count) * 100)
+      $eksCounter++
       $eksObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -843,10 +842,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $fsxCounter = 1
     foreach ($fileSystem in $fsxFileSystemListFromAPI) {
-      Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($counter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
-      $counter++
+      Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($fsxCounter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($fsxCounter / $fsxFileSystemListFromAPI.Count) * 100)
+      $fsxCounter++
       $fsxObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -1001,10 +1000,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $fsxVolCounter = 1
     foreach ($fsx in $fsxListFromAPI) {
-      Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -PercentComplete (($counter / $fsxListFromAPI.Count) * 100)
-      $counter++
+      Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($fsxVolCounter) of $($fsxListFromAPI.Count)" -PercentComplete (($fsxVolCounter / $fsxListFromAPI.Count) * 100)
+      $fsxVolCounter++
       $namespace = "AWS/FSx"
       $metricName = "StorageUsed"
       $dimensions = @(
@@ -1083,7 +1082,7 @@ function getAWSData($cred) {
 
       $fsxList.Add($fsxObj) | Out-Null
     }
-    Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -Completed
+    Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Completed
 
     try{
       $numberOfKMS = (Get-KMSKeyList -Region $awsRegion -ErrorAction Stop).Count
@@ -1179,10 +1178,10 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $counter = 1
+    $backupPlanCounter = 1
     foreach ($plan in $BackupPlans) {
-      Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
-      $counter++
+      Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($backupPlanCounter) of $($BackupPlans.Count)" -PercentComplete (($backupPlanCounter / $BackupPlans.Count) * 100)
+      $backupPlanCounter++
       try{
         $BackupPlanObject = (Get-BAKBackupPlan -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
       } catch {
@@ -1401,10 +1400,9 @@ function getAWSData($cred) {
     Write-Host "Error: $_" -ForeGroundColor Red
   }
 
-  $counter = 1
-  foreach ($resultItem in $result.ResultsByTime) {
-    Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Status "Item $($counter) of $($result.ResultsByTime.Count)" -PercentComplete (($counter / $result.ResultsByTime.count) * 100)
-    $counter++
+  $backupCostCounter = 1
+    Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Status "Item $($backupCostCounter) of $($backupCostTimeSeries.ResultsByTime.Count)" -PercentComplete (($backupCostCounter / $backupCostTimeSeries.ResultsByTime.Count) * 100)
+    $backupCostCounter++
     $monthCostObj = [PSCustomObject] @{
       "AwsAccountId" = $awsAccountInfo.Account
       "AwsAccountAlias" = $awsAccountAlias
