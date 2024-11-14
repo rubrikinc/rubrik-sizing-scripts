@@ -1414,7 +1414,9 @@ function getAWSData($cred) {
   $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
   $backupCostTimeSeries = @{ResultsByTime = @()}
+  $backupCostTimeSeries = @{ResultsByTime = @()}
   try{
+    $backupCostTimeSeries = Get-CECostAndUsage `
     $backupCostTimeSeries = Get-CECostAndUsage `
       -TimePeriod $timePeriod `
       -Granularity MONTHLY `
@@ -1440,13 +1442,16 @@ function getAWSData($cred) {
     foreach ($metric in $metrics) {
         if ($metric -like "*Cost") {
           $cost = "$" + "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 2))"
+          $cost = "$" + "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 2))"
         } else {
+          $cost = "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 3))"
           $cost = "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 3))"
         }
         $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
     }
     $backupCostsList.Add($monthCostObj) | Out-Null
   }
+  Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Completed 
   Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Completed 
 }
 Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
