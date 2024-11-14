@@ -370,6 +370,7 @@ $outputEKSNodegroups = "aws_eks_nodegroups_info-$date_string.csv"
 $outputBackupCosts = "aws_backup_costs-$date_string.csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
 $archiveFile = "aws_sizing_results_$date_string.zip"
+$debug_log = "debug_log-$date_string.log"
 
 # List of output files
 $outputFiles = @(
@@ -390,7 +391,8 @@ $outputFiles = @(
     $outputBackupPlansJSON,
     $output_log,
     's3list.csv',
-    '*.out'
+    '*.out',
+    $debug_log
 )
 
 # Function to do the work
@@ -428,7 +430,9 @@ function getAWSData($cred) {
 
   # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
   $awsRegionCounter = 1
-  foreach ($awsRegion in $awsRegions) {
+  "awsRegionRegions = $($awsRegions.Count)" | Out-File -FilePath $debug_log -Append
+    foreach ($awsRegion in $awsRegions) {
+    "awsRegionCounter = $awsRegionCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Status "Region $($awsRegionCounter) of $($awsRegions.Count)" -PercentComplete (($awsRegionCounter / $awsRegions.Count) * 100)
     $awsRegionCounter++
     try{
@@ -440,8 +444,10 @@ function getAWSData($cred) {
 
     $s3Buckets = $($cwBucketInfo | Select-Object -ExpandProperty Dimensions | Where-Object -Property Name -eq "BucketName" | select-object -Property Value -Unique).value
     $s3Counter = 1
+    "s3Buckets = $($s3Buckets.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($s3Bucket in $s3Buckets) {
       Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($s3Counter) of $($s3Buckets.Count)" -PercentComplete (($s3Counter / $s3Buckets.Count) * 100)
+      "s3Counter = $s3Counter" | Out-File -FilePath $debug_log -Append 
       $s3Counter++
       $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new() 
       $filter.Name = 'BucketName'
@@ -569,8 +575,10 @@ function getAWSData($cred) {
     }
 
     $ec2counter = 1
+    "ec2Instances = $($ec2Instances.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($ec2 in $ec2Instances) {
       Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($ec2Counter) of $($ec2Instances.Count)" -PercentComplete (($ec2Counter / $ec2Instances.Count) * 100)
+      "ec2Counter = $ec2Counter" | Out-File -FilePath $debug_log -Append
       $ec2Counter++
       $volSize = 0
       # Contains list of attached volumes to the current EC2 instance
@@ -629,8 +637,10 @@ function getAWSData($cred) {
     }
 
     $ebsCounter = 1
+    "ec2UnattachedVolumes = $($ec2UnattachedVolumes.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
       Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($ebsCounter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($ebsCounter / $ec2UnattachedVolumes.Count) * 100)
+      "ebsCounter = $ebsCounter" | Out-File -FilePath $debug_log -Append
       $ebsCounter++
       $volSize = 0
 
@@ -669,8 +679,10 @@ function getAWSData($cred) {
     }
 
     $rdsCounter = 1
+    "rdsDBs = $($rdsDBs.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($rds in $rdsDBs) {
       Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($rdsCounter) of $($rdsDBs.Count)" -PercentComplete (($rdsCounter / $rdsDBs.Count) * 100)
+      "rdsCounter = $rdsCounter" | Out-File -FilePath $debug_log -Append
       $rdsCounter++
       $rdsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
@@ -713,8 +725,10 @@ function getAWSData($cred) {
     }    
 
     $efsCounter = 1
+    "efsListFromAPI = $($efsListFromAPI.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($efs in $efsListFromAPI) {
       Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($efsCounter) of $($efsListFromAPI.Count)" -PercentComplete (($efsCounter / $efsListFromAPI.Count) * 100)
+      "efsCounter = $efsCounter" | Out-File -FilePath $debug_log -Append
       $efsCounter++
       $efsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
@@ -758,12 +772,15 @@ function getAWSData($cred) {
     }    
 
     $eksCounter = 1
+    "eksListFromAPI = $($eksListFromAPI.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($eks in $eksListFromAPI) {
       try{
         $eks = Get-EKSCluster -Credential $cred -region $awsRegion -Name $eks -ErrorAction Stop
       } catch {
         Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
+      }
+      "eksCounter = $eksCounter" | Out-File -FilePath $debug_log -Append
       Write-Progress -ID 8 -Activity "Processing EKS Cluster: $($eks.Name)" -Status "EKS Cluster $($eksCounter) of $($eksListFromAPI.Count)" -PercentComplete (($eksCounter / $eksListFromAPI.Count) * 100)
       $eksCounter++
       $eksObj = [PSCustomObject] @{
@@ -843,7 +860,9 @@ function getAWSData($cred) {
     }
 
     $fsxCounter = 1
+    "fsxFileSystemListFromAPI = $($fsxFileSystemListFromAPI.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($fileSystem in $fsxFileSystemListFromAPI) {
+      "fsxCounter = $fsxCounter" | Out-File -FilePath $debug_log -Append
       Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($fsxCounter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($fsxCounter / $fsxFileSystemListFromAPI.Count) * 100)
       $fsxCounter++
       $fsxObj = [PSCustomObject] @{
@@ -1001,7 +1020,9 @@ function getAWSData($cred) {
     }
 
     $fsxVolCounter = 1
+    "fsxListFromAPI = $($fsxListFromAPI.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($fsx in $fsxListFromAPI) {
+      "fsxVolCounter = $fsxVolCounter" | Out-File -FilePath $debug_log -Append
       Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($fsxVolCounter) of $($fsxListFromAPI.Count)" -PercentComplete (($fsxVolCounter / $fsxListFromAPI.Count) * 100)
       $fsxVolCounter++
       $namespace = "AWS/FSx"
@@ -1179,7 +1200,9 @@ function getAWSData($cred) {
     }
 
     $backupPlanCounter = 1
+    "BackupPlans = $($BackupPlans.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($plan in $BackupPlans) {
+      "backupPlanCounter = $backupPlanCounter" | Out-File -FilePath $debug_log -Append
       Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($backupPlanCounter) of $($BackupPlans.Count)" -PercentComplete (($backupPlanCounter / $BackupPlans.Count) * 100)
       $backupPlanCounter++
       try{
@@ -1197,7 +1220,9 @@ function getAWSData($cred) {
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $selectionCounter = 1
+      "selections = $($selections.Count)" | Out-File -FilePath $debug_log -Append
       foreach ($selection in $selections) {
+        "selectionCounter = $selectionCounter" | Out-File -FilePath $debug_log -Append
         Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($selectionCounter) of $($selections.Count)" -PercentComplete (($selectionCounter / $selections.Count) * 100)
         $selectionCounter++
         try{
@@ -1401,7 +1426,9 @@ function getAWSData($cred) {
   }
 
   $backupCostCounter = 1
+  "backupCostTimeSeries.ResultsByTime = $($backupCostTimeSeries.ResultsByTime.Count)" | Out-File -FilePath $debug_log -Append
   foreach ($backupCostTimeSeriesItem in $backupCostTimeSeries.ResultsByTime) {
+    "backupCostCounter = $backupCostCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Status "Item $($backupCostCounter) of $($backupCostTimeSeries.ResultsByTime.Count)" -PercentComplete (($backupCostCounter / $backupCostTimeSeries.ResultsByTime.Count) * 100)
     $backupCostCounter++
     $monthCostObj = [PSCustomObject] @{
@@ -1475,11 +1502,13 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   # Get AWS Info based on user supplied list of profiles
   [string[]]$awsProfiles = $UserSpecifiedProfileNames.split(',')
   $accountCounter = 1
+  "awsProfiles = $($awsProfiles.Count)" | Out-File -FilePath $debug_log -Append
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     $cred = Get-AWSCredential -ProfileName $awsProfile
 
+    "accountCounter = $accountCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)"  -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
 
@@ -1490,12 +1519,14 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
 elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
   $awsProfiles = $(Get-AWSCredential -ListProfileDetail).ProfileName
   $accountCounter = 1
+  "awsProfiles = $($awsProfiles.Count)" | Out-File -FilePath $debug_log -Append
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
     Set-AWSCredential -ProfileName $awsProfile
     $cred = Get-AWSCredential -ProfileName $awsProfile
 
+    "accountCounter = $accountCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)" -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
 
@@ -1528,6 +1559,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
   }
 
   $accountCounter = 1
+  "awsAccounts = $($awsAccounts.Count)" | Out-File -FilePath $debug_log -Append
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.ID) account name: $($awsAccount.Name)"
@@ -1542,6 +1574,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
       continue
     }
 
+    "accountCounter = $accountCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
     $accountCounter++
 
@@ -1619,6 +1652,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   }
 
   $accountCounter = 1
+  "awsAccounts = $($awsAccounts.Count)" | Out-File -FilePath $debug_log -Append
   foreach ($awsAccount in $awsAccounts) {
     Write-Host
     Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
@@ -1643,6 +1677,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
       continue
     }
 
+    "accountCounter = $accountCounter" | Out-File -FilePath $debug_log -Append
     Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.AccountId) $($awsAccount.AccountName)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
     $accountCounter++
 
@@ -1676,6 +1711,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
       exit 1
     }
     $accountCounter = 1
+    "awsAccounts = $($awsAccounts.Count)" | Out-File -FilePath $debug_log -Append
     foreach ($awsAccount in $awsAccounts) {
       Write-Host
       Write-Host "Searching account: $awsAccount"
@@ -1690,6 +1726,7 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
         continue
       }
 
+      "accountCounter = $accountCounter" | Out-File -FilePath $debug_log -Append
       Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
       $accountCounter++
 
