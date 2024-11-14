@@ -1642,12 +1642,12 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
       continue
     }
 
-    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.AccountId) $($awsAccount.AccountName)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
     $accountCounter++
 
     getAWSData $cred
   }
-  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
+  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.AccountId) $($awsAccount.AccountName)" -Completed
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
   # Verify that there is a credential/profile to work with.
