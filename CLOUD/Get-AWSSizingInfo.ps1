@@ -1388,9 +1388,9 @@ function getAWSData($cred) {
 
   $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
-  $result = @{ResultsByTime = @()}
+  $backupCostTimeSeries = @{ResultsByTime = @()}
   try{
-    $result = Get-CECostAndUsage `
+    $backupCostTimeSeries = Get-CECostAndUsage `
       -TimePeriod $timePeriod `
       -Granularity MONTHLY `
       -Metrics $metrics `
@@ -1401,25 +1401,26 @@ function getAWSData($cred) {
   }
 
   $backupCostCounter = 1
+  foreach ($backupCostTimeSeriesItem in $backupCostTimeSeries.ResultsByTime) {
     Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Status "Item $($backupCostCounter) of $($backupCostTimeSeries.ResultsByTime.Count)" -PercentComplete (($backupCostCounter / $backupCostTimeSeries.ResultsByTime.Count) * 100)
     $backupCostCounter++
     $monthCostObj = [PSCustomObject] @{
       "AwsAccountId" = $awsAccountInfo.Account
       "AwsAccountAlias" = $awsAccountAlias
-      "Time-Period-Start" = $resultItem.TimePeriod.Start
-      "Time-Period-End" = $resultItem.TimePeriod.End
+      "Time-Period-Start" = $backupCostTimeSeriesItem.TimePeriod.Start
+      "Time-Period-End" = $backupCostTimeSeriesItem.TimePeriod.End
     }
     foreach ($metric in $metrics) {
         if ($metric -like "*Cost") {
-          $cost = "$" + "$([math]::round($resultItem.Total[$metric].Amount, 2))"
+          $cost = "$" + "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 2))"
         } else {
-          $cost = "$([math]::round($resultItem.Total[$metric].Amount, 3))"
+          $cost = "$([math]::round($backupCostTimeSeriesItem.Total[$metric].Amount, 3))"
         }
         $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
     }
     $backupCostsList.Add($monthCostObj) | Out-Null
   }
-  Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Completed 
+  Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($backupCostTimeSeriesItem.TimePeriod.Start)" -Completed 
 }
 Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
 
