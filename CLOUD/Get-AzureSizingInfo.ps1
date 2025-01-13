@@ -1162,19 +1162,7 @@ foreach ($sub in $subs) {
           $azFSObj.Add("UsedCapacityTiB",[math]::round($($azFSi.ShareUsageBytes / 1073741824 / 1024), 4))
           $azFSObj.Add("UsedCapacityGB",[math]::round($($azFSi.ShareUsageBytes / 1000000000), 3))
           $azFSObj.Add("UsedCapacityTB",[math]::round($($azFSi.ShareUsageBytes / 1000000000000), 4))
-          # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-          if ($azFSi.Labels.Count -ne 0) {
-            $uniqueAzLabels | Foreach-Object {
-                if ($azFSi.Labels[$_]) {
-                    $azFSObj.Add("Label/Tag: $_",$azFSi.Labels[$_])
-                }
-                else {
-                    $azFSObj.Add("Label/Tag: $_","-")
-                }
-            }
-          } else {
-              $uniqueAzLabels | Foreach-Object { $azFSObj.Add("Label/Tag: $_","-") }
-          }
+
           $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
         Write-Progress -Id 9 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -Completed
