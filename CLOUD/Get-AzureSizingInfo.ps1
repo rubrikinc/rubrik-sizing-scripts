@@ -855,13 +855,24 @@ foreach ($sub in $subs) {
   } #if ($SkipAzureSQLandMI -ne $true)
 
   if($SkipAzureCosmosDB -ne $true) {
-    Write-Host "Getting CosmosDB information in $($sub.Name)" -ForeGroundColor Green
+    try {
     $resourceGroups = Get-AzResourceGroup
+    } catch {
+      Write-Error "Unable to collect Resource Group information for CosmosDBs in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
+      $_
+      Continue    
+    }
     $rgCounter = 0
     foreach ($rg in $resourceGroups) {
       $rgCounter++
-      Write-Progress -Id 5 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
+      Write-Progress -Id 6 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
+      try {
       $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
+      } catch {
+        Write-Error "Unable to collect CosmosDB information for Resource Group $($rg.ResoruceGroupName) in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
+        $_
+        Continue    
+      }
 
       foreach ($account in $cosmosDBAccounts) {
 
@@ -917,6 +928,7 @@ foreach ($sub in $subs) {
         $cosmosDBs += New-Object -TypeName PSObject -Property $dbAccountObj
       }
     }
+    Write-Progress -Id 6 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -Completed
   } # if($SkipAzureCosmosDB -ne $true)
 
   if ($SkipAzureStorageAccounts -ne $true) {
@@ -933,7 +945,7 @@ foreach ($sub in $subs) {
     # Loop through each Azure Storage Account and gather statistics
     $azSANum=1
     foreach ($azSA in $azSAs) {
-      Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
+      Write-Progress -Id 7 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
       $azSANum++
       try{
         $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
@@ -1025,7 +1037,7 @@ foreach ($sub in $subs) {
         }
         $azConNum = 1
         foreach ($azCon in $azCons) {
-          Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 -Status "Azure Container $($azConNum) of $($azCons.Count)"
+          Write-Progress -Id 8 -Activity "Getting Azure Container information for: $($azCon.Name)" -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 -Status "Azure Container $($azConNum) of $($azCons.Count)"
           $azConNum++
           try{
             $azConBlobs = Get-AzStorageBlob -Container $($azCon.Name) -Context $azSAContext
@@ -1102,7 +1114,7 @@ foreach ($sub in $subs) {
           }
           $azConList += New-Object -TypeName PSObject -Property $azConObj
         } #foreach ($azCon in $azCons)
-        Write-Progress -Id 7 -Activity "Getting Azure Container information for: $($azCon.Name)" -Completed
+        Write-Progress -Id 8 -Activity "Getting Azure Container information for: $($azCon.Name)" -Completed
       } #if ($GetContainerDetails -eq $true)
 
       if ($SkipAzureFiles -ne $true) {
@@ -1131,7 +1143,7 @@ foreach ($sub in $subs) {
         }    
         $azFSNum = 1
         foreach ($azFSi in $azFSDetails) {
-          Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
+          Write-Progress -Id 9 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
           $azFSNum++
           $azFSObj = [ordered] @{}
           $azFSObj.Add("Name",$azFSi.Name)
@@ -1165,10 +1177,10 @@ foreach ($sub in $subs) {
           }
           $azFSList += New-Object -TypeName PSObject -Property $azFSObj
         } #foreach ($azFS in $azFSs)
-        Write-Progress -Id 7 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -Completed
+        Write-Progress -Id 9 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -Completed
       } #if ($SkipAzureFiles -ne $true)
     } # foreach ($azSA in $azSAs)
-    Write-Progress -Id 6 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -Completed
+    Write-Progress -Id 7 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -Completed
   } # if ($SkipAzureStorageAccounts -ne $true)
 
   if ($SkipAzureBackup -ne $true) {
@@ -1185,7 +1197,7 @@ foreach ($sub in $subs) {
     #Loop over all vaults in the subscription and get Azure Backup Details
     $azVaultNum=1
     foreach ($azVault in $azVaults) {
-      Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
+      Write-Progress -Id 8 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
       $azVaultNum++
       $azVaultVMPolicies = @()
       $azVaultVMSQLPolicies = @()
@@ -1313,7 +1325,7 @@ foreach ($sub in $subs) {
       }
 
     } # foreach ($azVault in $azVaults)
-    Write-Progress -Id 7 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
+    Write-Progress -Id 8 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
 
     # Limit for this API call is 12 months before current date
     $costManagementQuery = $null
