@@ -347,7 +347,7 @@ $context = Get-AzContext
 $context | Select-Object -Property Account,Environment,Tenant |  format-table
 
 # Arrays for collecting data.
-$azLabels = @()
+$azTags = @()
 $vmList = @{}
 $sqlList = @()
 $miList = @()
@@ -436,13 +436,13 @@ switch ($PSCmdlet.ParameterSetName) {
   }
 }
 
-# Get label keys from all specified subscriptions
+# Get tag keys from all specified subscriptions
 
 $subNum=1
 $processedSubs=0
-Write-Host "Getting label information from $($subs.Count) subscription(s)..." -ForeGroundColor Green
+Write-Host "Getting tag information from $($subs.Count) subscription(s)..." -ForeGroundColor Green
 foreach ($sub in $subs) {
-  Write-Progress -Id 1 -Activity "Getting label information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
   $subNum++
 
   try {
@@ -453,11 +453,11 @@ foreach ($sub in $subs) {
     Continue
   }
 
-  $azLabels += $(Get-AzTag).Name
+  $azTags += $(Get-AzTag).Name
 } # foreach ($sub in $subs)
-Write-Progress -Id 1 -Activity "Getting label information from subscription: $($sub.Name)" -Completed
+Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -Completed
 
-$uniqueAzLabels = $azLabels | Sort-Object -Unique
+$uniqueAzTags = $azTags | Sort-Object -Unique
 
 # Get Azure information for all specified subscriptions
 $subNum=1
@@ -532,18 +532,18 @@ foreach ($sub in $subs) {
       $vmObj.Add("BackupPolicies", "-")
       $vmObj.Add("InBackupPolicy", $false)
 
-      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($vm.Labels.Count -ne 0) {
-        $uniqueAzLabels | Foreach-Object {
-            if ($vm.Labels[$_]) {
-                $vmObj.Add("Label/Tag: $_",$vm.Labels[$_])
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($vm.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($vm.Tags[$_]) {
+                $vmObj.Add("Tag: $_",$vm.Tags[$_])
             }
             else {
-                $vmObj.Add("Label/Tag: $_","-")
+                $vmObj.Add("Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $vmObj.Add("Label/Tag: $_","-") }
+          $uniqueAzTags | Foreach-Object { $vmObj.Add("Tag: $_","-") }
       }
       $vmKey = Generate-VMKey -vmName $vm.Name -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
       $vmList[$vmKey] = $vmObj
@@ -639,18 +639,18 @@ foreach ($sub in $subs) {
                 $sqlObj.Add("InstanceType",$pool.SkuName)
                 $sqlObj.Add("Status",$pool.Status)
 
-                # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-                if ($pool.Labels.Count -ne 0) {
-                  $uniqueAzLabels | Foreach-Object {
-                      if ($pool.Labels[$_]) {
-                          $sqlObj.Add("Label/Tag: $_)",$pool.Labels[$_])
+                # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+                if ($pool.Tags.Count -ne 0) {
+                  $uniqueAzTags | Foreach-Object {
+                      if ($pool.Tags[$_]) {
+                          $sqlObj.Add("Tag: $_)",$pool.Tags[$_])
                       }
                       else {
-                          $sqlObj.Add("Label/Tag: $_","-")
+                          $sqlObj.Add("Tag: $_","-")
                       }
                   }
                 } else {
-                    $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
+                    $uniqueAzTags | Foreach-Object { $sqlObj.Add("Tag: $_","-") }
                 }
                 $sqlList += New-Object -TypeName PSObject -Property $sqlObj
               }
@@ -738,18 +738,18 @@ foreach ($sub in $subs) {
             $sqlObj.Add("PITR (Days)",$strPolicy.RetentionDays)
             $sqlObj.Add("DiffBackupFrequency (Hours)",$strPolicy.DiffBackupIntervalInHours)
 
-            # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-            if ($sqlDB.Labels.Count -ne 0) {
-              $uniqueAzLabels | Foreach-Object {
-                  if ($sqlDB.Labels[$_]) {
-                      $sqlObj.Add("Label/Tag: $_",$sqlDB.Labels[$_])
+            # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+            if ($sqlDB.Tags.Count -ne 0) {
+              $uniqueAzTags | Foreach-Object {
+                  if ($sqlDB.Tags[$_]) {
+                      $sqlObj.Add("Tag: $_",$sqlDB.Tags[$_])
                   }
                   else {
-                      $sqlObj.Add("Label/Tag: $_","-")
+                      $sqlObj.Add("Tag: $_","-")
                   }
               }
             } else {
-                $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
+                $uniqueAzTags | Foreach-Object { $sqlObj.Add("Tag: $_","-") }
             }
             $sqlList += New-Object -TypeName PSObject -Property $sqlObj
           }  # else not an Elastic Pool but normal SQL DB
@@ -836,18 +836,18 @@ foreach ($sub in $subs) {
       $sqlUsedAvg = ($sqlUsedBytes.Data.Maximum | Select-Object -Last 1)
       $sqlObj.Add("storage_space_used_mb", $sqlUsedAvg)
 
-      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($MI.Labels.Count -ne 0) {
-        $uniqueAzLabels | Foreach-Object {
-            if ($MI.Labels[$_]) {
-                $sqlObj.Add("Label/Tag: $_",$MI.Labels[$_])
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($MI.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($MI.Tags[$_]) {
+                $sqlObj.Add("Tag: $_",$MI.Tags[$_])
             }
             else {
-                $sqlObj.Add("Label/Tag: $_","-")
+                $sqlObj.Add("Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $sqlObj.Add("Label/Tag: $_","-") }
+          $uniqueAzTags | Foreach-Object { $sqlObj.Add("Tag: $_","-") }
       }
       $miList += New-Object -TypeName PSObject -Property $sqlObj
     } # foreach ($MI in $sqlManagedInstances)
@@ -856,7 +856,7 @@ foreach ($sub in $subs) {
 
   if($SkipAzureCosmosDB -ne $true) {
     try {
-    $resourceGroups = Get-AzResourceGroup
+      $resourceGroups = Get-AzResourceGroup
     } catch {
       Write-Error "Unable to collect Resource Group information for CosmosDBs in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
       $_
@@ -867,13 +867,13 @@ foreach ($sub in $subs) {
       $rgCounter++
       Write-Progress -Id 6 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
       try {
-      $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
+        $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
       } catch {
         Write-Error "Unable to collect CosmosDB information for Resource Group $($rg.ResoruceGroupName) in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
         $_
         Continue    
       }
-
+  
       foreach ($account in $cosmosDBAccounts) {
 
         $dbAccountObj = [ordered] @{}
@@ -1022,18 +1022,18 @@ foreach ($sub in $subs) {
       $azSAObj.Add("UsedFileShareCapacityTB",[math]::round($($UsedFileShareCapacityBytes / 1000000000000), 4))
       $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Maximum | Select-Object -Last 1))
       $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Maximum | Select-Object -Last 1))
-      # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-      if ($azSA.Labels.Count -ne 0) {
-        $uniqueAzLabels | Foreach-Object {
-            if ($azSA.Labels[$_]) {
-                $azSAObj.Add("Label/Tag: $_",$azSA.Labels[$_])
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($azSA.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($azSA.Tags[$_]) {
+                $azSAObj.Add("Tag: $_",$azSA.Tags[$_])
             }
             else {
-                $azSAObj.Add("Label/Tag: $_","-")
+                $azSAObj.Add("Tag: $_","-")
             }
         }
       } else {
-          $uniqueAzLabels | Foreach-Object { $azSAObj.Add("Label/Tag: $_","-") }
+          $uniqueAzTags | Foreach-Object { $azSAObj.Add("Tag: $_","-") }
       }
       $azSAList += New-Object -TypeName PSObject -Property $azSAObj
       
@@ -1111,18 +1111,18 @@ foreach ($sub in $subs) {
           $azConObj.Add("UsedCapacityAllTiersTiB",[math]::round($($lengthAllTiers / 1073741824 / 1024), 4))
           $azConObj.Add("UsedCapacityAllTiersGB",[math]::round($($lengthAllTiers / 1000000000), 3))
           $azConObj.Add("UsedCapacityAllTiersTB",[math]::round($($lengthAllTiers / 1000000000000), 4))
-          # Loop through possible labels adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
-          if ($azCon.Labels.Count -ne 0) {
-            $uniqueAzLabels | Foreach-Object {
-                if ($azCon.Labels[$_]) {
-                    $azConObj.Add("Label/Tag: $_",$azCon.Labels[$_])
+          # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+          if ($azCon.Tags.Count -ne 0) {
+            $uniqueAzTags | Foreach-Object {
+                if ($azCon.Tags[$_]) {
+                    $azConObj.Add("Tag: $_",$azCon.Tags[$_])
                 }
                 else {
-                    $azConObj.Add("Label/Tag: $_","-")
+                    $azConObj.Add("Tag: $_","-")
                 }
             }
           } else {
-              $uniqueAzLabels | Foreach-Object { $azConObj.Add("Label/Tag: $_","-") }
+              $uniqueAzTags | Foreach-Object { $azConObj.Add("Tag: $_","-") }
           }
           $azConList += New-Object -TypeName PSObject -Property $azConObj
         } #foreach ($azCon in $azCons)
@@ -1502,7 +1502,7 @@ if ($Anonymize) {
                 }
               }
           } 
-          elseif ($propertyName -like "Label/Tag:*") {
+          elseif ($propertyName -like "Tag:*") {
             # Must anonymize both the tag name and value
 
             $tagValue = $DataObject.$propertyName
@@ -1511,14 +1511,14 @@ if ($Anonymize) {
             $tagName = $propertyName.Substring(10)
             
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
-                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("Label/TagName")
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
             }
-            $anonymizedTagKey = 'Label/Tag:' + $global:anonymizeDict["$tagName"]
+            $anonymizedTagKey = 'Tag:' + $global:anonymizeDict["$tagName"]
             
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
-                  $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("Label/TagValue")#$anonymizedTagKey
+                  $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("TagValue")#$anonymizedTagKey
                 }
                 $anonymizedTagValue = $global:anonymizeDict[$tagValue]
             }
