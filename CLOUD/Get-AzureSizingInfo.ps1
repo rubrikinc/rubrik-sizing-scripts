@@ -945,7 +945,6 @@ foreach ($sub in $subs) {
   } # if($SkipAzureCosmosDB -ne $true)
 
   if ($SkipAzureStorageAccounts -ne $true) {
-    Write-Host "Getting Storage Account information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azSAs = Get-AzStorageAccount -ErrorAction Stop
