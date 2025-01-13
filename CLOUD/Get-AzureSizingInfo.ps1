@@ -925,6 +925,19 @@ foreach ($sub in $subs) {
         -StartTime (Get-Date).AddDays(-1)).Data.Maximum | Select-Object -Last 1
         $dbAccountObj.Add("IndexUsage",$azSAUsedCapacity)
 
+      # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
+      if ($account.Tags.Count -ne 0) {
+        $uniqueAzTags | Foreach-Object {
+            if ($account.Tags[$_]) {
+                $dbAccountObj.Add("Tag: $_",$account.Tags[$_])
+            }
+            else {
+                $dbAccountObj.Add("Tag: $_","-")
+            }
+        }
+      } else {
+          $uniqueAzTags | Foreach-Object { $dbAccountObj.Add("Tag: $_","-") }
+      }
         $cosmosDBs += New-Object -TypeName PSObject -Property $dbAccountObj
       }
     }
