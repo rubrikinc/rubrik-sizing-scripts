@@ -1132,7 +1132,7 @@ foreach ($sub in $subs) {
               }
             }
             else {
-              Write-Output "Skipping File Share query for $($azSAPSObject.StorageAccountName) because it does not support Azure Files."
+              Write-Verbose "Skipping File Share query for $($azSAPSObject.StorageAccountName) because it does not support Azure Files."
             }            
           }
         }
@@ -1184,7 +1184,6 @@ foreach ($sub in $subs) {
   } # if ($SkipAzureStorageAccounts -ne $true)
 
   if ($SkipAzureBackup -ne $true) {
-    Write-Host "Getting Azure Backup Vault information in $($sub.Name)" -ForeGroundColor Green
     # Get a list of all Azure Storage Accounts.
     try {
       $azVaults = Get-AzRecoveryServicesVault -ErrorAction Stop
