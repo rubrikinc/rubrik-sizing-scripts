@@ -516,7 +516,7 @@ function getAWSData($cred) {
         "InBackupPlan" = $false
       }
       foreach ($bytesStorage in $bytesStorages.GetEnumerator()) {
-        if ($($bytesStorage.Value) -eq $null) {
+        if ($null -eq $($bytesStorage.Value)) {
           $bytesStorageSize = 0
           $s3SizeGB = 0
           $s3SizeTB = 0
@@ -536,7 +536,7 @@ function getAWSData($cred) {
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize
       }
       foreach ($numObjStorage in $numObjStorages.GetEnumerator()) {
-        if ($($numObjStorage.Value) -eq $null) {
+        if ($null -eq $($numObjStorage.Value)) {
           $numObjStorageNum = 0
         } else {
           $numObjStorageNum = $($numObjStorage.Value)
@@ -857,10 +857,10 @@ function getAWSData($cred) {
         "FileSystemOwnerId" = $filesystem.OwnerId
         "FileSystemStorageType" = $filesystem.StorageType
         "Name" = $filesystem.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
-        "OnTapType" = ($filesystem.OntapConfiguration -ne $null)
-        "WindowsType" = ($filesystem.WindowsConfiguration -ne $null)
-        "LustreType" = ($filesystem.LustreConfiguration -ne $null)
-        "OpenZFSType" = ($filesystem.OpenZFSConfiguration -ne $null)
+        "OnTapType" = ($null -ne $filesystem.OntapConfiguration)
+        "WindowsType" = ($null -ne $filesystem.WindowsConfiguration)
+        "LustreType" = ($null -ne $filesystem.LustreConfiguration)
+        "OpenZFSType" = ($null -ne $filesystem.OpenZFSConfiguration)
         "StorageCapacityBytes" = $filesystem.StorageCapacity * 1073741824
         "StorageCapacityGiB" = $filesystem.StorageCapacity
         "StorageCapacityTiB" = [math]::round($($filesystem.StorageCapacity / 1024), 4)
@@ -1891,7 +1891,7 @@ if ($Anonymize) {
       return "$($anonField)-$($paddedValue)"
   }
 
-  function Anonymize-Data {
+  function AnonymizeData {
       param (
           [PSObject]$DataObject
       )
@@ -1945,7 +1945,7 @@ if ($Anonymize) {
             $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
         } elseif($propertyName -eq "BackupPlans") {
             $originalValue = $DataObject.$propertyName
-            if($originalValue -ne $null -and $originalValue -ne ""){
+            if($null -ne $originalValue -and $originalValue -ne ""){
               $plans = $originalValue.split(', ')
               $newVal = ""
               $count = 0
@@ -1963,13 +1963,13 @@ if ($Anonymize) {
             }
           }
           elseif ($property.Value -is [PSObject]) {
-              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+              $DataObject.$propertyName = AnonymizeData -DataObject $property.Value
           }
           elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
               $anonymizedCollection = @()
               foreach ($item in $property.Value) {
                   if ($item -is [PSObject]) {
-                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedItem = AnonymizeData -DataObject $item
                       $anonymizedCollection += $anonymizedItem
                   } else {
                       $anonymizedCollection += $item
@@ -1982,7 +1982,7 @@ if ($Anonymize) {
       return $DataObject
   }
 
-  function Anonymize-Collection {
+  function AnonymizeCollection {
       param (
           [System.Collections.IEnumerable]$Collection
       )
@@ -1990,7 +1990,7 @@ if ($Anonymize) {
       $anonymizedCollection = @()
       foreach ($item in $Collection) {
           if ($item -is [PSObject]) {
-              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedItem = AnonymizeData -DataObject $item
               $anonymizedCollection += $anonymizedItem
           } else {
               $anonymizedCollection += $item
@@ -2001,22 +2001,22 @@ if ($Anonymize) {
   }
 
   # Anonymize each list
-  $backupPlanList = Anonymize-Collection -Collection $backupPlanList
-  $backupCostsList = Anonymize-Collection -Collection $backupCostsList
-  $ddbList = Anonymize-Collection -Collection $ddbList
-  $ec2List = Anonymize-Collection -Collection $ec2List
-  $ec2UnattachedVolList = Anonymize-Collection -Collection $ec2UnattachedVolList
-  $efsList = Anonymize-Collection -Collection $efsList
-  $eksList = Anonymize-Collection -Collection $eksList
-  $eksNodeGroupList = Anonymize-Collection -Collection $eksNodeGroupList
-  $fsxFileSystemList = Anonymize-Collection -Collection $fsxFileSystemList
-  $fsxList = Anonymize-Collection -Collection $fsxList
-  $kmsList = Anonymize-Collection -Collection $kmsList
-  $rdsList = Anonymize-Collection -Collection $rdsList
-  $s3List = Anonymize-Collection -Collection $s3List
-  $s3ListAg = Anonymize-Collection -Collection $s3ListAg
-  $secretsList = Anonymize-Collection -Collection $secretsList
-  $sqsList = Anonymize-Collection -Collection $sqsList
+  $backupPlanList = AnonymizeCollection -Collection $backupPlanList
+  $backupCostsList = AnonymizeCollection -Collection $backupCostsList
+  $ddbList = AnonymizeCollection -Collection $ddbList
+  $ec2List = AnonymizeCollection -Collection $ec2List
+  $ec2UnattachedVolList = AnonymizeCollection -Collection $ec2UnattachedVolList
+  $efsList = AnonymizeCollection -Collection $efsList
+  $eksList = AnonymizeCollection -Collection $eksList
+  $eksNodeGroupList = AnonymizeCollection -Collection $eksNodeGroupList
+  $fsxFileSystemList = AnonymizeCollection -Collection $fsxFileSystemList
+  $fsxList = AnonymizeCollection -Collection $fsxList
+  $kmsList = AnonymizeCollection -Collection $kmsList
+  $rdsList = AnonymizeCollection -Collection $rdsList
+  $s3List = AnonymizeCollection -Collection $s3List
+  $s3ListAg = AnonymizeCollection -Collection $s3ListAg
+  $secretsList = AnonymizeCollection -Collection $secretsList
+  $sqsList = AnonymizeCollection -Collection $sqsList
 }
 
 # Export to CSV
