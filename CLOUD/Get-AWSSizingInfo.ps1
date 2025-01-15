@@ -90,6 +90,47 @@
     Updated: 10/20/22
     Updated: 5/5/2023
 
+  .PARAMETER AllLocalProfiles
+    When set all AWS accounts found in the local profiles will be queried. 
+
+  .PARAMETER Anonymize
+    Anonymize data collected.
+
+  .PARAMETER AnonymizeFields
+    A comma separated list of fields in resulting csvs and JSONs to anonymize. The list must be encased in
+    quotes, with no spaces between fields.
+
+  .PARAMETER CrossAccountRole
+    When set, the script will query the AWS accounts specified in the 'UserSpecifiedAccounts' parameter using the cross account
+    role specified in the 'CrossAccountRoleName' parameter. Requires the 'UserSpecifiedAccounts' parameter to be set.
+
+  .PARAMETER DefaultProfile
+    Collect data from the account the account listed in the 'default' profile or what ever credentials were specified when
+    running the 'Set-AWSCredential' command.
+
+  .PARAMETER NotAnonymizeFields
+    A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
+    anonymized). The list must be encased in quotes, with no spaces between fields.
+    Note that we currently anonymize the following fields:
+    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
+    "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
+    "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
+    "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
+    "RequestId", "TableName", "TableId", "TableArn"
+
+  .PARAMETER OrgCrossAccountRoleName
+    When set, the script will query the AWS Organization that the default profile or profile specified by 'Set-AWSCredential'
+    is in to get a list of all AWS accounts to gather data on. This script will then query all of the accounts that were 
+    found using the AWS cross account role that is specified.
+
+  .PARAMETER Partition
+    The AWS partition other than the standard commercial partition to query. Currently the only non-commercial partition to be 
+    tested ahs been the GovCloud partition. 
+
+  .PARAMETER ProfileLocation
+    The location of the AWS profile to use. This is the location of the AWS profile file that contains the credentials to use
+    to query AWS.
+
   .PARAMETER Regions
     A comma separated list of AWS regions in which to gather data. If omitted, all regions will be queried. The list of regions
     must be surrounded by quotes. Ex. -Regions "us-west-1,us-west-2".
@@ -108,33 +149,13 @@
     The AWS region to use for query. If not specified, the script will default to 'us-east-1' in commercial AWS and us-gov-east-1
     in AWS GovCloud.
 
-  .PARAMETER Partition
-    The AWS partition other than the standard commercial partition to query. Currently the only non-commercial partition to be 
-    tested ahs been the GovCloud partition. 
-
-  .PARAMETER DefaultProfile
-    Collect data from the account the account listed in the 'default' profile or what ever credentials were specified when
-    running the 'Set-AWSCredential' command.
-
-  .PARAMETER AllLocalProfiles
-    When set all AWS accounts found in the local profiles will be queried. 
-
-  .PARAMETER CrossAccountRole
-    When set, the script will query the AWS accounts specified in the 'UserSpecifiedAccounts' parameter using the cross account
-    role specified in the 'CrossAccountRoleName' parameter. Requires the 'UserSpecifiedAccounts' parameter to be set.
-
-  .PARAMETER OrgCrossAccountRoleName
-    When set, the script will query the AWS Organization that the default profile or profile specified by 'Set-AWSCredential'
-    is in to get a list of all AWS accounts to gather data on. This script will then query all of the accounts that were 
-    found using the AWS cross account role that is specified.
+  .PARAMETER SSOParameterSetName
+    When set , the script will authenticate with AWS using AWS SSO. The script will use the SSO Parameter Set specified by -SSOParameterSetName
+    to access the AWS accounts. Also requires the 'SSORegion' and 'SSOStartURL' parameters.
 
   .PARAMETER SSORegion
     When set, the script will authenticate AWS using AWS SSO. -SSORegion is used to specify the region in which to authenticate
     with AWS SSO. Also requires the 'SSOParameterSetName' and 'SSOStartURL' parameters.
-
-  .PARAMETER SSOParameterSetName
-    When set , the script will authenticate with AWS using AWS SSO. The script will use the SSO Parameter Set specified by -SSOParameterSetName
-    to access the AWS accounts. Also requires the 'SSORegion' and 'SSOStartURL' parameters.
 
   .PARAMETER SSOStartURL
     When set, the script will authenticate with AWS using AWS SSO. The script will use the SSO URL specified by SSOStartURL
@@ -146,27 +167,10 @@
   .PARAMETER UserSpecifiedProfileNames
     A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
   
-  .PARAMETER Anonymize
-    Anonymize data collected.
-
-  .PARAMETER AnonymizeFields
-    A comma separated list of fields in resulting csvs and JSONs to anonymize. The list must be encased in
-    quotes, with no spaces between fields.
-
-  .PARAMETER NotAnonymizeFields
-    A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
-    anonymized). The list must be encased in quotes, with no spaces between fields.
-    Note that we currently anonymize the following fields:
-    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
-    "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
-    "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
-    "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
-    "RequestId", "TableName", "TableId", "TableArn"
-
   .EXAMPLE  
     >>>
 
-    Run the script in AWS CloudShell to get all EC2 and RDS instance info and output to a CSV file. Uses the current 
+    Run the script in AWS CloudShell to get all AWS information and output to a CSV file. Uses the current 
     AWS account profile and searches all regions.
 
     [cloudshell-user@ip ~]$ pwsh
@@ -181,7 +185,7 @@
   .EXAMPLE
     >>>
 
-    Run the script in Powershell to get all EC2 and RDS instance info and output to a CSV file. Uses the  
+    Run the script in Powershell to get all AWS information and output to a CSV file. Uses the  
     AWS account specified by and searches all regions.
 
     PS > Set-AWSCredential -ProfileName MyAwsProfile
@@ -189,8 +193,15 @@
 
   .EXAMPLE
     >>>
+
+    Run the script in PowerShell to get all AWS information and output to a CSV file. Use the selected Profile Location.
+
+    PS > ./Get-AWSSizingInfo.ps1 -ProfileLocation "C:\Users\user\Documents\AWS\credentials" -ProfileName MyAwsProfile
+
+  .EXAMPLE
+    >>>
     
-    Run the script in PowerShell to get all EC2 and RDS instance info and output to a CSV file. Use the selected 
+    Run the script in PowerShell to get all AWS information and output to a CSV file. Use the selected 
     account profiles "aws_account_profile1" and "aws_account_profile2". Limit the query to the "us-west-1" and 
     "us-west-2" regions. 
 
@@ -199,7 +210,7 @@
   .EXAMPLE
     >>>
     
-    Run the script in Powershell to get all EC2 and RDS instance info and output to a CSV file. Uses all of the  
+    Run the script in Powershell to get all AWS information and output to a CSV file. Uses all of the  
     AWS account profiles in the user environment. Limits the query to the "us-gov-east-1" region and 
     queries the AWS GovCloud partition.
 
@@ -208,7 +219,7 @@
   .EXAMPLE
     >>>
 
-    Run the script in PowerShell to get all EC2 and RDS instance info and output to a CSV file. Query the AWS Organization
+    Run the script in PowerShell to get all AWS information and output to a CSV file. Query the AWS Organization
     for a list of accounts and search all found accounts. 
 
     PS > Set-AWSCredential -ProfileName MyAwsSourceOrgProfile
@@ -217,7 +228,7 @@
 .EXAMPLE
     >>>
 
-    Run the script in AWS CloudShell to get all EC2 and RDS instance info and output to a CSV file. Query a 
+    Run the script in AWS CloudShell to get all AWS information and output to a CSV file. Query a 
     user provided list of AWS accounts.
 
     [cloudshell-user@ip ~]$ pwsh
@@ -291,19 +302,6 @@ param (
   [Parameter(ParameterSetName='AWSOrganization')]
   [ValidateNotNullOrEmpty()]
   [string]$UserSpecifiedAccountsFile,
-  # Limit search for data to specific regions.
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [string]$Regions,
-  # Get data from AWS GovCloud region.
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [ValidateSet("GovCloud","")]
-  [string]$Partition,
-  # Region to use to for querying AWS.
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [string]$RegionToQuery,
   # Option to anonymize the output files.
   [Parameter(Mandatory=$false)]
   [switch]$Anonymize,
@@ -314,7 +312,24 @@ param (
   # Choose to not anonymize certain fields
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [string]$NotAnonymizeFields
+  [string]$NotAnonymizeFields,
+  # Get data from AWS GovCloud region.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [ValidateSet("GovCloud","")]
+  [string]$Partition,
+  # Use specific ProfileLocation.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ProfileLocation,
+  # Limit search for data to specific regions.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$Regions,
+  # Region to use to for querying AWS.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$RegionToQuery
 )
 
 # Save the current culture so it can be restored later
@@ -345,12 +360,18 @@ if (Test-Path "./$output_log") {
   Remove-Item -Path "./$output_log"
 }
 
-if($Anonymize){
+if ($Anonymize){
   "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
   $log_for_anon_customers = "output_aws_not_anonymized_$date_string.log"
   Start-Transcript -Path "./$log_for_anon_customers"
 } else{
   Start-Transcript -Path "./$output_log"
+}
+
+$profileLocationOpt = @{}
+if ($ProfileLocation) {
+  $profileLocationOpt = @{ProfileLocation = $($ProfileLocation)}
+  Write-Host "Using Profile Location: $ProfileLocation"
 }
 
 # Filenames of the CSVs output
@@ -400,7 +421,7 @@ function getAWSData($cred) {
   }
   else {
     try {
-    Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
+      Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
       $awsRegions = Get-EC2Region @profileLocationOpt -Region $queryRegion -Credential $cred | Select-Object -ExpandProperty RegionName
     } catch {
       Write-Host "Failed to get EC2 Regions for profile name $awsProfile in region $queryRegion" -ForeGroundColor Red
@@ -1450,16 +1471,18 @@ if ($RegionToQuery) {
 }
 elseif ($Partition -eq 'GovCloud') {
   $queryRegion = $defaultGovCloudQueryRegion
+  $partitionId = 'aws-us-gov'
 }
 else {
   $queryRegion = $defaultQueryRegion
+  $partitionId = 'aws'
 }
 
 
 if ($PSCmdlet.ParameterSetName -eq 'DefaultProfile') {
 # Verify that there is a credential/profile to work with.
   try {
-    $caller = $(Get-STSCallerIdentity).arn
+    $caller = $(Get-STSCallerIdentity @profileLocationOpt -Region $queryRegion).arn
   } catch {
     Write-Error $_
     Write-Error "Default credential/profile not set."
@@ -1468,7 +1491,13 @@ if ($PSCmdlet.ParameterSetName -eq 'DefaultProfile') {
   }
   Write-Host
   Write-Host "Source Profile/Credential is: $caller"  -ForegroundColor Green
-  $cred = Get-AWSCredential
+  try {
+    $cred = Get-AWSCredential @profileLocationOpt
+  } catch {
+    Write-Error $_
+    Write-Error "Unable to gather credential data from AWS."
+    exit 1
+  }
   getAWSData $cred
 }
 elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
@@ -1478,7 +1507,13 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
-    $cred = Get-AWSCredential -ProfileName $awsProfile
+    try {
+      $cred = Get-AWSCredential @profileLocationOpt -ProfileName $awsProfile
+    } catch {
+      Write-Error $_
+      Write-Error "Unable to gather credential data from AWS for profile $($awsProfile)."
+      exit 1
+    }
 
     Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)"  -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
@@ -1488,13 +1523,13 @@ elseif ($PSCmdlet.ParameterSetName -eq 'UserSpecifiedProfiles') {
   Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Completed
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
-  $awsProfiles = $(Get-AWSCredential -ListProfileDetail).ProfileName
+  $awsProfiles = $(Get-AWSCredential @profileLocationOpt -ListProfileDetail).ProfileName
   $accountCounter = 1
   foreach ($awsProfile in $awsProfiles) {
     Write-Host
     Write-Host "Using profile: $awsProfile"  -ForegroundColor Green
-    Set-AWSCredential -ProfileName $awsProfile
-    $cred = Get-AWSCredential -ProfileName $awsProfile
+    Set-AWSCredential @profileLocationOpt -ProfileName $awsProfile
+    $cred = Get-AWSCredential @profileLocationOpt -ProfileName $awsProfile
 
     Write-Progress -ID 1 -Activity "Processing profile: $($awsProfile)" -Status "Profile: $($accountCounter) of $($awsProfiles.Count)" -PercentComplete (($accountCounter / $awsProfiles.Count) * 100)
     $accountCounter++
@@ -1506,11 +1541,11 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AllLocalProfiles') {
 elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
 # Verify that there is a credential/profile to work with.
   try {
-    $caller = $(Get-STSCallerIdentity).arn
+    $caller = $(Get-STSCallerIdentity @profileLocationOpt -Region $queryRegion).arn
   } catch {
     Write-Error $_
-    Write-Error "Credential/profile to query the AWS AOrganization and be the source credential/profile for the cross account role not set."
-    Write-Error "Run Set-AWSCredential to set."
+    Write-Error "Credential/profile to query the AWS Organization in $($queryRegion) not set."
+    Write-Error "Run Set-AWSCredential to set the credential and verify that the correct Partition or RegionToQuery is set."
     exit 1
   } 
   Write-Host "Source Profile/Credential is: $caller"
@@ -1520,20 +1555,45 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
   }
   if ($UserSpecifiedAccountsFile) {
     $userAwsAccounts = Get-Content -Path $UserSpecifiedAccountsFile
-    $awsAccounts = Get-ORGAccountList | Where-Object {$_.ID -in $($userAwsAccounts)}
+    try {
+      $awsAccounts = Get-ORGAccountList @profileLocationOpt -Region $queryRegion | Where-Object {$_.ID -in $($userAwsAccounts)}
+    } catch {
+      Write-Host ""
+      Write-Error "An error occurred:"
+      Write-Error $_
+      Write-Error "Unable to gather data from AWS Organization for user specified accounts from file."
+      exit 1
+    }
   } elseif ($UserSpecifiedAccounts) {
-    $awsAccounts = Get-ORGAccountList | Where-Object {$_.ID -in $UserSpecifiedAccounts.split(',')}
+    try {
+      $awsAccounts = Get-ORGAccountList @profileLocationOpt -Region $queryRegion | Where-Object {$_.ID -in $UserSpecifiedAccounts.split(',')}
+    } catch {
+      Write-Host ""
+      Write-Error "An error occurred:"
+      Write-Error $_
+      Write-Error "Unable to gather data from AWS Organization for user specified accounts."
+      exit 1
+    }
   } else {
-    $awsAccounts = Get-ORGAccountList
+    try {
+      $awsAccounts = Get-ORGAccountList @profileLocationOpt -Region $queryRegion
+    } catch {
+      Write-Host ""
+      Write-Error "An error occurred:"
+      Write-Error $_
+      Write-Error "Unable to gather data from AWS Organization."
+      exit 1
+    }
   }
 
   $accountCounter = 1
   foreach ($awsAccount in $awsAccounts) {
-    Write-Host
-    Write-Host "Searching account id: $($awsAccount.ID) account name: $($awsAccount.Name)"
-    $roleArn = "arn:aws:iam::" + $awsAccount.Id + ":role/" + $OrgCrossAccountRoleName
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.Id):$($awsAccount.Name)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    $accountCounter++
+
+    $roleArn = "arn:$($partitionId):iam::" + $awsAccount.Id + ":role/" + $OrgCrossAccountRoleName
     try {
-      $cred = (Use-STSRole -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name).Credentials
+      $cred = (Use-STSRole @profileLocationOpt -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name -Region $queryRegion).Credentials
     } catch {
       Write-Host ""
       Write-Error "An error occurred:"
@@ -1542,16 +1602,13 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSOrganization') {
       continue
     }
 
-    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
-    $accountCounter++
-
     getAWSData $cred
   }
-  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
+  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.Id):$($awsAccount.Name)" -Completed
 }
 elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   try {
-    $SSOOIDCClient = $(Register-SSOOIDCClient -ClientName $MyInvocation.MyCommand -ClientType 'public' -Region $SSORegion)
+    $SSOOIDCClient = $(Register-SSOOIDCClient @profileLocationOpt -ClientName $MyInvocation.MyCommand -ClientType 'public' -Region $SSORegion)
   } catch {
     Write-Host ""
     Write-Error "An error occurred:"
@@ -1561,7 +1618,8 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   }
 
   try {
-  $DevAuth = $(Start-SSOOIDCDeviceAuthorization -ClientId $SSOOIDCClient.ClientId `
+  $DevAuth = $(Start-SSOOIDCDeviceAuthorization @profileLocationOpt `
+                                                -ClientId $SSOOIDCClient.ClientId `
                                                 -ClientSecret $SSOOIDCClient.ClientSecret `
                                                 -StartUrl $SSOStartURL `
                                                 -Region $SSORegion)
@@ -1588,7 +1646,8 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   while ((Get-Date) -le $CodeExpiry) {
       Start-Sleep $DevAuth.Interval
       try {
-          $Token = $(New-SSOOIDCToken -ClientId $SSOOIDCClient.ClientId `
+          $Token = $(New-SSOOIDCToken @profileLocationOpt `
+                                      -ClientId $SSOOIDCClient.ClientId `
                                       -ClientSecret $SSOOIDCClient.ClientSecret `
                                       -DeviceCode $DevAuth.DeviceCode `
                                       -GrantType 'urn:ietf:params:oauth:grant-type:device_code' `
@@ -1611,49 +1670,57 @@ elseif ($PSCmdlet.ParameterSetName -eq 'AWSSSO') {
   }
   if ($UserSpecifiedAccountsFile) {
     $userAwsAccounts = Get-Content -Path $UserSpecifiedAccountsFile
-    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion | Where-Object {$_.AccountId -in  $($userAwsAccounts)}
+    $awsAccounts = Get-SSOAccountList @profileLocationOpt `
+                                      -AccessToken $Token.AccessToken `
+                                      -Region $SSORegion `
+                                      | Where-Object {$_.AccountId -in  $($userAwsAccounts)}
   } elseif ($UserSpecifiedAccounts) {
-    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion | Where-Object {$_.AccountId -in $UserSpecifiedAccounts.split(',')}
+    $awsAccounts = Get-SSOAccountList @profileLocationOpt `
+                                      -AccessToken $Token.AccessToken `
+                                      -Region $SSORegion `
+                                      | Where-Object {$_.AccountId -in $UserSpecifiedAccounts.split(',')}
   } else {
-    $awsAccounts = Get-SSOAccountList -AccessToken $Token.AccessToken -Region $SSORegion
+    $awsAccounts = Get-SSOAccountList @profileLocationOpt -AccessToken $Token.AccessToken -Region $SSORegion
   }
 
   $accountCounter = 1
   foreach ($awsAccount in $awsAccounts) {
-    Write-Host
-    Write-Host "Searching account id: $($awsAccount.AccountId) account name: $($awsAccount.AccountName)"
+    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.AccountId):$($awsAccount.AccountName)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+    $accountCounter++
     try {
-      $ssoCred = Get-SSORoleCredential -AccessToken $Token.AccessToken -AccountId $awsAccount.AccountId -RoleName $SSOParameterSetName -region $SSORegion
+      $ssoCred = Get-SSORoleCredential @profileLocationOpt `
+                                        -AccessToken $Token.AccessToken `
+                                        -AccountId $awsAccount.AccountId `
+                                        -RoleName $SSOParameterSetName `
+                                        -Region $SSORegion
     } catch {
       Write-Host ""
       Write-Error "An error occurred:"
       Write-Error $_
-      Write-Error "Unable to get SSO Credentials for AWS account $($awsAccount.AccountId) using SSO parameter set $($SSOParameterSetName)."
+      Write-Error "Unable to get SSO Credentials for AWS account $($awsAccount.AccountId):$($awsAccount.AccountName) using SSO parameter set: $($SSOParameterSetName)."
       continue
     }
     try {
-      $cred = Set-AWSCredential -AccessKey $ssoCred.AccessKeyId `
+      $cred = Set-AWSCredential @profileLocationOpt `
+                                -AccessKey $ssoCred.AccessKeyId `
                                 -SecretKey $ssoCred.SecretAccessKey `
                                 -SessionToken $ssoCred.SessionToken
     } catch {
       Write-Host ""
       Write-Error "An error occurred:"
       Write-Error $_
-      Write-Error "Unable to get SSO session for AWS account $($awsAccount.Id)."
+      Write-Error "Unable to get SSO session for AWS account $($awsAccount.AccountId):$($awsAccount.AccountName)."
       continue
     }
 
-    Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
-    $accountCounter++
-
     getAWSData $cred
   }
-  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Completed
+  Write-Progress -ID 1 -Activity "Processing account: $($awsAccount.AccountId):$($awsAccount.AccountName)" -Completed
 } 
 elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
   # Verify that there is a credential/profile to work with.
     try {
-      $caller = $(Get-STSCallerIdentity).arn
+      $caller = $(Get-STSCallerIdentity @profileLocationOpt -Region $queryRegion).arn
     } catch {
       Write-Error $_
       Write-Error "Credential/profile be the source profile for the cross account role not set."
@@ -1677,11 +1744,11 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
     }
     $accountCounter = 1
     foreach ($awsAccount in $awsAccounts) {
-      Write-Host
-      Write-Host "Searching account: $awsAccount"
-      $roleArn = "arn:aws:iam::" + $awsAccount + ":role/" + $CrossAccountRoleName
+      Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
+      $accountCounter++
+      $roleArn = "arn:$($partitionId):iam::" + $awsAccount + ":role/" + $CrossAccountRoleName
       try {
-        $cred = (Use-STSRole -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name).Credentials
+        $cred = (Use-STSRole @profileLocationOpt -RoleArn $roleArn -RoleSessionName $MyInvocation.MyCommand.Name -Region $queryRegion).Credentials
       } catch {
         Write-Host ""
         Write-Error "An error occurred:"
@@ -1689,9 +1756,6 @@ elseif ($PSCmdlet.ParameterSetName -eq 'CrossAccountRole') {
         Write-Error "Unable to gather data from AWS account $awsAccount."
         continue
       }
-
-      Write-Progress -ID 1 -Activity "Processing account: $($awsAccount)" -Status "Account: $($accountCounter) of $($awsAccounts.Count)" -PercentComplete (($accountCounter / $awsAccounts.Count) * 100)
-      $accountCounter++
 
       getAWSData $cred
     }
