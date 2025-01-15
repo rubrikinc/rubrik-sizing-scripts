@@ -291,7 +291,7 @@ $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 Import-Module Az.Accounts, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement
 
-function Generate-VMKey {
+function GenerateVMKey {
   param (
       [string]$vmName,
       [string]$subName,
@@ -545,7 +545,7 @@ foreach ($sub in $subs) {
       } else {
           $uniqueAzTags | Foreach-Object { $vmObj.Add("Tag: $_","-") }
       }
-      $vmKey = Generate-VMKey -vmName $vm.Name -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
+      $vmKey = GenerateVMKey -vmName $vm.Name -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
       $vmList[$vmKey] = $vmObj
     }
     Write-Progress -Id 2 -Activity "Getting VM information for: $($vm.Name)" -Completed
@@ -564,7 +564,7 @@ foreach ($sub in $subs) {
     foreach ($sqlVm in $sqlVms) {
       Write-Progress -Id 3 -Activity "Getting SQL VM information for: $($sqlVm.Name)" -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
       $sqlVmNum++
-      $vmKey = Generate-VMKey -vmName $sqlVm.Name -subName $sub.Name -tenantName $tenant.Name -region $sqlVm.Location
+      $vmKey = GenerateVMKey -vmName $sqlVm.Name -subName $sub.Name -tenantName $tenant.Name -region $sqlVm.Location
       if($vmList.containsKey($vmKey)){
         $vmList[$vmKey].HasMSSQL = "Yes"
       } else{
@@ -869,7 +869,7 @@ foreach ($sub in $subs) {
       try {
         $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
       } catch {
-        Write-Error "Unable to collect CosmosDB information for Resource Group $($rg.ResoruceGroupName) in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
+        Write-Error "Unable to collect CosmosDB information for Resource Group $($rg.ResourceGroupName) in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
         $_
         Continue    
       }
@@ -1264,7 +1264,7 @@ foreach ($sub in $subs) {
             $azVaultVMItems += $azVaultVMItem
             foreach($item in $azVaultVMItem){
               $vmName = ($item.VirtualMachineId -split '/')[ -1 ]
-              $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
+              $vmKey = GenerateVMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
               if ($vmList.ContainsKey($vmKey)) {
                 if ($vmList[$vmKey].BackupPolicies -eq "-") {
                   $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
@@ -1288,7 +1288,7 @@ foreach ($sub in $subs) {
             $azVaultVMSQLItems += $azVaultVMSQLItem
             foreach($item in $azVaultVMSQLItem){
               $vmName = $item.ServerName
-              $vmKey = Generate-VMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
+              $vmKey = GenerateVMKey -vmName $vmName -subName $sub.Name -tenantName $tenant.Name -region $vm.Location
               if ($vmList.ContainsKey($vmKey)) {
                 if ($vmList[$vmKey].BackupPolicies -eq "-") {
                   $vmList[$vmKey].BackupPolicies = "$($policy.Name)"
@@ -1471,7 +1471,7 @@ if ($Anonymize) {
       return "$($anonField)-$($paddedValue)"
   }
 
-  function Anonymize-Data {
+  function AnonymizeData {
       param (
           [PSObject]$DataObject
       )
@@ -1526,13 +1526,13 @@ if ($Anonymize) {
             $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
         }
           elseif ($property.Value -is [PSObject]) {
-              $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
+              $DataObject.$propertyName = AnonymizeData -DataObject $property.Value
           }
           elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
               $anonymizedCollection = @()
               foreach ($item in $property.Value) {
                   if ($item -is [PSObject]) {
-                      $anonymizedItem = Anonymize-Data -DataObject $item
+                      $anonymizedItem = AnonymizeData -DataObject $item
                       $anonymizedCollection += $anonymizedItem
                   } else {
                       $anonymizedCollection += $item
@@ -1545,7 +1545,7 @@ if ($Anonymize) {
       return $DataObject
   }
 
-  function Anonymize-Collection {
+  function AnonymizeCollection {
       param (
           [System.Collections.IEnumerable]$Collection
       )
@@ -1553,7 +1553,7 @@ if ($Anonymize) {
       $anonymizedCollection = @()
       foreach ($item in $Collection) {
           if ($item -is [PSObject]) {
-              $anonymizedItem = Anonymize-Data -DataObject $item
+              $anonymizedItem = AnonymizeData -DataObject $item
               $anonymizedCollection += $anonymizedItem
           } else {
               $anonymizedCollection += $item
@@ -1581,7 +1581,7 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
   $vmListToCsv = $vmList.values
 
   if ($Anonymize) {
-    $vmListToCsv = Anonymize-Collection -Collection $vmListToCsv
+    $vmListToCsv = AnonymizeCollection -Collection $vmListToCsv
   }
 
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
@@ -1621,9 +1621,9 @@ if ($SkipAzureSQLandMI -ne $true) {
   Write-Host "Total capacity of all SQL: $('{0:N0}' -f $sqlTotalGiB) GiB or $('{0:N0}' -f $sqlTotalGB) GB or $sqlTotalTiB TiB or $sqlTotalTB TB" -ForeGroundColor Green
 
   if ($Anonymize) {
-    $sqlList = Anonymize-Collection -Collection $sqlList
-    $miList = Anonymize-Collection -Collection $miList
-    $miPolicies = Anonymize-Collection -Collection $miPolicies
+    $sqlList = AnonymizeCollection -Collection $sqlList
+    $miList = AnonymizeCollection -Collection $miList
+    $miPolicies = AnonymizeCollection -Collection $miPolicies
   }
   
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputSQL - Azure SQL CSV file."}
@@ -1663,7 +1663,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
 
 
   if ($Anonymize) {
-    $azSAList = Anonymize-Collection -Collection $azSAList
+    $azSAList = AnonymizeCollection -Collection $azSAList
   }
 
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzSA - Azure Storage Account CSV file."}
@@ -1687,7 +1687,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "Total capacity of all Azure Containers: $('{0:N0}' -f $azConTotalGiB) GiB or $('{0:N0}' -f $azConTotalGB) GB or $azConTotalTiB TiB or $azConTotalTB TB" -ForeGroundColor Green
 
     if ($Anonymize) {
-      $azConList = Anonymize-Collection -Collection $azConList
+      $azConList = AnonymizeCollection -Collection $azConList
     }
     
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzCon - Azure Container CSV file."}
@@ -1708,7 +1708,7 @@ if ($SkipAzureStorageAccounts -ne $true) {
     Write-Host "Total capacity of all Azure File Shares: $('{0:N0}' -f $azFSTotalGiB) GiB or $('{0:N0}' -f $azFSTotalGB) GB or $azFSTotalTiB TiB or $azFSTotalTB TB" -ForeGroundColor Green
 
     if ($Anonymize) {
-      $azFSList = Anonymize-Collection -Collection $azFSList
+      $azFSList = AnonymizeCollection -Collection $azFSList
     }
     
     $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzFS - Azure File Share CSV file."}
@@ -1720,16 +1720,16 @@ if ($SkipAzureBackup -ne $true) {
   
 
   if ($Anonymize) {
-    $azVaultList = Anonymize-Collection -Collection $azVaultList
-    $azVaultVMPoliciesList = Anonymize-Collection -Collection $azVaultVMPoliciesList
-    $azVaultVMSQLPoliciesList = Anonymize-Collection -Collection $azVaultVMSQLPoliciesList
-    $azVaultAzureSQLDatabasePoliciesList = Anonymize-Collection -Collection $azVaultAzureSQLDatabasePoliciesList
-    $azVaultAzureFilesPoliciesList = Anonymize-Collection -Collection $azVaultAzureFilesPoliciesList
-    $azVaultVMItems = Anonymize-Collection -Collection $azVaultVMItems
-    $azVaultVMSQLItems = Anonymize-Collection -Collection $azVaultVMSQLItems
-    $azVaultAzureSQLDatabaseItems = Anonymize-Collection -Collection $azVaultAzureSQLDatabaseItems
-    $azVaultAzureFilesItems = Anonymize-Collection -Collection $azVaultAzureFilesItems
-    $backupCostDetails = Anonymize-Collection -Collection $backupCostDetails
+    $azVaultList = AnonymizeCollection -Collection $azVaultList
+    $azVaultVMPoliciesList = AnonymizeCollection -Collection $azVaultVMPoliciesList
+    $azVaultVMSQLPoliciesList = AnonymizeCollection -Collection $azVaultVMSQLPoliciesList
+    $azVaultAzureSQLDatabasePoliciesList = AnonymizeCollection -Collection $azVaultAzureSQLDatabasePoliciesList
+    $azVaultAzureFilesPoliciesList = AnonymizeCollection -Collection $azVaultAzureFilesPoliciesList
+    $azVaultVMItems = AnonymizeCollection -Collection $azVaultVMItems
+    $azVaultVMSQLItems = AnonymizeCollection -Collection $azVaultVMSQLItems
+    $azVaultAzureSQLDatabaseItems = AnonymizeCollection -Collection $azVaultAzureSQLDatabaseItems
+    $azVaultAzureFilesItems = AnonymizeCollection -Collection $azVaultAzureFilesItems
+    $backupCostDetails = AnonymizeCollection -Collection $backupCostDetails
   }
   
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzVaults - Azure Backup Vault CSV file."}
@@ -1782,7 +1782,7 @@ if ($SkipAzureCosmosDB -ne $true) {
   $cosmosDBsToCsv = $cosmosDBs
 
   if ($Anonymize) {
-    $cosmosDBsToCsv = Anonymize-Collection -Collection $cosmosDBs
+    $cosmosDBsToCsv = AnonymizeCollection -Collection $cosmosDBs
   }
 
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzCosmosDB - Azure Cosmos DB CSV file."}
@@ -1796,7 +1796,7 @@ if($GetKeyVaultAmounts -eq $true){
   $keyVaultListToCsv = $keyVaultList
 
   if ($Anonymize) {
-    $keyVaultListToCsv = Anonymize-Collection -Collection $keyVaultList
+    $keyVaultListToCsv = AnonymizeCollection -Collection $keyVaultList
   }
 
   $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzKeyVault - Azure Key Vault CSV file."}
