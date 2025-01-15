@@ -399,11 +399,12 @@ function getAWSData($cred) {
     [string[]]$awsRegions = $Regions.split(',')
   }
   else {
-    $awsRegions = @()
-    # This adds all enabled regions to the list
+    try {
     Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
-    foreach ($ec2region in Get-EC2Region -Region $queryRegion -Credential $cred) {
-      $awsRegions += $ec2region.RegionName
+      $awsRegions = Get-EC2Region @profileLocationOpt -Region $queryRegion -Credential $cred | Select-Object -ExpandProperty RegionName
+    } catch {
+      Write-Host "Failed to get EC2 Regions for profile name $awsProfile in region $queryRegion" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
     }
   }
 
