@@ -825,7 +825,7 @@ foreach ($sub in $subs) {
         $databases = Get-AzSqlInstanceDatabase  -InstanceName $($MI.ManagedInstanceName) `
                                                 -ResourceGroupName $($MI.ResourceGroupName) -ErrorAction Stop `
                                                 | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON
-      } catch{
+      } catch {
         Write-Host "Issue getting SqlInstance Databases from $($MI.ManagedInstanceName) in $($MI.ResourceGroupName) in subscription $($sub.Name) under tenant $($tenant.Name)"
       }
       foreach($database in $databases){
@@ -843,7 +843,7 @@ foreach ($sub in $subs) {
         if($ltr){
           $database | Add-Member -MemberType NoteProperty -Name "LTR" -Value $($ltr | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)        
         }
-        } catch{
+        } catch {
           Write-Host "failed to get LTR/STR for  $($database.Name) in $($MI.ManagedInstanceName) in subscription $($sub.Name) under tenant $($tenant.Name)"
           Write-Host "Error: $_" -ForeGroundColor Red
         }
@@ -1459,7 +1459,7 @@ foreach ($sub in $subs) {
       try{
         $certificates = Get-AzKeyVaultCertificate -VaultName $keyVault.VaultName -ErrorAction Stop
         $vaultDetails.NumCertificates = $certificates.count
-      } catch{
+      } catch {
         # Could not collect certificate info. Will not throw errors as often the same error will repeat
         # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
         # certificates
@@ -1468,7 +1468,7 @@ foreach ($sub in $subs) {
       try{
         $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName -ErrorAction Stop
         $vaultDetails.NumSecrets = $secrets.count
-      } catch{
+      } catch {
         # Could not collect secrets info. Will not throw errors as often the same error will repeat
         # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
         # secrets
@@ -1477,7 +1477,7 @@ foreach ($sub in $subs) {
       try{
         $keys = Get-AzKeyVaultKey -VaultName $keyVault.VaultName -ErrorAction Stop
         $vaultDetails.NumKeys = $keys.count
-      } catch{
+      } catch {
         # Could not collect key info. Will not throw errors as often the same error will repeat
         # One can see in CSV file whether it is 0 or null to see whether we were unable to grab number of 
         # key
@@ -1898,7 +1898,7 @@ if($Anonymize){
   Write-Host
 }
 
-} catch{
+} catch {
   Write-Error "An error occurred and the script has exited prematurely:"
   Write-Error "Error: $_"
   Write-Error $_.ScriptStackTrace
