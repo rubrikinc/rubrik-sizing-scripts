@@ -311,7 +311,7 @@ function Get-AzureFileSAs {
 
   return ($StorageAccount.Kind -in @('StorageV2', 'Storage') -and 
             $StorageAccount.Sku.Name -notin @('Premium_LRS', 'Premium_ZRS')) -or
-           ($StorageAccount.Kind -eq 'FileStorage' -and 
+            ($StorageAccount.Kind -eq 'FileStorage' -and 
             $StorageAccount.Sku.Name -in @('Premium_LRS', 'Premium_ZRS'))
 }
 
@@ -380,7 +380,7 @@ switch ($PSCmdlet.ParameterSetName) {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
-        $_
+        Write-Error "Error: $_"
         Continue
       }
     }
@@ -394,7 +394,7 @@ switch ($PSCmdlet.ParameterSetName) {
         $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
       } catch {
         Write-Error "Unable to get subscription information for subscription: $($subscription)"
-        $_
+        Write-Error "Error: $_"
         Continue
       }
     }
@@ -405,7 +405,7 @@ switch ($PSCmdlet.ParameterSetName) {
       $subs =  Get-AzSubscription -TenantId $context.Tenant.Id -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information."
-      $_
+      Write-Error "Error: $_"
       Write-Host "Exiting..." -ForegroundColor Green
       exit      
     }
@@ -417,7 +417,7 @@ switch ($PSCmdlet.ParameterSetName) {
       $subs = Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $context.Subscription.Name -ErrorAction Stop
     } catch {
       Write-Error "Unable to get subscription information from current subscription: $($context.Subscription.Name)"
-      $_
+      Write-Error "Error: $_"
       Write-Host "Exiting..." -ForegroundColor Green
       exit
     }
@@ -428,10 +428,13 @@ switch ($PSCmdlet.ParameterSetName) {
     $subs = @()
     foreach ($managementGroup in $ManagementGroups) {
       try {
-        $subs = $subs + $(Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $(Search-AzGraph -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" -ManagementGroup $managementGroup).name -ErrorAction Stop)
+        $subs = $subs + $(Get-AzSubscription  -TenantId $context.Tenant.Id  `
+                                              -SubscriptionName $(Search-AzGraph `
+                                              -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" `
+                                              -ManagementGroup $managementGroup).name -ErrorAction Stop)
       } catch {
         Write-Error "Unable to gather subscriptions from Management Group: $($managementGroup)"
-        $_
+        Write-Error "Error: $_"
         Continue
       }
     }
@@ -444,14 +447,16 @@ $subNum=1
 $processedSubs=0
 Write-Host "Getting tag information from $($subs.Count) subscription(s)..." -ForeGroundColor Green
 foreach ($sub in $subs) {
-  Write-Progress -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  Write-Progress  -Id 1 -Activity "Getting tag information from subscription: $($sub.Name)" `
+                  -PercentComplete $(($subNum/$subs.Count)*100)  `
+                  -Status "Subscription $($subNum) of $($subs.Count)"
   $subNum++
 
   try {
     Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
-    Write-Error $_
+    Write-Error "Error: $_"
     Continue
   }
 
@@ -466,14 +471,16 @@ $subNum=1
 $processedSubs=0
 Write-Host "Processing $($subs.Count) subscription(s)..." -ForeGroundColor Green
 foreach ($sub in $subs) {
-  Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Name)" -PercentComplete $(($subNum/$subs.Count)*100) -Status "Subscription $($subNum) of $($subs.Count)"
+  Write-Progress  -Id 1 -Activity "Getting information from subscription: $($sub.Name)" `
+                  -PercentComplete $(($subNum/$subs.Count)*100) `
+                  -Status "Subscription $($subNum) of $($subs.Count)"
   $subNum++
 
   try {
     Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Error switching to subscription: $($sub.Name)"
-    Write-Error $_
+    Write-Error "Error: $_"
     Continue
   }
 
@@ -482,7 +489,7 @@ foreach ($sub in $subs) {
     $tenant = Get-AzTenant -TenantId $($sub.TenantId) -ErrorAction Stop
   } catch {
     Write-Error "Error getting tenant information for: $($sub.TenantId))"
-    Write-Error $_
+    Write-Error "Error: $_"
     Continue
   }
   $processedSubs++
@@ -493,14 +500,16 @@ foreach ($sub in $subs) {
       $vms = Get-AzVM -ErrorAction Stop
     } catch {
       Write-Error "Unable to get VMs for Subscription: $($sub.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue
     }
 
     # Loop through each VM to get all disk info
     $vmNum=1
     foreach ($vm in $vms) {
-      Write-Progress -Id 2 -Activity "Getting VM information for: $($vm.Name)" -PercentComplete $(($vmNum/$vms.Count)*100) -ParentId 1 -Status "VM $($vmNum) of $($vms.Count)"
+      Write-Progress  -Id 2 -Activity "Getting VM information for: $($vm.Name)"  
+                      -PercentComplete $(($vmNum/$vms.Count)*100) -ParentId 1  `
+                      -Status "VM $($vmNum) of $($vms.Count)"
       $vmNum++
       # Count of and size of all disks attached to the VM
       $diskNum = 0
@@ -557,14 +566,16 @@ foreach ($sub in $subs) {
       $sqlVms = Get-AzSQLVM
     } catch {
       Write-Error "Unable to collect SQL VM information for subscription: $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue
     }
 
     # Loop through each SQL VM to and update VM status
     $sqlVmNum=1
     foreach ($sqlVm in $sqlVms) {
-      Write-Progress -Id 3 -Activity "Getting SQL VM information for: $($sqlVm.Name)" -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
+      Write-Progress  -Id 3 -Activity "Getting SQL VM information for: $($sqlVm.Name)" `
+                      -PercentComplete $(($sqlVmNum/$sqlVms.Count)*100) -ParentId 1 `
+                      -Status "SQL VM $($sqlVmNum) of $($sqlVms.Count)"
       $sqlVmNum++
       $vmKey = GenerateVMKey -vmName $sqlVm.Name -subName $sub.Name -tenantName $tenant.Name -region $sqlVm.Location
       if($vmList.containsKey($vmKey)){
@@ -585,22 +596,25 @@ foreach ($sub in $subs) {
       $sqlServers = Get-AzSqlServer -ErrorAction Stop
     } catch {
       Write-Error "Unable to collect Azure SQL Server information for subscription: $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
 
     # Loop through each SQL server to get size info
     $sqlServerNum=1
     foreach ($sqlServer in $sqlServers) {
-      Write-Progress -Id 4 -Activity "Getting Azure SQL information for SQL Server: $($sqlServer.ServerName)" -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1 -Status "Azure SQL Server $($sqlServerNum) of $($sqlServers.Count)"
+      Write-Progress  -Id 4 -Activity "Getting Azure SQL information for SQL Server: $($sqlServer.ServerName)"   
+                      -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1   
+                      -Status "Azure SQL Server $($sqlServerNum) of $($sqlServers.Count)"
       $sqlServerNum++
       # Get all SQL DBs on the current SQL server
       try {
-        $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName -ResourceGroupName $sqlServer.ResourceGroupName -ErrorAction Stop
+        $sqlDBs = Get-AzSqlDatabase -serverName $sqlServer.ServerName `
+                                    -ResourceGroupName $sqlServer.ResourceGroupName -ErrorAction Stop
       }
       catch {
         Write-Error "Unable to collect Azure SQL Server database information for Azure SQL Database server: $($sqlServer.ServerName) in subscription $($sub.Name) under tenant $($tenant.Name)"
-        $_
+        Write-Error "Error: $_"
         Continue    
       }
       # Loop through each SQL DB on the current SQL server to gather size info
@@ -611,11 +625,12 @@ foreach ($sub in $subs) {
           if ($sqlDB.SkuName -eq 'ElasticPool') {
             # Get Elastic Pool information for the current DB
             try {
-              $pools = Get-AzSqlElasticPool  -ServerName $sqlDB.ServerName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+              $pools = Get-AzSqlElasticPool -ServerName $sqlDB.ServerName `
+                                            -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
             }
             catch {
               Write-Error "Unable to collect Azure SQL Server Elastic Pool information for Azure SQL Database server: $($sqlServer.ServerName) in subscription $($sub.Name) under tenant $($tenant.Name)"
-              $_
+              Write-Error "Error: $_"
               Continue    
             }
             # Loop through the pools on the current database.
@@ -698,11 +713,20 @@ foreach ($sub in $subs) {
             $ltrPolicy = @{}
             try {
               if ($sqlDB.DatabaseName -eq "master"){
-                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName `
+                                                                            -DatabaseName $sqlDB.DatabaseName `
+                                                                            -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                            -ErrorAction SilentlyContinue
               } elseif($sqlObj.InstanceType -eq "DataWarehouse"){
-                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName `
+                                                                            -DatabaseName $sqlDB.DatabaseName `
+                                                                            -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                            -ErrorAction SilentlyContinue
               } else{
-                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+                $ltrPolicy = Get-AzSqlDatabaseBackupLongTermRetentionPolicy -ServerName $sqlDB.ServerName `
+                                                                            -DatabaseName $sqlDB.DatabaseName `
+                                                                            -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                            -ErrorAction Stop
               }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
@@ -717,11 +741,20 @@ foreach ($sub in $subs) {
             $strPolicy = @{}
             try {
               if ($sqlDB.DatabaseName -eq "master"){
-                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy  -ServerName $sqlDB.ServerName `
+                                                                              -DatabaseName $sqlDB.DatabaseName `
+                                                                              -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                              -ErrorAction SilentlyContinue
               } elseif($sqlObj.InstanceType -eq "DataWarehouse"){
-                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction SilentlyContinue
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy  -ServerName $sqlDB.ServerName `
+                                                                              -DatabaseName $sqlDB.DatabaseName `
+                                                                              -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                              -ErrorAction SilentlyContinue
               } else{
-                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy -ServerName $sqlDB.ServerName -DatabaseName $sqlDB.DatabaseName -ResourceGroupName $sqlDB.ResourceGroupName -ErrorAction Stop
+                $strPolicy = Get-AzSqlDatabaseBackupShortTermRetentionPolicy  -ServerName $sqlDB.ServerName `
+                                                                              -DatabaseName $sqlDB.DatabaseName `
+                                                                              -ResourceGroupName $sqlDB.ResourceGroupName `
+                                                                              -ErrorAction Stop
               }
             } catch {
               if ($sqlDB.DatabaseName -ne "master") {
@@ -765,7 +798,7 @@ foreach ($sub in $subs) {
       $sqlManagedInstances = Get-AzSqlInstance -ErrorAction Stop
     } catch {
       Write-Error "Unable to collect Azure Manged Instance information for subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
 
@@ -782,29 +815,37 @@ foreach ($sub in $subs) {
     }
     
     foreach ($MI in $sqlManagedInstances) {
-      Write-Progress -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
+      Write-Progress  -Id 5 -Activity "Getting Azure Managed Instance information for: $($MI.ManagedInstanceName)" `
+                      -PercentComplete $(($managedInstanceNum/$sqlManagedInstances.Count)*100) -ParentId 1 `
+                      -Status "SQL Managed Instance $($managedInstanceNum) of $($sqlManagedInstances.Count)"
 
       $databasesCounter = 0
       $databases = @()
       try{
-        $databases = Get-AzSqlInstanceDatabase -InstanceName $($MI.ManagedInstanceName) -ResourceGroupName $($MI.ResourceGroupName) -ErrorAction Stop| ConvertTo-JSON -Depth 10 | ConvertFrom-JSON
+        $databases = Get-AzSqlInstanceDatabase  -InstanceName $($MI.ManagedInstanceName) `
+                                                -ResourceGroupName $($MI.ResourceGroupName) -ErrorAction Stop `
+                                                | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON
       } catch{
         Write-Host "Issue getting SqlInstance Databases from $($MI.ManagedInstanceName) in $($MI.ResourceGroupName) in subscription $($sub.Name) under tenant $($tenant.Name)"
       }
       foreach($database in $databases){
         $databasesCounter++
         try{
-        $str = Get-AzSqlInstanceDatabaseBackupShortTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        $str = Get-AzSqlInstanceDatabaseBackupShortTermRetentionPolicy  -ResourceGroupName $($MI.ResourceGroupName) `
+                                                                        -InstanceName $($MI.ManagedInstanceName) `
+                                                                        -DatabaseName $($database.Name) -ErrorAction Stop
         if($str){
           $database | Add-Member -MemberType NoteProperty -Name "STR" -Value $($str | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)
         }
-        $ltr = Get-AzSqlInstanceDatabaseBackupLongTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) -InstanceName $($MI.ManagedInstanceName) -DatabaseName $($database.Name) -ErrorAction Stop
+        $ltr = Get-AzSqlInstanceDatabaseBackupLongTermRetentionPolicy -ResourceGroupName $($MI.ResourceGroupName) `
+                                                                      -InstanceName $($MI.ManagedInstanceName) `
+                                                                      -DatabaseName $($database.Name) -ErrorAction Stop
         if($ltr){
           $database | Add-Member -MemberType NoteProperty -Name "LTR" -Value $($ltr | ConvertTo-JSON -Depth 10 | ConvertFrom-JSON)        
         }
         } catch{
           Write-Host "failed to get LTR/STR for  $($database.Name) in $($MI.ManagedInstanceName) in subscription $($sub.Name) under tenant $($tenant.Name)"
-          Write-Host $_
+          Write-Host "Error: $_" -ForeGroundColor Red
         }
       }
       $miPolicies[$($tenant.Name)][$($sub.Name)][$($MI.ManagedInstanceName)] = $databases
@@ -861,18 +902,20 @@ foreach ($sub in $subs) {
       $resourceGroups = Get-AzResourceGroup
     } catch {
       Write-Error "Unable to collect Resource Group information for CosmosDBs in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
     $rgCounter = 0
     foreach ($rg in $resourceGroups) {
       $rgCounter++
-      Write-Progress -Id 6 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
+      Write-Progress -Id 6 -Activity "Getting Azure CosmosDB information for: $($rg.ResourceGroupName)" `
+                    -PercentComplete $(($rgCounter/$resourceGroups.Count)*100) -ParentId 1 `
+                    -Status "Resource Group $($rgCounter) of $($resourceGroups.Count)"
       try {
         $cosmosDBAccounts = Get-AzCosmosDBAccount -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
       } catch {
         Write-Error "Unable to collect CosmosDB information for Resource Group $($rg.ResourceGroupName) in subscription: $($sub.Name) in subscription $($sub.Name) under tenant $($tenant.Name)"
-        $_
+        Write-Error "Error: $_"
         Continue    
       }
   
@@ -952,23 +995,27 @@ foreach ($sub in $subs) {
       $azSAs = Get-AzStorageAccount -ErrorAction Stop
     } catch {
       Write-Error "Unable to collect Azure Storage Account information for subscription: $($sub.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
 
     # Loop through each Azure Storage Account and gather statistics
     $azSANum=1
     foreach ($azSA in $azSAs) {
-      Write-Progress -Id 7 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
+      Write-Progress -Id 7 -Activity "Getting Storage Account information for: $($azSA.StorageAccountName)" `
+                    -PercentComplete $(($azSANum/$azSAs.Count)*100) -ParentId 1 `
+                    -Status "Azure Storage Account $($azSANum) of $($azSAs.Count)"
       $azSANum++
       try{
-        $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName -ResourceGroupName $azSA.ResourceGroupName).Context
+        $azSAContext = (Get-AzStorageAccount  -Name $azSA.StorageAccountName `
+                                              -ResourceGroupName $azSA.ResourceGroupName).Context
       } catch {
         Write-Host "Failed to get Storage Account Context for Storage Account $($azSA.StorageAccountName) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       try{
-        $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName -Name $azSA.StorageAccountName
+        $azSAPSObjects = Get-AzStorageAccount -ResourceGroupName $azSA.ResourceGroupName `
+                                              -Name $azSA.StorageAccountName
       } catch {
         Write-Host "Failed to get Storage Account Objects for Storage Account $($azSA.StorageAccountName) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -1046,12 +1093,14 @@ foreach ($sub in $subs) {
         }
         catch {
           Write-Error "Error getting Azure Container information from: $($azSA.StorageAccountName) storage account in subscription $($sub.Name) under tenant $($tenant.Name)."
-          $_
+          Write-Error "Error: $_"
           $azCons = @()
         }
         $azConNum = 1
         foreach ($azCon in $azCons) {
-          Write-Progress -Id 8 -Activity "Getting Azure Container information for: $($azCon.Name)" -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 -Status "Azure Container $($azConNum) of $($azCons.Count)"
+          Write-Progress -Id 8 -Activity "Getting Azure Container information for: $($azCon.Name)" `
+          -PercentComplete $(($azConNum/$azCons.Count)*100) -ParentId 6 `
+          -Status "Azure Container $($azConNum) of $($azCons.Count)"
           $azConNum++
           try{
             $azConBlobs = Get-AzStorageBlob -Container $($azCon.Name) -Context $azSAContext
@@ -1152,12 +1201,14 @@ foreach ($sub in $subs) {
         }
         catch {
           Write-Error "Error getting Azure File Storage information from: $($azSA.StorageAccountName) storage account in subscription $($sub.Name) under tenant $($tenant.Name)."
-          $_
+          Write-Error "Error: $_"
           $azFSDetails = @()
         }    
         $azFSNum = 1
         foreach ($azFSi in $azFSDetails) {
-          Write-Progress -Id 9 -Activity "Getting Azure File Share information for: $($azFSi.Name)" -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
+          Write-Progress  -Id 9 -Activity "Getting Azure File Share information for: $($azFSi.Name)" `
+                          -PercentComplete $(($azFSNum/$azFSs.Count)*100) -ParentId 6 `
+                          -Status "Azure File Share $($azFSNum) of $($azFSs.Count)"
           $azFSNum++
           $azFSObj = [ordered] @{}
           $azFSObj.Add("Name",$azFSi.Name)
@@ -1191,14 +1242,16 @@ foreach ($sub in $subs) {
       $azVaults = Get-AzRecoveryServicesVault -ErrorAction Stop
     } catch {
       Write-Error "Unable to collect Azure Backup information for subscription: $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
 
     #Loop over all vaults in the subscription and get Azure Backup Details
     $azVaultNum=1
     foreach ($azVault in $azVaults) {
-      Write-Progress -Id 8 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
+      Write-Progress -Id 8 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" `
+                    -PercentComplete $(($azVaultNum/$azVaults.Count)*100) -ParentId 1 `
+                    -Status "Azure Vault $($azVaultNum) of $($azVaults.Count)"
       $azVaultNum++
       $azVaultVMPolicies = @()
       $azVaultVMSQLPolicies = @()
@@ -1276,7 +1329,7 @@ foreach ($sub in $subs) {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
                 }
               } else {
-                  Write-Host "Found VM $($vmName) in VM backup policy $($policy.Name), however, the VM is not registered in Azure."
+                  Write-Verbose "Found VM $($vmName) in VM backup policy $($policy.Name), however, the VM is not registered in Azure."
               }
             }
         }
@@ -1300,7 +1353,7 @@ foreach ($sub in $subs) {
                   $vmList[$vmKey].BackupPolicies += ", $($policy.Name)"
                 }
               } else {
-                  Write-Host "SQL VM: Found VM $($vmName) in SQL backup policy $($policy.Name), however, the VM is not registered in Azure."
+                  Write-Verbose "SQL VM: Found VM $($vmName) in SQL backup policy $($policy.Name), however, the VM is not registered in Azure."
               }
             }
         }
@@ -1320,7 +1373,7 @@ foreach ($sub in $subs) {
             @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
             *
         }
-      }catch {
+      } catch {
         Write-Host "Failed to get Azure Recovery Services Backup Items for policies in vault $($azVault.Name) in Resource Group $($azSA.ResourceGroupName) in sub $($sub.Name) in tenant $($tenant.Name) in Region $($azVault.Location)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
@@ -1372,7 +1425,7 @@ foreach ($sub in $subs) {
 
           $backupCostDetails += $costDetail
       }
-    } catch{
+    } catch {
       Write-Host "Failed to get Azure Backup Costs in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
@@ -1389,7 +1442,7 @@ foreach ($sub in $subs) {
       $keyVaults = Get-AzKeyVault -ErrorAction Stop
     } catch {
       Write-Error "Unable to collect Azure Key Vault information for subscription: $($sub.Name) under tenant $($tenant.Name)"
-      $_
+      Write-Error "Error: $_"
       Continue    
     }
     foreach($keyVault in $keyVaults){
@@ -1438,7 +1491,8 @@ Write-Progress -Id 1 -Activity "Getting information from subscription: $($sub.Na
 Write-Host "Calculating results and saving data..." -ForegroundColor Green
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", "AzureBackupRGName", "ResourceGroupName", "DatabaseName", "ManagedInstanceName", "InstanceName",
+  $global:anonymizeProperties = @("SubscriptionId", "Subscription", "Tenant", "Name", "AzureBackupRGName", 
+                                  "ResourceGroupName", "DatabaseName", "ManagedInstanceName", "InstanceName",
                                   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
                                   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
                                   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
@@ -1728,8 +1782,6 @@ if ($SkipAzureStorageAccounts -ne $true) {
 } #if ($SkipAzureStorageAccounts -ne $true)
 
 if ($SkipAzureBackup -ne $true) {
-  
-
   if ($Anonymize) {
     $azVaultList = AnonymizeCollection -Collection $azVaultList
     $azVaultVMPoliciesList = AnonymizeCollection -Collection $azVaultVMPoliciesList
@@ -1768,7 +1820,6 @@ if ($SkipAzureBackup -ne $true) {
   Write-Host "Total # of Azure VMs with MS SQL protected by Azure Backup : $('{0:N0}' -f $azVaultVMSQLItems.Count)" -ForeGroundColor Green
   Write-Host "Total # of Azure SQL databases protected by Azure Backup : $('{0:N0}' -f $azVaultAzureSQLDatabaseItems.Count)" -ForeGroundColor Green
   Write-Host "Total # of Azure Files shares protected by Azure Backup : $('{0:N0}' -f $azVaultAzureFilesItems.Count)" -ForeGroundColor Green
-
 
   $azVaultList | Export-Csv -Path $outputAzVaults
   #$azVaultVMPoliciesList | Export-Csv -Path $outputAzVaultVMPolicies
@@ -1819,9 +1870,11 @@ Write-Host
 Write-Host "Output files are:" -ForeGroundColor Green
 $outputFiles.Files
 if ($SkipAzureBackup -ne $true) {
-  Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity, instance cost, etc, but does not include cost snapshots and the storage of those snapshots, restore point collections"
+  Write-Host
+  Write-Host "This backup cost gives the cost for 95% of the cost of the vault, capacity," -ForegroundColor Green
+  Write-Host "instance cost, etc, but does not include cost snapshots and the storage of" -ForegroundColor Green
+  Write-Host "those snapshots, restore point collections" -ForegroundColor Green
 }
-Write-Host
 
 Write-Host
 Write-Host "Results will be compressed into $archiveFile and original files will be removed." -ForegroundColor Green
@@ -1847,7 +1900,7 @@ if($Anonymize){
 
 } catch{
   Write-Error "An error occurred and the script has exited prematurely:"
-  Write-Error $_
+  Write-Error "Error: $_"
   Write-Error $_.ScriptStackTrace
 } finally{
   Stop-Transcript
@@ -1870,7 +1923,6 @@ foreach ($file in $filePaths) {
 }
 
 Write-Host
-Write-Host
 Write-Host "Results have been compressed into $archiveFile and original files have been removed." -ForegroundColor Green
 
 # Reset Culture settings back to original value
@@ -1887,7 +1939,7 @@ try {
   Set-AzContext -SubscriptionName $context.subscription.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
 } catch {
   Write-Error "Unable to reset AzContext back to original context."
-  $_
+  Write-Error "Error: $_"
 }
 
 if ($azConfig.Value -eq $true) {
@@ -1895,7 +1947,7 @@ if ($azConfig.Value -eq $true) {
     Update-AzConfig -DisplayBreakingChangeWarning $true  -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Unable to rest display of breaking changes."
-    $_
+    Write-Error "Error: $_"
   }
 }
 
