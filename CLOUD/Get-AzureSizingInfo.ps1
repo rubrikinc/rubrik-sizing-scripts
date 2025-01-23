@@ -1348,8 +1348,17 @@ foreach ($sub in $subs) {
             function = "Sum"
       }
       } # max 2 in a query, possible values: 'UsageQuantity','PreTaxCost','Cost','CostUSD','PreTaxCostUSD'
-      $costManagementQuery = Invoke-AzCostManagementQuery -Type Usage -Scope "subscriptions/$($sub.SubscriptionId)" -DatasetGranularity 'Monthly' -DatasetFilter $filter -Timeframe Custom -TimePeriodFrom $TimePeriodFrom -TimePeriodTo $TimePeriodTo -DatasetAggregation $aggregation | ConvertTo-JSON -Depth 10 | ConvertFrom-Json
-      
+      # 6> Out-Null needed to workaround bug in Invoke-AzCostManagementQuery where two extra blank lines are produced in the output
+      $costManagementQueryRaw = Invoke-AzCostManagementQuery -Type Usage `
+                                                          -Scope "subscriptions/$($sub.SubscriptionId)" `
+                                                          -DatasetGranularity 'Monthly' `
+                                                          -DatasetFilter $filter `
+                                                          -Timeframe Custom `
+                                                          -TimePeriodFrom $TimePeriodFrom `
+                                                          -TimePeriodTo $TimePeriodTo `
+                                                          -DatasetAggregation $aggregation 6> $null
+
+      $costManagementQuery = $costManagementQueryRaw | ConvertTo-JSON -Depth 10 | ConvertFrom-Json
 
       foreach ($row in $costManagementQuery.Row) {
           $costDetail = [PSCustomObject]@{
