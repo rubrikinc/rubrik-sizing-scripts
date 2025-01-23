@@ -2265,6 +2265,9 @@ if($Anonymize){
   Stop-Transcript
 }
 
+Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
+$PSBoundParameters | Format-Table
+
 # In the case of an early exit/error, this filters only the files which exist
 $existingFiles = $outputFiles | Where-Object { Test-Path $_ }
 

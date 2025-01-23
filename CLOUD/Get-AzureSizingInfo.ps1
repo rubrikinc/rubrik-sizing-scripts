@@ -286,6 +286,8 @@ if($Anonymize){
   Start-Transcript -Path "./$output_log"
 }
 
+Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
+$PSBoundParameters | Format-Table
 
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 

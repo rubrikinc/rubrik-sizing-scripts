@@ -156,6 +156,8 @@ if($Anonymize){
   Start-Transcript -Path "./$output_log"
 }
 
+Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
+$PSBoundParameters | Format-Table
 
 # Filename of the CSV output
 $outputVM = "gce_vm_info-$date_string.csv"
