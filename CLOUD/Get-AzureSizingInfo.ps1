@@ -507,7 +507,7 @@ foreach ($sub in $subs) {
     # Loop through each VM to get all disk info
     $vmNum=1
     foreach ($vm in $vms) {
-      Write-Progress  -Id 2 -Activity "Getting VM information for: $($vm.Name)"  
+      Write-Progress  -Id 2 -Activity "Getting VM information for: $($vm.Name)" `
                       -PercentComplete $(($vmNum/$vms.Count)*100) -ParentId 1  `
                       -Status "VM $($vmNum) of $($vms.Count)"
       $vmNum++
@@ -603,8 +603,8 @@ foreach ($sub in $subs) {
     # Loop through each SQL server to get size info
     $sqlServerNum=1
     foreach ($sqlServer in $sqlServers) {
-      Write-Progress  -Id 4 -Activity "Getting Azure SQL information for SQL Server: $($sqlServer.ServerName)"   
-                      -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1   
+      Write-Progress  -Id 4 -Activity "Getting Azure SQL information for SQL Server: $($sqlServer.ServerName)" `
+                      -PercentComplete $(($sqlServerNum/$sqlServers.Count)*100) -ParentId 1 `
                       -Status "Azure SQL Server $($sqlServerNum) of $($sqlServers.Count)"
       $sqlServerNum++
       # Get all SQL DBs on the current SQL server
