@@ -378,6 +378,9 @@ if ($Anonymize){
   Start-Transcript -Path "./$output_log"
 }
 
+Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
+$PSBoundParameters | Format-Table
+
 $profileLocationOpt = @{}
 if ($ProfileLocation) {
   $profileLocationOpt = @{ProfileLocation = $($ProfileLocation)}
@@ -2278,9 +2281,6 @@ if($Anonymize){
 } finally{
   Stop-Transcript
 }
-
-Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
-$PSBoundParameters | Format-Table
 
 # In the case of an early exit/error, this filters only the files which exist
 $existingFiles = $outputFiles | Where-Object { Test-Path $_ }
