@@ -475,7 +475,12 @@ function getAWSData($cred) {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    $s3Buckets = $($cwBucketInfo | Select-Object -ExpandProperty Dimensions | Where-Object -Property Name -eq "BucketName" | select-object -Property Value -Unique).value
+    try{ 
+      $s3Buckets = $(Get-S3Bucket -Credential $cred -Region $awsRegion -BucketRegion $awsRegion -ErrorAction Stop).BucketName
+    } catch {
+      Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Get-S3Bucket" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
     $counter = 1
     foreach ($s3Bucket in $s3Buckets) {
       Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
@@ -1819,14 +1824,32 @@ $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Uniqu
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
 # Move the Tag properties to the end
 $s3PropsOrdered = $s3Props | Where-Object {$_ -notmatch "Tag:.*"}
+
+# Normalize the properties to have a consistent format
+$s3PropsHash = @{}
+foreach($s3PropOrdered in $s3PropsOrdered) {
+    $s3PropsHash[$s3PropOrdered] = @{Expression={$_.$s3PropOrdered}}
+}
+$s3ListNormalized = [System.Collections.ArrayList]@($s3List | Select-Object $s3PropsOrdered)
+
+# Set blank sizes and object counts to 0 for specific properties
+foreach($item in $s3ListNormalized) {
+  foreach($s3PropOrdered in $s3PropsOrdered) {
+      if(($s3PropOrdered -like "*_Size*" -or $s3PropOrdered -like "NumberOfObjects*") -and [string]::IsNullOrEmpty($item.$s3PropOrdered)) {
+          $item.$s3PropOrdered = 0
+      }
+  }
+}
 if ($DebugBucketTags) {
   $s3Props | Out-File -FilePath "aws_s3Props-$date_string.log"
   $s3ListNormalized | Out-File -FilePath "aws_s3ListsNormalized-$date_string.log"
   $s3List | Out-File -FilePath "aws_s3List-$date_string.log"
 }
+$s3TBProps = $s3PropsOrdered | Select-String -Pattern "_SizeTB"
 if ($DebugBucketTags) {
   $s3PropsOrdered | Out-File -FilePath "aws_s3PropsOrdered-$date_string.log"
 }
+$s3ListAg = $s3ListNormalized | Select-Object $s3PropsOrdered -CaseInsensitive
 if ($DebugBucketTags) {
   $s3ListAg | Out-File -FilePath "aws_s3ListAg-$date_string.log"
 }
