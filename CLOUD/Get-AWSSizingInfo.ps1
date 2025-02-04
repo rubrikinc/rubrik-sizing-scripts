@@ -1821,9 +1821,9 @@ $rdsTotalBackupTB = ($rdsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
 # Grab only unique properties
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
-$s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
-# Move the Tag properties to the end
+# Move the Tag properties to the end of the list and sort
 $s3PropsOrdered = $s3Props | Where-Object {$_ -notmatch "Tag:.*"}
+$s3PropsOrdered += $s3Props | Where-Object {$_ -match "Tag:.*"} | Sort-Object -Unique
 
 # Normalize the properties to have a consistent format
 $s3PropsHash = @{}
@@ -2262,6 +2262,16 @@ $s3TotalTBsFormatted | ForEach-Object {
     Write-Host ("StorageType: {0}, Size_TB: {1}" -f $_.StorageType, $_.Size_TB) -ForegroundColor Green
 }
 
+Write-Host
+Write-Host ("NOTE: S3 allows multiple tags on the same bucket with the same key,") -ForegroundColor Yellow 
+Write-Host ("      but different cases. Example:") -ForegroundColor Yellow
+Write-Host
+Write-Host ("        'Owner = Rubrik' and 'owner = Rubrik' are two different tags in S3.") -ForegroundColor Yellow
+Write-Host
+Write-Host ("      This script will randomly pick one of these keys to use. It") -ForegroundColor Yellow
+Write-Host ("      will also randomly pick a value between these keys to use.") -ForegroundColor Yellow
+Write-Host ("      This random key/value pair will be used in the script's output.") -ForegroundColor Yellow 
+Write-Host ("      Ensure that all S3 tags that use the same name and use the same case.") -ForegroundColor Yellow
 Write-Host
 Write-Host "# of Backed Up S3 buckets: $($s3InBackupPolicyList.count)"  -ForegroundColor Green
 Write-Host "Used capacity of all backed up S3 buckets:"   -ForegroundColor Green
