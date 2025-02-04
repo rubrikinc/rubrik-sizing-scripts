@@ -161,6 +161,9 @@
     When set, the script will authenticate with AWS using AWS SSO. The script will use the SSO URL specified by SSOStartURL
     to access the AWS accounts. Also requires the 'SSORegion' and 'SSOParameterSetName' parameters.
 
+  .PARAMETER SkipBucketTags
+    When set, the script will not collect tags for S3 buckets.
+
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
 
@@ -329,7 +332,11 @@ param (
   # Region to use to for querying AWS.
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [string]$RegionToQuery
+  [string]$RegionToQuery,
+  # Skip Collecting Bucket Tags.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipBucketTags,
 )
 
 # Save the current culture so it can be restored later
@@ -521,11 +528,15 @@ function getAWSData($cred) {
         $numObjStorages.Add($numObjStorageType, $maxBucketObjs)
       }
 
+      if ($SkipBucketTags) {
+        $bucketTags = @()
+      } else {
       try {
         $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $cred -Region $awsRegion
       } catch {
         Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account)." -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
+        }
       }
 
       $s3obj = [PSCustomObject] @{
