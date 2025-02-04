@@ -167,7 +167,7 @@
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
 
-.PARAMETER UserSpecifiedAccountsFile
+  .PARAMETER UserSpecifiedAccountsFile
     A file containing a list of AWS account numbers to query. The file must be enclosed in quotes.
     
   .PARAMETER UserSpecifiedProfileNames
@@ -481,7 +481,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Get-S3Bucket" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-    $counter = 1
+  $counter = 1
     foreach ($s3Bucket in $s3Buckets) {
       Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
       $counter++
@@ -489,10 +489,14 @@ function getAWSData($cred) {
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
       try{
-        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop | Where-Object -Property MetricName -eq 'BucketSizeBytes' `
-                        | Select-Object -ExpandProperty Dimensions | where-object -Property Name -eq StorageType).Value  
-        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop | Where-Object -Property MetricName -eq 'NumberOfObjects' `
-                        | Select-Object -ExpandProperty Dimensions | where-object -Property Name -eq StorageType).Value 
+        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+                                | Where-Object -Property MetricName -eq 'BucketSizeBytes' `
+                                | Select-Object -ExpandProperty Dimensions `
+                                | Where-Object -Property Name -eq StorageType).Value  
+        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+                                | Where-Object -Property MetricName -eq 'NumberOfObjects' `
+                                | Select-Object -ExpandProperty Dimensions `
+                                | Where-Object -Property Name -eq StorageType).Value 
       } catch {
         Write-Host "Failed to get S3 Info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -546,11 +550,11 @@ function getAWSData($cred) {
       if ($SkipBucketTags) {
         $bucketTags = @()
       } else {
-      try {
-        $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $cred -Region $awsRegion
-      } catch {
-        Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account)." -ForeGroundColor Red
-        Write-Host "Error: $_" -ForeGroundColor Red
+        try {
+          $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $cred -Region $awsRegion 
+        } catch {
+          Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account)." -ForeGroundColor Red
+          Write-Host "Error: $_" -ForeGroundColor Red
         }
       }
 
@@ -580,7 +584,7 @@ function getAWSData($cred) {
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($s3SizeTB, 4))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGiB") -NotePropertyValue $([math]::round($s3SizeGiB, 3))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($s3SizeTiB, 4))
-        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize        
       }
       foreach ($numObjStorage in $numObjStorages.GetEnumerator()) {
         if ($null -eq $($numObjStorage.Value)) {
