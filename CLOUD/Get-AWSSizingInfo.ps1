@@ -167,6 +167,9 @@
   .PARAMETER UserSpecifiedAccounts
     A comma separated list of AWS account numbers to query. The list must be enclosed in quotes. 
 
+.PARAMETER UserSpecifiedAccountsFile
+    A file containing a list of AWS account numbers to query. The file must be enclosed in quotes.
+    
   .PARAMETER UserSpecifiedProfileNames
     A comma separated list of AWS Account Profiles stored on the local system to query. The list must be encased in quotes.
   
