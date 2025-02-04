@@ -340,6 +340,10 @@ param (
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipBucketTags,
+  # Grab output for debugging Bucket Tags.
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$DebugBucketTags
 )
 
 # Save the current culture so it can be restored later
@@ -1815,8 +1819,17 @@ $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Uniqu
 $s3TBProps = $s3Props | Select-String -Pattern "_SizeTB"
 # Move the Tag properties to the end
 $s3PropsOrdered = $s3Props | Where-Object {$_ -notmatch "Tag:.*"}
-$s3PropsOrdered += $s3Props | Where-Object {$_ -match "Tag:.*"}
-$s3ListAg = $s3List | Select-Object $s3PropsOrdered
+if ($DebugBucketTags) {
+  $s3Props | Out-File -FilePath "aws_s3Props-$date_string.log"
+  $s3ListNormalized | Out-File -FilePath "aws_s3ListsNormalized-$date_string.log"
+  $s3List | Out-File -FilePath "aws_s3List-$date_string.log"
+}
+if ($DebugBucketTags) {
+  $s3PropsOrdered | Out-File -FilePath "aws_s3PropsOrdered-$date_string.log"
+}
+if ($DebugBucketTags) {
+  $s3ListAg | Out-File -FilePath "aws_s3ListAg-$date_string.log"
+}
 $s3TotalTBs = @{}
 
 foreach ($s3TBProp in $s3TBProps) {
