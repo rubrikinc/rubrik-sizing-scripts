@@ -373,7 +373,7 @@ $output_log = "output_aws_$date_string.log"
 if (Test-Path "./$output_log") {
   Remove-Item -Path "./$output_log"
 }
-
+#Handle Anonymized Log
 if ($Anonymize){
   "Anonymized file; customer has original. Request customer to sanitize and provide output log if needed" > $output_log
   $log_for_anon_customers = "output_aws_not_anonymized_$date_string.log"
@@ -393,6 +393,7 @@ if ($ProfileLocation) {
 
 # Filenames of the CSVs output
 $outputEc2Instance = "aws_ec2_instance_info-$date_string.csv"
+#unattached volumes are less important and we can probably ignore these. We should be tracking orphaned snapshots or those not created by AWS Backup
 $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
 $outputRDS = "aws_rds_info-$date_string.csv"
 $outputS3 = "aws_s3_info-$date_string.csv"
@@ -400,11 +401,15 @@ $outputEFS = "aws_efs_info-$date_string.csv"
 $outputFSXfilesystems = "aws_fsx_filesystem_info-$date_string.csv"
 $outputFSX = "aws_fsx_volume_info-$date_string.csv"
 $outputDDB = "aws_DynamoDB_info-$date_string.csv"
+#We are not backing up KMS keys at this point
 $outputKMS = "aws_kms_numbers-$date_string.csv"
+#We can ignore SQS queues
 $outputSQS = "aws_sqs_numbers-$date_string.csv"
+#We are not backing up Secrets Manager Secrets at this point
 $outputSecrets = "aws_secrets_numbers-$date_string.csv"
 $outputEKSClusters = "aws_eks_clusters_info-$date_string.csv"
 $outputEKSNodegroups = "aws_eks_nodegroups_info-$date_string.csv"
+#AWS Backup will require much additional processing
 $outputBackupCosts = "aws_backup_costs-$date_string.csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
 $archiveFile = "aws_sizing_results_$date_string.zip"
@@ -429,8 +434,68 @@ $outputFiles = @(
     $output_log
 )
 
-# Function to do the work
+function getEC2Inventory($qregion, $cred,$awsAccountInfo) {
+  try {
+    $ec2Instances = (Get-EC2Instance -Credential $cred -region $qregion -ErrorAction Stop).Instances;
+  } catch {
+    Write-Host "Failed to get EC2 Info for region $qregion in account $($awsAccountInfo.Account)" -ForegroundColor Red;
+    Write-Host "Error $_" -ForegroundColor Red;
+  }
+  $counter = 1;
+  foreach ($ec2 in $ec2Instances) {
+    Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($counter) of $($ec2Instances.Count)" -PercentComplete (($counter / $ec2Instances.Count) *100);
+    $counter++;
+    $volSize = 0;
+    #containes list of attached volumes to the current EC2 instance
+    $volumes = $ec2.BlockDeviceMappings.ebs;
+    #Iterate through each volume and sum up the volume size
+    foreach ($vol in $volumes) {
+      try {
+        $volSize += (Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $qregion -ErrorAction Stop).size;
+      } catch {
+        Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $qregion in account $($awsAccountInfo.Account)" -ForegroundColor Red;
+        Write-Host "Error: $_" -ForegroundColor Red;
+      }
+    }
+    $ec2obj = [PSCustomObject] @{
+      "AwsAccountId" = $awsAccountInfo.Account;
+      "AwsAccountAlias" = $awsAccountAlias;
+      "InstanceId" = $ec2.InstanceId;
+      "Name" = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+      "Volumes" = $volumes.count;
+      "SizeGiB" = $volSize;
+      "SizeTiB" = [math]::round($($volSize / 1024), 4);
+      "SizeGB" = [math]::round($($volSize * 1.073741824), 3);
+      "SizeTB" = [math]::round($($volSize * 0.001073741824), 4);
+      "Region" = $awsRegion;
+      #We do not need instance type
+      "InstanceType" = $ec2.InstanceType;
+      #we do not need platform
+      "Platform" = $ec2.Platform;
+      #We do not need product code
+      "ProductCode" = $ec2.ProductCodes.ProductCodeType;
+      #Backup Plans is something we need to evaluate
+      "BackupPlans" = "";
+      "InBackupPlan" = $false;
+    }
 
+    foreach ($tag in $ec2.Tags) { 
+      # Powershell objects have restrictions on key names, 
+      # so I use Regular Expressions to substitute non valid parts 
+      # like ' ' or '-' to '_' 
+      # This may cause small subtle changes from the tagname in AWS 
+      # Same applies to all other types of objects
+      $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+      if($key -ne "Name"){ 
+        $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
+      } 
+    }
+
+    $ec2List.Add($ec2obj) | Out-Null
+
+  }
+}
+# Monolithic Function to do the work
 function getAWSData($cred) {
   # Set the regions that you want to get EC2 instance and volume details for
   if ($Regions -ne '') {
@@ -474,7 +539,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Start Ingesting information on S3 Buckets
     try{ 
       $s3Buckets = $(Get-S3Bucket -Credential $cred -Region $awsRegion -BucketRegion $awsRegion -ErrorAction Stop).BucketName
     } catch {
@@ -485,6 +550,7 @@ function getAWSData($cred) {
     foreach ($s3Bucket in $s3Buckets) {
       Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
       $counter++
+      #This needs to be simplified. We only need the total bucket size, not the size per storage category
       $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new() 
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
@@ -609,7 +675,7 @@ function getAWSData($cred) {
       $s3List.Add($s3obj) | Out-Null
     }  
     Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Completed
-
+#Start Ingesting EC2 instances
     $ec2Instances = $null
     try{
       $ec2Instances = (Get-EC2Instance -Credential $cred -region $awsRegion -ErrorAction Stop).instances    
@@ -677,7 +743,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get EC2 Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Counter for unattached volumes. Do we need to include these?
     $counter = 1
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
       Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($counter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($counter / $ec2UnattachedVolumes.Count) * 100)
@@ -717,7 +783,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get RDS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Ingest RDS Databases
     $counter = 1
     foreach ($rds in $rdsDBs) {
       Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
@@ -761,7 +827,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get EFS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }    
-
+#Ingest EFS Filesystems
     $counter = 1
     foreach ($efs in $efsListFromAPI) {
       Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($counter) of $($efsListFromAPI.Count)" -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
@@ -806,7 +872,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }    
-
+#Ingest EKS clusters. Do we need this information at all?
     $counter = 1
     foreach ($eks in $eksListFromAPI) {
       try{
@@ -892,7 +958,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get FSX File System Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Ingest FSX File systems
     $counter = 1
     foreach ($fileSystem in $fsxFileSystemListFromAPI) {
       Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($counter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
@@ -1134,7 +1200,7 @@ function getAWSData($cred) {
       $fsxList.Add($fsxObj) | Out-Null
     }
     Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -Completed
-
+#Start ingesting KMS key information
     try{
       $numberOfKMS = (Get-KMSKeyList -Region $awsRegion -ErrorAction Stop).Count
       $keyObj = [PSCustomObject] @{
@@ -1148,6 +1214,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get # of KMS keys for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
+#Start ingesting SecretsManager information
     try{
       $numberOfSecrets = (Get-SECSecretList -Region $awsRegion -ErrorAction Stop).Count
       $secretsObj = [PSCustomObject] @{
@@ -1161,6 +1228,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get # of secrets for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
+  #Ingest SQS Queues
     try{
       $numberOfSQSQueues = (Get-SQSQueue -Region $awsRegion -ErrorAction Stop).Count
       $sqsObj = [PSCustomObject] @{
@@ -1174,7 +1242,7 @@ function getAWSData($cred) {
       Write-Host "Failed to get # of SQS Queues for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Ingest DynamoDB Databases
     $ddbListFromAPI = $null
     try{
       $ddbListFromAPI = Get-DDBTableList -Credential $cred -region $awsRegion -ErrorAction Stop
@@ -1220,7 +1288,7 @@ function getAWSData($cred) {
       $ddbList.add($ddbObj) | Out-Null
 
     }
-
+#Ingest AWS Backup Plans and evaluate protected resources
     $BackupPlans = $null
     try{
       $BackupPlans = Get-BAKBackupPlanList -Credential $cred -region $awsRegion -ErrorAction Stop
@@ -1228,11 +1296,52 @@ function getAWSData($cred) {
       Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-
+#Custom Object for Protected Backup Objects
+<# $protectedBAKobjs = [PSCustomObject] @{
+  "AwsAccountId" = $awsAccountInfo.Account
+  "AwsAccountAlias" = $awsAccountAlias
+  "ResourceName" = $s3Bucket
+  "Resource" = "undefined"
+  "ResourceType" = "undefined"
+  "Region" = $awsRegion
+  "RuleName" = "undefined"
+  "BackupPlans" = ""
+  "BackupVault" = "Default"
+  "InBackupPlan" = $false
+} #>
+$protectedBAKobjs = @();
     $counter = 1
     foreach ($plan in $BackupPlans) {
       Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
       $counter++
+      #Traverse Backup Vaults for protected items
+      $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId).BackupPlan.Rules;
+      foreach($rule in $backupPlanRules) {
+        $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName;
+        $protectedResourceList = Get-BAKProtectedResourceList | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
+        #add resource to array .resourceName, .resourcetype
+        foreach($resource in $protectedResourceList) {
+          $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName;
+          $protectedBAKobjs += [PSCustomObject]@{
+            "AWSAccountId" = $awsAccountInfo.Account
+            "AWSAccountAlias" = $awsAccountAlias
+            "ResourceName" = $resource.ResourceName
+            "Resource" = $resource.resourceArn
+            "ResourceType" = $resource.ResourceType
+            "Region" = $awsRegion
+            "RuleName" = $rule.RuleName
+            "BackupPlans" = $plan.BackupPlanName
+            "BackupVault" = $rule.TargetBackupVaultName
+            "BackupSchedule" = $rule.ScheduleExpression
+            "LifecycleDelete" = $rule.Lifecycle.DeleteAfterDays
+            "LifecycleToColdStorageAfterDays" = $rule.Lifecycle.MoveToColdStorageAfterDays
+            "BackupSizeInGiB" = [math]::round($($recoveryPointInfo.BackupSizeInBytes / 1073741824), 4)
+            }
+        }
+      }
+      $protectedBAKobjs | export-csv -path ./protected_objects.csv;
+
+      #Continue remaineder of primary script
       try{
         $BackupPlanObject = (Get-BAKBackupPlan -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
       } catch {
