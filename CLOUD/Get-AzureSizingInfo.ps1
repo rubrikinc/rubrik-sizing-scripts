@@ -138,7 +138,8 @@ Updated by DamaniN: 11/3/23 -   Updated install/deployment documentation - Daman
                                 Added support for Azure Blob stores
                                 Added parameters to skip the collection of various Azure services
 Updated by DamaniN: 1/31/24 -   Added support for Azure Backup Vaults, Policies, and Items
-                                
+Updated by IanS: 3/19/25    -   Added azure_sizing_summary .csv file to output 
+
 If you run this script and get an error message similar to this:
 
 ./Get-AzureSizingInfo.ps1: The script "Get-AzureSizingInfo.ps1" cannot be run because the following
@@ -1898,6 +1899,250 @@ if($Anonymize){
   Write-Host
 }
 
+# Create a summary table from all collected data
+Write-Host "Creating summary pivot table..." -ForegroundColor Green
+
+# Define the output file for the summary - use the same path format as other files
+$outputSummary = "./azure_sizing_summary_$($fileDate).csv"
+
+# Create summary objects for each resource type
+$summaryData = @()
+
+# Function to add separator row
+function Add-SeparatorRow {
+    $summaryData += [PSCustomObject]@{
+        ResourceType = ""
+        Region = ""
+        TotalSizeTiB = $null
+        TotalSizeTB = $null
+        Count = $null
+    }
+}
+
+# Debug output to check variable names and data
+Write-Host "Checking data availability for summary:" -ForegroundColor Green
+Write-Host "VM List available: $(if ($vmList) { 'Yes' } else { 'No' }), Count: $(if ($vmList.values) { $vmList.values.Count } else { 0 })" -ForegroundColor Yellow
+Write-Host "Storage Account List available: $(if ($azSAList) { 'Yes' } else { 'No' }), Count: $(if ($azSAList) { $azSAList.Count } else { 0 })" -ForegroundColor Yellow
+Write-Host "File Share List available: $(if ($azFSList) { 'Yes' } else { 'No' }), Count: $(if ($azFSList) { $azFSList.Count } else { 0 })" -ForegroundColor Yellow
+Write-Host "SQL List available: $(if ($sqlList) { 'Yes' } else { 'No' }), Count: $(if ($sqlList) { $sqlList.Count } else { 0 })" -ForegroundColor Yellow
+Write-Host "MI List available: $(if ($miList) { 'Yes' } else { 'No' }), Count: $(if ($miList) { $miList.Count } else { 0 })" -ForegroundColor Yellow
+
+# VM and Managed Disks Summary
+if ($vmList -and $vmList.values -and $vmList.values.Count -gt 0) {
+    $vmArray = @($vmList.GetEnumerator() | ForEach-Object { $_.Value })
+    
+    # Process each HasMSSQL value (Yes and No) separately
+    @("Yes", "No") | ForEach-Object {
+        $hasMSSQL = $_
+        $groupVMs = $vmArray | Where-Object { $_.HasMSSQL -eq $hasMSSQL }
+        
+        if ($groupVMs) {
+            # Section header
+            $summaryData += [PSCustomObject]@{
+                ResourceType = "[ Azure VMs and Managed Disks ]"
+                Region = ""
+                TotalSizeTiB = $null
+                TotalSizeTB = $null
+                Count = $null
+            }
+
+            # HasMSSQL status line
+            $summaryData += [PSCustomObject]@{
+                ResourceType = "HasMSSQL = $hasMSSQL"
+                Region = ""
+                TotalSizeTiB = $null
+                TotalSizeTB = $null
+                Count = $null
+            }
+
+            # Calculate and add all regions total
+            $allRegionsSummary = [PSCustomObject]@{
+                ResourceType = ""
+                Region = "All Regions"
+                TotalSizeTiB = ($groupVMs.SizeTiB | Measure-Object -Sum).Sum
+                TotalSizeTB = ($groupVMs.SizeTB | Measure-Object -Sum).Sum
+                Count = $groupVMs.Count
+            }
+            $summaryData += $allRegionsSummary
+
+            # Add per-region breakdown
+            $groupVMs | Group-Object -Property Region | Sort-Object Name | ForEach-Object {
+                $regionSummary = [PSCustomObject]@{
+                    ResourceType = ""
+                    Region = $_.Name
+                    TotalSizeTiB = ($_.Group.SizeTiB | Measure-Object -Sum).Sum
+                    TotalSizeTB = ($_.Group.SizeTB | Measure-Object -Sum).Sum
+                    Count = $_.Count
+                }
+                $summaryData += $regionSummary
+            }
+        }
+    }
+    Add-SeparatorRow
+}
+
+# Storage Accounts Summary
+if ($azSAList -and $azSAList.Count -gt 0) {
+    # Section header
+    $summaryData += [PSCustomObject]@{
+        ResourceType = "[ Azure Storage Accounts ]"
+        Region = ""
+        TotalSizeTiB = $null
+        TotalSizeTB = $null
+        Count = $null
+    }
+
+    # Overall summary
+    $totalBlobCount = ($azSAList | Measure-Object -Property BlobCount -Sum).Sum
+    $storageSummary = [PSCustomObject]@{
+        ResourceType = ""
+        Region = "All Regions (Total Blob Count: $totalBlobCount)"
+        TotalSizeTiB = ($azSAList | Measure-Object -Property UsedBlobCapacityTiB -Sum).Sum
+        TotalSizeTB = ($azSAList | Measure-Object -Property UsedBlobCapacityTB -Sum).Sum
+        Count = $azSAList.Count
+    }
+    $summaryData += $storageSummary
+
+    # Per-region summary
+    $azSAList | Group-Object Region | Sort-Object Name | ForEach-Object {
+        $regionBlobCount = ($_.Group | Measure-Object -Property BlobCount -Sum).Sum
+        $storageRegionSummary = [PSCustomObject]@{
+            ResourceType = ""
+            Region = "$($_.Name) (Blob Count: $regionBlobCount)"
+            TotalSizeTiB = ($_.Group | Measure-Object -Property UsedBlobCapacityTiB -Sum).Sum
+            TotalSizeTB = ($_.Group | Measure-Object -Property UsedBlobCapacityTB -Sum).Sum
+            Count = $_.Count
+        }
+        $summaryData += $storageRegionSummary
+    }
+    Add-SeparatorRow
+}
+
+# File Shares Summary
+if ($azFSList -and $azFSList.Count -gt 0) {
+    # Section header
+    $summaryData += [PSCustomObject]@{
+        ResourceType = "[ Azure File Shares ]"
+        Region = ""
+        TotalSizeTiB = $null
+        TotalSizeTB = $null
+        Count = $null
+    }
+
+    # Overall summary
+    $fileShareSummary = [PSCustomObject]@{
+        ResourceType = ""
+        Region = "All Regions"
+        TotalSizeTiB = ($azFSList | Measure-Object -Property UsedCapacityTiB -Sum).Sum
+        TotalSizeTB = ($azFSList | Measure-Object -Property UsedCapacityTB -Sum).Sum
+        Count = $azFSList.Count
+    }
+    $summaryData += $fileShareSummary
+
+    # Per-region summary
+    $azFSList | Group-Object Region | ForEach-Object {
+        $fileShareRegionSummary = [PSCustomObject]@{
+            ResourceType = ""
+            Region = $_.Name
+            TotalSizeTiB = ($_.Group | Measure-Object -Property UsedCapacityTiB -Sum).Sum
+            TotalSizeTB = ($_.Group | Measure-Object -Property UsedCapacityTB -Sum).Sum
+            Count = $_.Count
+        }
+        $summaryData += $fileShareRegionSummary
+    }
+    Add-SeparatorRow
+}
+
+# SQL Databases Summary
+if ($sqlList -and $sqlList.Count -gt 0) {
+    # Filter out DataWarehouse instances
+    $filteredSqlList = $sqlList | Where-Object { $_.InstanceType -ne "DataWarehouse" }
+    
+    # Only proceed if we have non-DataWarehouse instances
+    if ($filteredSqlList.Count -gt 0) {
+        # Section header
+        $summaryData += [PSCustomObject]@{
+            ResourceType = "[ Azure SQL Databases ]"
+            Region = ""
+            TotalSizeTiB = $null
+            TotalSizeTB = $null
+            Count = $null
+        }
+
+        # Overall summary
+        $sqlSummary = [PSCustomObject]@{
+            ResourceType = ""
+            Region = "All Regions"
+            TotalSizeTiB = ($filteredSqlList | Measure-Object -Property MaxSizeTiB -Sum).Sum
+            TotalSizeTB = ($filteredSqlList | Measure-Object -Property MaxSizeTB -Sum).Sum
+            Count = $filteredSqlList.Count
+        }
+        $summaryData += $sqlSummary
+
+        # Per-region summary
+        $filteredSqlList | Group-Object Region | ForEach-Object {
+            $sqlRegionSummary = [PSCustomObject]@{
+                ResourceType = ""
+                Region = $_.Name
+                TotalSizeTiB = ($_.Group | Measure-Object -Property MaxSizeTiB -Sum).Sum
+                TotalSizeTB = ($_.Group | Measure-Object -Property MaxSizeTB -Sum).Sum
+                Count = $_.Count
+            }
+            $summaryData += $sqlRegionSummary
+        }
+        Add-SeparatorRow
+    }
+}
+
+# SQL Managed Instances Summary
+if ($miList -and $miList.Count -gt 0) {
+    # Section header
+    $summaryData += [PSCustomObject]@{
+        ResourceType = "[ Azure SQL Managed Instances ]"
+        Region = ""
+        TotalSizeTiB = $null
+        TotalSizeTB = $null
+        Count = $null
+    }
+
+    # Overall summary
+    $miSqlSummary = [PSCustomObject]@{
+        ResourceType = ""
+        Region = "All Regions"
+        TotalSizeTiB = ($miList | Measure-Object -Property MaxSizeTiB -Sum).Sum
+        TotalSizeTB = ($miList | Measure-Object -Property MaxSizeTB -Sum).Sum
+        Count = $miList.Count
+    }
+    $summaryData += $miSqlSummary
+
+    # Per-region summary
+    $miList | Group-Object Region | ForEach-Object {
+        $miSqlRegionSummary = [PSCustomObject]@{
+            ResourceType = ""
+            Region = $_.Name
+            TotalSizeTiB = ($_.Group | Measure-Object -Property MaxSizeTiB -Sum).Sum
+            TotalSizeTB = ($_.Group | Measure-Object -Property MaxSizeTB -Sum).Sum
+            Count = $_.Count
+        }
+        $summaryData += $miSqlRegionSummary
+    }
+    Add-SeparatorRow
+}
+
+# Export the summary data to CSV
+Write-Host "Exporting summary data to $outputSummary..." -ForegroundColor Green
+Write-Host "Summary data contains $($summaryData.Count) items" -ForegroundColor Green
+
+# Debug output to see what's in the summary data
+foreach ($item in $summaryData) {
+    Write-Host "Resource Type: $($item.ResourceType), Count: $($item.Count), Size TiB: $($item.TotalSizeTiB), Size TB: $($item.TotalSizeTB)" -ForegroundColor Yellow
+}
+
+$summaryData | Export-Csv -Path $outputSummary -NoTypeInformation
+
+# Add the summary file to the list of output files
+$outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputSummary - Azure Sizing Summary CSV file."}
+
 } catch {
   Write-Error "An error occurred and the script has exited prematurely:"
   Write-Error "Error: $_"
@@ -1950,4 +2195,3 @@ if ($azConfig.Value -eq $true) {
     Write-Error "Error: $_"
   }
 }
-
