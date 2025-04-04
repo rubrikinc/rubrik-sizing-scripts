@@ -1574,7 +1574,7 @@ if ($Anonymize) {
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
             
-            $tagName = $propertyName.Substring(10)
+            $tagName = $propertyName.Substring(4)
             
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
