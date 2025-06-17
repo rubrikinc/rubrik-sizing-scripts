@@ -1389,7 +1389,7 @@ foreach ($sub in $subs) {
     $TimePeriodFrom = [datetime]::Parse($startDate)
     $TimePeriodTo = [datetime]::Parse($endDate)
     try{
-      $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup' -Operator ""
+      $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup'
       $filter = New-AzCostManagementQueryFilterObject -Dimensions $dimensions
     
       $aggregation = @{                                                                                                                                                             
