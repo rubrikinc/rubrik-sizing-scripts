@@ -1541,14 +1541,13 @@ if ($Anonymize) {
       param (
           [PSObject]$DataObject
       )
-
+      #Write-Host "Processing Object: $($DataObject | ConvertTo-Json)" -ForegroundColor Yellow
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
           $shouldAnonymize = $global:anonymizeProperties -contains $propertyName
-
+          #Write-Host "Checking $propertyName = $($DataObject.$propertyName)" -ForegroundColor Yellow
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
-
               if ($null -ne $originalValue) {
                 if(($originalValue -is [System.Collections.IEnumerable] -and -not ($originalValue -is [string])) ){
                   # This is to handle the anonymization of list objects
@@ -1566,6 +1565,7 @@ if ($Anonymize) {
                   }
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
                 }
+                #Write-Host "Set $propertyName to $($DataObject.$propertyName)" -ForegroundColor Yellow
               }
           } 
           elseif ($propertyName -like "Tag:*") {
@@ -1574,7 +1574,7 @@ if ($Anonymize) {
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
             
-            $tagName = $propertyName.Substring(10)
+            $tagName = $propertyName.Substring(4)
             
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
@@ -1630,30 +1630,31 @@ if ($Anonymize) {
   }
 }
 if ($SkipAzureVMandManagedDisks -ne $true) {
-
   $VMtotalGiB = ($vmList.values.SizeGiB | Measure-Object -Sum).sum
   $VMtotalTiB = ($vmList.values.SizeTiB | Measure-Object -Sum).sum 
   $VMtotalGB = ($vmList.values.SizeGB | Measure-Object -Sum).sum
   $VMtotalTB = ($vmList.values.SizeTB | Measure-Object -Sum).sum 
 
-
   Write-Host
-  Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions"  -ForeGroundColor Green
+  Write-Host "Successfully collected data from $($processedSubs) out of $($subs.count) found subscriptions" -ForegroundColor Green
   Write-Host
-  Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.values.count)" -ForeGroundColor Green
-  Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.values.Disks | Measure-Object -Sum).sum)" -ForeGroundColor Green
-  Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB or $VMtotalTiB TiB or $VMtotalTB TB" -ForeGroundColor Green
+  Write-Host "Total # of Azure VMs: $('{0:N0}' -f $vmList.values.count)" -ForegroundColor Green
+  Write-Host "Total # of Managed Disks: $('{0:N0}' -f ($vmList.values.Disks | Measure-Object -Sum).sum)" -ForegroundColor Green
+  Write-Host "Total capacity of all disks: $('{0:N0}' -f $VMtotalGiB) GiB or $('{0:N0}' -f $VMtotalGB) GB or $VMtotalTiB TiB or $VMtotalTB TB" -ForegroundColor Green
 
-  $vmListToCsv = $vmList.values
-
+  # Ensure array of PSObjects
+  $vmListToCsv = @($vmList.values | ForEach-Object { [PSCustomObject]$_ })
+  Write-Host "Pre-Anonymize VM Count: $($vmListToCsv.Count)" -ForegroundColor Cyan
+  #Write-Host "Pre-Anonymize VM Sample: $($vmListToCsv[0] | ConvertTo-Json)" -ForegroundColor Cyan
   if ($Anonymize) {
-    $vmListToCsv = AnonymizeCollection -Collection $vmListToCsv
+      Write-Host "Anonymizing VMs..." -ForegroundColor Cyan
+      $vmListToCsv = AnonymizeCollection -Collection $vmListToCsv
+      #Write-Host "Post-Anonymize VM Count: $($vmListToCsv.Count)" -ForegroundColor Cyan
+      #Write-Host "Post-Anonymize VM Sample: $($vmListToCsv[0] | ConvertTo-Json)" -ForegroundColor Cyan
   }
-
-  $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
-  $vmListToCsv | Export-CSV -path $outputVmDisk -NoTypeInformation
-
-} #if ($SkipAzureVMandManagedDisks -ne $true)
+  $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
+  $vmListToCsv | ForEach-Object { $_ } | Export-CSV -Path $outputVmDisk -NoTypeInformation
+}
 
 if ($SkipAzureSQLandMI -ne $true) {
   $DBtotalGiB = (($sqlList | Where-Object -Property 'Database' -ne '').MaxSizeGiB | Measure-Object -Sum).sum
@@ -1919,13 +1920,14 @@ function Add-SeparatorRow {
     }
 }
 
-# Debug output to check variable names and data
+<# Debug output to check variable names and data
 Write-Host "Checking data availability for summary:" -ForegroundColor Green
 Write-Host "VM List available: $(if ($vmList) { 'Yes' } else { 'No' }), Count: $(if ($vmList.values) { $vmList.values.Count } else { 0 })" -ForegroundColor Yellow
 Write-Host "Storage Account List available: $(if ($azSAList) { 'Yes' } else { 'No' }), Count: $(if ($azSAList) { $azSAList.Count } else { 0 })" -ForegroundColor Yellow
 Write-Host "File Share List available: $(if ($azFSList) { 'Yes' } else { 'No' }), Count: $(if ($azFSList) { $azFSList.Count } else { 0 })" -ForegroundColor Yellow
 Write-Host "SQL List available: $(if ($sqlList) { 'Yes' } else { 'No' }), Count: $(if ($sqlList) { $sqlList.Count } else { 0 })" -ForegroundColor Yellow
 Write-Host "MI List available: $(if ($miList) { 'Yes' } else { 'No' }), Count: $(if ($miList) { $miList.Count } else { 0 })" -ForegroundColor Yellow
+#>
 
 # VM and Managed Disks Summary
 if ($vmList -and $vmList.values -and $vmList.values.Count -gt 0) {
