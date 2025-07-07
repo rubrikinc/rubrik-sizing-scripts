@@ -80,6 +80,7 @@ Written by Steven Tong for community usage
 GitHub: stevenctong
 Date: 11/9/21
 Updated: 2/24/22
+Updated: 6/25/25 for enhanced error handling
 
 .EXAMPLE
 Get all GCE VMs and associated disk info and output to a CSV file.
@@ -175,43 +176,71 @@ $outputFiles = @(
 )
 
 # Clear out variable in case it exists
-$projectList = ''
+$projectList = @()
 
 # If a file is provided containing the list of files, then import the file
 if ($projectFile -ne '')
 {
   $projectFileContents = Get-Content -Path $ProjectFile
-  $projectList = @()
   foreach ($project in $projectFileContents)
   {
     try {
-      $projectList += Get-GcpProject -ProjectId $project
+      $projectObj = Get-GcpProject -ProjectId $project
+      if ($projectObj -and $projectObj.ProjectId) {
+        $projectList += $projectObj
+        Write-Host "Successfully retrieved project: $project" -ForegroundColor Green
+      } else {
+        Write-Host "No valid project data returned for $project" -ForegroundColor Yellow
+      }
     } catch {
-      Write-Host "Failed to get project $project" -foregroundcolor red
-      Write-Host "Error: $_" -foregroundcolor red
+      Write-Host "Failed to get project $project" -ForegroundColor Red
+      Write-Host "Error: $_" -ForegroundColor Red
     }
   }
 } elseif ($projects -ne '')
 {
   # Else if a comma separated list of projects was provided on the command line, use that
-  $projectList = @()
   foreach ($project in $projects.split(',')) {
     try {
-      $projectList += Get-GcpProject -ProjectId $project
+      $projectObj = Get-GcpProject -ProjectId $project
+      if ($projectObj -and $projectObj.ProjectId) {
+        $projectList += $projectObj
+        Write-Host "Successfully retrieved project: $project" -ForegroundColor Green
+      } else {
+        Write-Host "No valid project data returned for $project" -ForegroundColor Yellow
+      }
     } catch {
-      Write-Host "Failed to get project $project" -foregroundcolor red
-      Write-Host "Error: $_" -foregroundcolor red
+      Write-Host "Failed to get project $project" -ForegroundColor Red
+      Write-Host "Error: $_" -ForegroundColor Red
     }
   }
 } else {
-  Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
-  $projectList = @()
-  try{
+  Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor Green
+  try {
     $projectList = Get-GcpProject
+    if (-not $projectList -or $projectList.Count -eq 0) {
+      Write-Host "No projects found. Check permissions ('resourcemanager.projects.get') or gcloud configuration." -ForegroundColor Red
+      Write-Host "Run 'gcloud auth list' and 'gcloud config list' to verify setup." -ForegroundColor Yellow
+    } else {
+      Write-Host "Found $($projectList.Count) project(s)." -ForegroundColor Green
+    }
   } catch {
-    Write-Host "Failed to get projects" -foregroundcolor Red
-    Write-Host "Error: $_" -foregroundcolor Red
+    Write-Host "Failed to retrieve projects. Possible causes: insufficient permissions, authentication issues, or network problems." -ForegroundColor Red
+    Write-Host "Error: $_" -ForegroundColor Red
+    Write-Host "Run 'gcloud auth list' and 'gcloud config list' to verify setup." -ForegroundColor Yellow
   }
+}
+
+# Validate projectList before proceeding
+if ($projectList.Count -eq 0) {
+  Write-Host "No valid projects to process. Generating empty output files and exiting." -ForegroundColor Yellow
+  # Create empty output files to maintain expected output structure
+  @() | Export-CSV -Path $outputVM -NoTypeInformation
+  @() | Export-CSV -Path $outputAttachedDisks -NoTypeInformation
+  @() | Export-CSV -Path $outputUnattachedDisks -NoTypeInformation
+  Write-Host "Empty CSV files generated: $outputVM, $outputAttachedDisks, $outputUnattachedDisks" -ForegroundColor Green
+} else {
+  Write-Host "Processing $($projectList.Count) project(s)..." -ForegroundColor Green
 }
 
 $instanceList = New-Object collections.arraylist
@@ -221,20 +250,31 @@ $unattachedDiskList = New-Object collections.arraylist
 $projectCounter = 1
 foreach ($project in $projectList)
 {
-  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
+  if (-not $project -or -not $project.ProjectId) {
+    Write-Host "Skipping invalid project entry (null or missing ProjectId)." -ForegroundColor Yellow
+    continue
+  }
+  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)" -PercentComplete (($projectCounter / $projectList.Count) * 100)
   $projectCounter++
   $instanceInfo = $null
-  try{
-    $instanceInfo = Get-GceInstance -Project $($project.ProjectId) 
-
+  try {
+    $instanceInfo = Get-GceInstance -Project $($project.ProjectId)
+    if (-not $instanceInfo) {
+      Write-Host "No instances found in project $($project.ProjectId)" -ForegroundColor Yellow
+    }
   } catch {
-    Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
-    Write-Host $_ -foregroundcolor red
+    Write-Host "Failed to get instances in project $($project.ProjectId)" -ForegroundColor Red
+    Write-Host "Error: $_" -ForegroundColor Red
+    continue
   }
 
   $instanceCounter = 1
   foreach ($instance in $instanceInfo) {
-    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+    if (-not $instance -or -not $instance.Name) {
+      Write-Host "Skipping invalid instance in project $($project.ProjectId)" -ForegroundColor Yellow
+      continue
+    }
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Instance: $($instanceCounter) of $($instanceInfo.Count)" -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
     $instanceCounter++
 
     $diskCount = 0
@@ -242,42 +282,55 @@ foreach ($project in $projectList)
     $numDiskEncryption = 0
     $sizeEncryptedDisksGb = 0
 
-    foreach($disk in $instance.Disks){
-      $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
-      $diskObj = [PSCustomObject] @{
-        "Project" = $($project.ProjectId)
-        "Zone" = $diskInfo.Zone.split('/')[-1]
-        "VMName" = $instance.Name
-        "DiskName" = $diskInfo.Name
-        "Id" = $diskInfo.Id
-        "SizeGb" = $diskInfo.SizeGb
-        "SizeTb" = $diskInfo.SizeGb / 1000
-        "DiskEncryptionKey" = $diskInfo.DiskEncryptionKey
-        "SourceImageSource" = $null
-        "SourceImageName" = $null
+    foreach($disk in $instance.Disks) {
+      if (-not $disk -or -not $disk.Source) {
+        Write-Host "Skipping invalid disk for instance $($instance.Name) in project $($project.ProjectId)" -ForegroundColor Yellow
+        continue
       }
-      if($diskInfo.SourceImage -ne $null){
-        $diskObj.SourceImageSource = $diskInfo.SourceImage.split('/')[-4]
-        $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
-      }
+      try {
+        $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
+        if (-not $diskInfo) {
+          Write-Host "No disk info returned for disk $($disk.Source.split('/')[-1]) in project $($project.ProjectId)" -ForegroundColor Yellow
+          continue
+        }
+        $diskObj = [PSCustomObject] @{
+          "Project" = $($project.ProjectId)
+          "Zone" = $diskInfo.Zone.split('/')[-1]
+          "VMName" = $instance.Name
+          "DiskName" = $diskInfo.Name
+          "Id" = $diskInfo.Id
+          "SizeGb" = $diskInfo.SizeGb
+          "SizeTb" = $diskInfo.SizeGb / 1000
+          "DiskEncryptionKey" = $diskInfo.DiskEncryptionKey
+          "SourceImageSource" = $null
+          "SourceImageName" = $null
+        }
+        if($diskInfo.SourceImage -ne $null) {
+          $diskObj.SourceImageSource = $diskInfo.SourceImage.split('/')[-4]
+          $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
+        }
 
-      $tagCounter = 0
-      foreach($key in $diskInfo.Labels.Keys){
-        $value = $diskInfo.Labels.Values.Split('\n')[$tagCounter]
-        $key = $key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
-        $tagCounter++
-      }
+        $tagCounter = 0
+        foreach($key in $diskInfo.Labels.Keys) {
+          $value = $diskInfo.Labels.Values.Split('\n')[$tagCounter]
+          $key = $key -replace '[^a-zA-Z0-9]', '_'
+          $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force
+          $tagCounter++
+        }
 
-      $diskCount++
-      $diskSizeGb += $diskInfo.SizeGb
-      if($diskInfo.DiskEncryptionKey){
-        $numDiskEncryption++
-        $sizeEncryptedDisksGb += $diskInfo.SizeGb
-      }
+        $diskCount++
+        $diskSizeGb += $diskInfo.SizeGb
+        if($diskInfo.DiskEncryptionKey) {
+          $numDiskEncryption++
+          $sizeEncryptedDisksGb += $diskInfo.SizeGb
+        }
 
-      $attachedDiskList.Add($diskObj) | Out-Null
-      
+        $attachedDiskList.Add($diskObj) | Out-Null
+      } catch {
+        Write-Host "Failed to process disk $($disk.Source.split('/')[-1]) for instance $($instance.Name) in project $($project.ProjectId)" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+        continue
+      }
     }
 
     $instanceObj = [PSCustomObject] @{
@@ -290,34 +343,41 @@ foreach ($project in $projectList)
       "EncryptedDisksCount" = $numDiskEncryption
       "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
       "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
-      "Status" = $vm.Status
+      "Status" = $instance.Status  # Fixed: Changed $vm to $instance
     }
     $tagCounter = 0
-    foreach($key in $instance.Labels.Keys){
+    foreach($key in $instance.Labels.Keys) {
       $value = $instance.Labels.Values.Split('\n')[$tagCounter]
-      $key = $key -replace '[^a-zA-Z0-9]', '_' 
-      $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+      $key = $key -replace '[^a-zA-Z0-9]', '_'
+      $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force
       $tagCounter++
     }
 
     $instanceList.Add($instanceObj) | Out-Null
-
   }
-  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
+  Write-Progress -ID 2 -Activity "Processing GCE VM Instance" -Completed
 
   $allDisks = $null
-  try{
-    $allDisks = Get-GceDisk -Project $($project.ProjectId) 
-  } catch{
-    Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
-    Write-Host $_ -foregroundcolor red
+  try {
+    $allDisks = Get-GceDisk -Project $($project.ProjectId)
+    if (-not $allDisks) {
+      Write-Host "No disks found in project $($project.ProjectId)" -ForegroundColor Yellow
+    }
+  } catch {
+    Write-Host "Failed to get disks in project $($project.ProjectId)" -ForegroundColor Red
+    Write-Host "Error: $_" -ForegroundColor Red
+    continue
   }
 
   $diskCounter = 1
-  foreach($disk in $allDisks){
-    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+  foreach($disk in $allDisks) {
+    if (-not $disk -or -not $disk.Name) {
+      Write-Host "Skipping invalid disk in project $($project.ProjectId)" -ForegroundColor Yellow
+      continue
+    }
+    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)" -PercentComplete (($diskCounter / $allDisks.Count) * 100)
     $diskCounter++
-    if ($disk.Users -eq $null){
+    if ($disk.Users -eq $null) {
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $disk.Zone.split('/')[-1]
@@ -329,23 +389,23 @@ foreach ($project in $projectList)
         "SourceImageSource" = $null
         "SourceImageName" = $null
       }
-      if($disk.SourceImage -ne $null){
+      if($disk.SourceImage -ne $null) {
         $diskObj.SourceImageSource = $disk.SourceImage.split('/')[-4]
         $diskObj.SourceImageName = $disk.SourceImage.split('/')[-1]
       }
       $tagCounter = 0
-      foreach($key in $disk.Labels.Keys){
+      foreach($key in $disk.Labels.Keys) {
         $value = $disk.Labels.Values.Split('\n')[$tagCounter]
-        $key = $key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
+        $key = $key -replace '[^a-zA-Z0-9]', '_'
+        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force
         $tagCounter++
       }
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
   }
-  Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
+  Write-Progress -ID 3 -Activity "Processing disk" -Completed
 }
-Write-Progress -ID 1 -Activity "Processing project: $($project)" -Completed
+Write-Progress -ID 1 -Activity "Processing project" -Completed
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -370,7 +430,6 @@ function addTagsToAllObjectsInList($list) {
       }
   }
 }
-
 
 if ($Anonymize) {
   $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey")
@@ -445,7 +504,6 @@ if ($Anonymize) {
           }
           elseif ($propertyName -like "Label/Tag:*") {
             # Must anonymize both the tag name and value
-
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
             
@@ -459,13 +517,13 @@ if ($Anonymize) {
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
-                  $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("Label/TagValue")#$anonymizedTagKey
+                  $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("Label/TagValue")
                 }
                 $anonymizedTagValue = $global:anonymizeDict[$tagValue]
             }
             $DataObject.PSObject.Properties.Remove($propertyName)
             $DataObject | Add-Member -MemberType NoteProperty -Name $anonymizedTagKey -Value $anonymizedTagValue -Force
-        }
+          }
           elseif ($property.Value -is [PSObject]) {
               $DataObject.$propertyName = Anonymize-Data -DataObject $property.Value
           }
@@ -522,15 +580,15 @@ Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foreground
 Write-Host
 addTagsToAllObjectsInList($instanceList)
 Write-Host "CSV file output to: $outputVM" -foregroundcolor green
-$instanceList | Export-CSV -path $outputVM
+$instanceList | Export-CSV -path $outputVM -NoTypeInformation
 Write-Host
 addTagsToAllObjectsInList($attachedDiskList)
 Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
-$attachedDiskList | Export-CSV -path $outputAttachedDisks
+$attachedDiskList | Export-CSV -path $outputAttachedDisks -NoTypeInformation
 Write-Host
 addTagsToAllObjectsInList($unattachedDiskList)
 Write-Host "CSV file output to: $outputUnattachedDisks" -foregroundcolor green
-$unattachedDiskList | Export-CSV -path $outputUnattachedDisks
+$unattachedDiskList | Export-CSV -path $outputUnattachedDisks -NoTypeInformation
 
 Write-Host
 Write-Host
@@ -547,7 +605,7 @@ if($Anonymize){
 
   $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values-$date_string.csv"
 
-  $transformedDict | Export-CSV -Path $anonKeyValuesFileName
+  $transformedDict | Export-CSV -Path $anonKeyValuesFileName -NoTypeInformation
   Write-Host
   Write-Host "Provided anonymized keys to actual values in the CSV: $anonKeyValuesFileName" -ForeGroundColor Cyan
   Write-Host "Provided log file here: $log_for_anon_customers" -ForegroundColor Cyan
@@ -556,7 +614,7 @@ if($Anonymize){
 }
 
 } catch {
-  Write-Error "An error occurred and the script has exited prematurely:"
+  Write-Error "An unexpected error occurred during script execution:"
   Write-Error $_
   Write-Error $_.ScriptStackTrace
 } finally {
@@ -567,7 +625,7 @@ if($Anonymize){
 $existingFiles = $outputFiles | Where-Object { Test-Path $_ }
 
 # Compress the files into a zip archive
-Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
+Compress-Archive -Path $existingFiles -DestinationPath $archiveFile -ErrorAction SilentlyContinue
 
 # Remove the original files
 foreach ($file in $outputFiles) {
