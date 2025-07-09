@@ -486,14 +486,19 @@ foreach ($sub in $subs) {
   }
 
   #Get tenant name for subscription
-  try {
+try {
     $tenant = Get-AzTenant -TenantId $($sub.TenantId) -ErrorAction Stop
-  } catch {
-    Write-Error "Error getting tenant information for: $($sub.TenantId))"
+    if ($null -eq $tenant -or $null -eq $tenant.Name) {
+        Write-Warning "Tenant data is null or incomplete for TenantId: $($sub.TenantId). Using fallback tenant name 'UnknownTenant'."
+        $tenant = [PSCustomObject]@{ Name = "UnknownTenant"; Id = $sub.TenantId }
+    }
+} catch {
+    Write-Error "Error getting tenant information for TenantId: $($sub.TenantId). Check permissions or TenantId validity."
     Write-Error "Error: $_"
-    Continue
-  }
-  $processedSubs++
+    Write-Warning "Using fallback tenant name 'UnknownTenant' to continue processing."
+    $tenant = [PSCustomObject]@{ Name = "UnknownTenant"; Id = $sub.TenantId }
+}
+$processedSubs++
 
   if ($SkipAzureVMandManagedDisks -ne $true) {
     # Get a list of all VMs in the current subscription
@@ -1383,55 +1388,43 @@ foreach ($sub in $subs) {
     Write-Progress -Id 8 -Activity "Getting Azure Backup Vault information for: $($azVault.Name)" -Completed
 
     # Limit for this API call is 12 months before current date
-    $costManagementQuery = $null
+$costManagementQuery = $null
     $startDate = (Get-Date).AddMonths(-11)
     $endDate = (Get-Date)
     $TimePeriodFrom = [datetime]::Parse($startDate)
     $TimePeriodTo = [datetime]::Parse($endDate)
-    try{
-      $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup' -Operator ""
-      $filter = New-AzCostManagementQueryFilterObject -Dimensions $dimensions
-    
-      $aggregation = @{                                                                                                                                                             
-        totalCostUSD = @{
-            name = "CostUSD"
-            function = "Sum"
+    try {
+        $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup'
+        $filter = New-AzCostManagementQueryFilterObject -Dimension $dimensions
+        $aggregation = @{
+            totalCostUSD = @{ name = "CostUSD"; function = "Sum" }
+            totalPreTaxCostUSD = @{ name = "PreTaxCostUSD"; function = "Sum" }
         }
-        totalPreTaxCostUSD = @{
-            name = "PreTaxCostUSD"
-            function = "Sum"
-      }
-      } # max 2 in a query, possible values: 'UsageQuantity','PreTaxCost','Cost','CostUSD','PreTaxCostUSD'
-      # 6> Out-Null needed to workaround bug in Invoke-AzCostManagementQuery where two extra blank lines are produced in the output
-      $costManagementQueryRaw = Invoke-AzCostManagementQuery -Type Usage `
-                                                          -Scope "subscriptions/$($sub.SubscriptionId)" `
-                                                          -DatasetGranularity 'Monthly' `
-                                                          -DatasetFilter $filter `
-                                                          -Timeframe Custom `
-                                                          -TimePeriodFrom $TimePeriodFrom `
-                                                          -TimePeriodTo $TimePeriodTo `
-                                                          -DatasetAggregation $aggregation 6> $null
-
-      $costManagementQuery = $costManagementQueryRaw | ConvertTo-JSON -Depth 10 | ConvertFrom-Json
-
-      foreach ($row in $costManagementQuery.Row) {
-          $costDetail = [PSCustomObject]@{
-              SubscriptionId = $sub.SubscriptionId
-              Subscription = $sub.Name
-              Tenant = $tenant.Name
-              BillingMonth  = [datetime]$row[2]
-              PreTaxCostUSD =  "$" + "$([math]::round([double]$row[0], 2))"
-              CostUSD =  "$" + "$([math]::round([double]$row[1], 2))"
-          }
-
-          $backupCostDetails += $costDetail
-      }
+        $costManagementQueryRaw = Invoke-AzCostManagementQuery -Type Usage `
+                                                              -Scope "subscriptions/$($sub.SubscriptionId)" `
+                                                              -DatasetGranularity 'Monthly' `
+                                                              -DatasetFilter $filter `
+                                                              -Timeframe Custom `
+                                                              -TimePeriodFrom $TimePeriodFrom `
+                                                              -TimePeriodTo $TimePeriodTo `
+                                                              -DatasetAggregation $aggregation 6> $null
+        $costManagementQuery = $costManagementQueryRaw | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+        foreach ($row in $costManagementQuery.Row) {
+            $costDetail = [PSCustomObject]@{
+                SubscriptionId = $sub.SubscriptionId
+                Subscription = $sub.Name
+                Tenant = $tenant.Name
+                BillingMonth = [datetime]$row[2]
+                PreTaxCostUSD = "$" + "$([math]::round([double]$row[0], 2))"
+                CostUSD = "$" + "$([math]::round([double]$row[1], 2))"
+            }
+            $backupCostDetails += $costDetail
+        }
     } catch {
-      Write-Host "Failed to get Azure Backup Costs in sub $($sub.Name) in tenant $($tenant.Name)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
+        Write-Warning "Failed to get Azure Backup Costs in sub $($sub.Name) in tenant $($tenant.Name). Skipping cost data."
+        Write-Warning "Error: $_"
     }
-
-  } # if ($SkipAzureBackup -ne $true)
+} # if ($SkipAzureBackup -ne $true)
 
   # Intentionally skipping this by default; one must pass in the flag to collect this information
   # Can be changed to be collected by default later
@@ -1653,7 +1646,11 @@ if ($SkipAzureVMandManagedDisks -ne $true) {
       #Write-Host "Post-Anonymize VM Sample: $($vmListToCsv[0] | ConvertTo-Json)" -ForegroundColor Cyan
   }
   $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputVmDisk - Azure VM and Managed Disk CSV file."}
+  if ($null -eq $vmListToCsv -or $vmListToCsv.Count -eq 0) {
+  Write-Error "vmListToCsv is null or empty. Cannot export to CSV."
+  } else {
   $vmListToCsv | ForEach-Object { $_ } | Export-CSV -Path $outputVmDisk -NoTypeInformation
+  }
 }
 
 if ($SkipAzureSQLandMI -ne $true) {
