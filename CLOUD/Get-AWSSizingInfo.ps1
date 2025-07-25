@@ -578,7 +578,7 @@ function getAWSData($cred) {
         try{
           $maxBucketSizes = $(Get-CWMetricStatistic  -Statistic Maximum `
                           -Namespace AWS/S3 -MetricName BucketSizeBytes `
-                          -UtcStartTime $utcStartTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
+                          -StartTime $utcStartTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
                           -EndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
                           -Period 86400  `
                           -Credential $cred -Region $awsRegion `
@@ -1053,7 +1053,7 @@ function getAWSData($cred) {
         $metricName = "FreeDataStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1083,7 +1083,7 @@ function getAWSData($cred) {
         $metricName = "UsedStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1135,7 +1135,7 @@ function getAWSData($cred) {
       )
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -1146,7 +1146,7 @@ function getAWSData($cred) {
       $metricName = "StorageCapacity"
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatistics -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
