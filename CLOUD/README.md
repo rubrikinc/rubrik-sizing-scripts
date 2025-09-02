@@ -68,6 +68,7 @@ To run the AWS sizing script, ensure you have the following:
                       "eks:DescribeCluster",
                       "eks:ListClusters",
                       "eks:ListNodegroups",
+                      "eks:DescribeNodegroups",
                       "elasticfilesystem:DescribeFileSystems",
                       "fsx:DescribeFileSystems",
                       "fsx:DescribeVolumes",
