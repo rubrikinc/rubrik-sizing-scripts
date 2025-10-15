@@ -73,7 +73,30 @@ This script can be run in one of two ways:
 
       g) Run this script as described in the examples or help.
 for more information on installing the Powershell GoogleCloud Module and the
-gcloud application. 
+gcloud application.
+
+.PARAMETER GetAllProjects
+Flag (default) to find all projects that the user has access to and gather data.
+
+.PARAMETER Projects
+A comma separated list of GCP project IDs to gather data from.
+
+.PARAMETER ProjectFile
+Path to a file containing a list of GCP project IDs separated by line breaks. No header is required in the file.
+
+.PARAMETER Anonymize
+Anonymize data collected.
+
+.PARAMETER AnonymizeFields
+A comma separated list of fields in resulting CSVs and JSONs to anonymize. The list must be encased in
+quotes, with no spaces between fields.
+
+.PARAMETER NotAnonymizeFields
+A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being
+anonymized). The list must be encased in quotes, with no spaces between fields.
+Note that we currently anonymize the following fields:
+"Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey"
+
 
 .NOTES
 Written by Steven Tong for community usage
@@ -98,7 +121,7 @@ PS> ./Get-GCPSizingInfo.ps1 -ProjectFile 'projectFile.txt'
 [CmdletBinding(DefaultParameterSetName = 'GetAllProjects')]
 param (
 
-  # Get all all projects
+  # Get all projects
   [Parameter(ParameterSetName='GetAllProjects',
     Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
