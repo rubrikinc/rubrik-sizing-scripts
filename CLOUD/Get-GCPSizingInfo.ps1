@@ -103,6 +103,7 @@ Written by Steven Tong for community usage
 GitHub: stevenctong
 Date: 11/9/21
 Updated: 2/24/22
+Updated: 11/14/25
 
 .EXAMPLE
 Get all GCE VMs and associated disk info and output to a CSV file.
@@ -116,6 +117,18 @@ PS> ./Get-GCPSizingInfo.ps1 -Projects 'projectA,projectB'
 .EXAMPLE
 For a provided list of projects, get all GCE VMs and associated disk info and output to a CSV file.
 PS> ./Get-GCPSizingInfo.ps1 -ProjectFile 'projectFile.txt'
+
+.EXAMPLE
+Exclude projects matching wildcard patterns to improve performance by skipping system/test projects.
+PS> ./Get-GCPSizingInfo.ps1 -ExcludeProjects "sys-*"
+
+.EXAMPLE
+Exclude multiple project patterns (system, test, and sandbox projects).
+PS> ./Get-GCPSizingInfo.ps1 -ExcludeProjects "sys-*,test-*,*-sandbox"
+
+.EXAMPLE
+Combine project file with exclusion patterns.
+PS> ./Get-GCPSizingInfo.ps1 -ProjectFile 'projectFile.txt' -ExcludeProjects "dev-*,staging-*"
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'GetAllProjects')]
@@ -151,7 +164,12 @@ param (
   # Choose to not anonymize certain fields
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [string]$NotAnonymizeFields
+  [string]$NotAnonymizeFields,
+
+  # Exclude projects matching wildcard patterns (comma-separated)
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [string]$ExcludeProjects
 )
 
 # Save the current culture so it can be restored later
@@ -161,9 +179,41 @@ $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
-try{
+try {
 $date = Get-Date
 $date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
+
+# Initialize execution timing
+$scriptStartTime = Get-Date
+Write-Host "=== GCP Sizing Script Started at $($scriptStartTime.ToString('yyyy-MM-dd HH:mm:ss')) ===" -ForegroundColor Green
+
+# Initialize comprehensive counters
+$counters = @{
+    # Project counters
+    ProjectsTotal = 0
+    ProjectsExcluded = 0
+    ProjectsSuccessful = 0
+    ProjectsFailed = 0
+    ProjectsApiDisabled = 0
+    ProjectsPermissionDenied = 0
+    ProjectsOtherErrors = 0
+
+    # Instance counters
+    InstancesTotal = 0
+    InstancesSuccessful = 0
+    InstancesFailed = 0
+
+    # Disk counters
+    DisksTotal = 0
+    DisksAttachedTotal = 0
+    DisksUnattachedTotal = 0
+    DisksSuccessful = 0
+    DisksAttachedSuccessful = 0
+    DisksUnattachedSuccessful = 0
+    DisksFailed = 0
+    DisksAttachedFailed = 0
+    DisksUnattachedFailed = 0
+}
 
 $output_log = "output_gcp_$date_string.log"
 
@@ -196,6 +246,33 @@ $outputFiles = @(
     $outputUnattachedDisks,
     $output_log
 )
+
+# Helper function to display progress with counters
+function Show-Progress {
+    param(
+        [string]$Activity,
+        [int]$Current,
+        [int]$Total,
+        [hashtable]$Counters
+    )
+
+    $percentComplete = if ($Total -gt 0) { ($Current / $Total) * 100 } else { 0 }
+    $successRate = if ($Counters.ProjectsTotal -gt 0) {
+        [math]::Round(($Counters.ProjectsSuccessful / $Counters.ProjectsTotal) * 100, 1)
+    } else { 0 }
+
+    Write-Progress -ID 1 -Activity $Activity -Status "Project: $Current of $Total | Success: $($Counters.ProjectsSuccessful) ($successRate%) | Failed: $($Counters.ProjectsFailed)" -PercentComplete $percentComplete
+
+    # Display running summary every 50 projects or at key milestones
+    if ($Current % 50 -eq 0 -or $Current -eq $Total) {
+        Write-Host "`n--- Progress Update ---" -ForegroundColor Cyan
+        Write-Host "Projects: $Current/$Total processed | " -NoNewline -ForegroundColor White
+        Write-Host "Success: $($Counters.ProjectsSuccessful) " -NoNewline -ForegroundColor Green
+        Write-Host "Failed: $($Counters.ProjectsFailed) " -NoNewline -ForegroundColor Red
+        Write-Host "($successRate% success rate)" -ForegroundColor White
+        Write-Host "Instances: $($Counters.InstancesSuccessful) processed | Disks: $($Counters.DisksSuccessful) processed" -ForegroundColor White
+    }
+}
 
 # Clear out variable in case it exists
 $projectList = ''
@@ -237,6 +314,65 @@ if ($projectFile -ne '')
   }
 }
 
+# Update total project count (before filtering)
+$counters.ProjectsTotal = $projectList.Count
+Write-Host "`nDiscovered $($counters.ProjectsTotal) projects" -ForegroundColor Green
+
+# Apply project exclusion filters if specified
+if ($ExcludeProjects) {
+    Write-Host "Applying exclusion filters..." -ForegroundColor Yellow
+
+    # Parse exclusion patterns
+    $exclusionPatterns = $ExcludeProjects.Split(',') | ForEach-Object { $_.Trim() }
+    $excludedProjects = @()
+    $filteredProjectList = @()
+    $exclusionStats = @{}
+
+    # Initialize exclusion stats for each pattern
+    foreach ($pattern in $exclusionPatterns) {
+        $exclusionStats[$pattern] = 0
+    }
+
+    # Filter projects
+    foreach ($project in $projectList) {
+        $shouldExclude = $false
+        $matchingPattern = $null
+
+        # Check against each exclusion pattern
+        foreach ($pattern in $exclusionPatterns) {
+            if ($project.ProjectId -like $pattern) {
+                $shouldExclude = $true
+                $matchingPattern = $pattern
+                $exclusionStats[$pattern]++
+                break
+            }
+        }
+
+        if ($shouldExclude) {
+            $excludedProjects += $project
+            $counters.ProjectsExcluded++
+            Write-Host "  Excluding project '$($project.ProjectId)' (matches pattern '$matchingPattern')" -ForegroundColor Yellow
+        } else {
+            $filteredProjectList += $project
+        }
+    }
+
+    # Update project list to filtered list
+    $projectList = $filteredProjectList
+
+    # Display exclusion summary
+    if ($counters.ProjectsExcluded -gt 0) {
+        Write-Host "`nExcluded $($counters.ProjectsExcluded) projects matching exclusion patterns:" -ForegroundColor Yellow
+        foreach ($pattern in $exclusionPatterns) {
+            if ($exclusionStats[$pattern] -gt 0) {
+                Write-Host "  - $($exclusionStats[$pattern]) projects matching '$pattern'" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+Write-Host "Processing $($projectList.Count) remaining projects..." -ForegroundColor Green
+
 $instanceList = New-Object collections.arraylist
 $attachedDiskList = New-Object collections.arraylist
 $unattachedDiskList = New-Object collections.arraylist
@@ -244,25 +380,49 @@ $unattachedDiskList = New-Object collections.arraylist
 $projectCounter = 1
 foreach ($project in $projectList)
 {
-  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
-  $projectCounter++
-  $instanceInfo = $null
-  try{
-    $instanceInfo = Get-GceInstance -Project $($project.ProjectId)
+  try {
+    # Display progress with counters
+    Show-Progress -Activity "Processing project: $($project.ProjectId)" -Current $projectCounter -Total $counters.ProjectsTotal -Counters $counters
+    $projectCounter++
 
-  } catch {
-    Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
-    Write-Host $_ -foregroundcolor red
-  }
+    # Track project-level processing
+    $projectProcessedSuccessfully = $false
+    $projectInstanceCount = 0
+    $projectDiskCount = 0
+
+    $instanceInfo = $null
+    try{
+      $instanceInfo = Get-GceInstance -Project $($project.ProjectId)
+
+    } catch {
+      # Categorize the error type
+      $errorMessage = $_.Exception.Message
+      if ($errorMessage -match "API has not been used.*before or it is disabled" -or $errorMessage -match "accessNotConfigured") {
+        $counters.ProjectsApiDisabled++
+        Write-Host "API disabled for project $($project.ProjectId)" -ForegroundColor Yellow
+      } elseif ($errorMessage -match "permission" -or $errorMessage -match "forbidden" -or $errorMessage -match "access denied") {
+        $counters.ProjectsPermissionDenied++
+        Write-Host "Permission denied for project $($project.ProjectId)" -ForegroundColor Yellow
+      } else {
+        $counters.ProjectsOtherErrors++
+        Write-Host "Other error for project $($project.ProjectId)" -ForegroundColor Red
+      }
+      Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
+      Write-Host $_ -foregroundcolor red
+    }
 
   # Skip processing if instanceInfo is null (due to API failure)
   if ($instanceInfo -eq $null) {
     Write-Host "No instance information available for project $($project.ProjectId), skipping instance processing..." -ForegroundColor Yellow
   } else {
+    # Update instance counters
+    $counters.InstancesTotal += $instanceInfo.Count
+    $projectInstanceCount = $instanceInfo.Count
+
     $instanceCounter = 1
     foreach ($instance in $instanceInfo) {
       try {
-        Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+        Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Instance: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
         $instanceCounter++
 
     $diskCount = 0
@@ -271,19 +431,28 @@ foreach ($project in $projectList)
     $sizeEncryptedDisksGb = 0
 
     foreach($disk in $instance.Disks){
+      # Count attached disks
+      $counters.DisksTotal++
+      $counters.DisksAttachedTotal++
+
       $diskInfo = $null
       try {
         $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
       } catch {
         Write-Host "Failed to get disk $($disk.Source.split('/')[-1]) in project $($project.ProjectId)" -ForegroundColor Red
         Write-Host $_ -foregroundcolor red
+        $counters.DisksFailed++
+        $counters.DisksAttachedFailed++
         continue
       }
 
       if ($diskInfo -eq $null) {
         Write-Host "Disk info is null for disk $($disk.Source.split('/')[-1]) in project $($project.ProjectId), skipping..." -ForegroundColor Yellow
+        $counters.DisksFailed++
+        $counters.DisksAttachedFailed++
         continue
       }
+
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $diskInfo.Zone.split('/')[-1]
@@ -317,6 +486,8 @@ foreach ($project in $projectList)
       }
 
       $attachedDiskList.Add($diskObj) | Out-Null
+      $counters.DisksSuccessful++
+      $counters.DisksAttachedSuccessful++
 
     }
 
@@ -341,10 +512,12 @@ foreach ($project in $projectList)
     }
 
     $instanceList.Add($instanceObj) | Out-Null
+    $counters.InstancesSuccessful++
 
       } catch {
         Write-Host "Failed to process instance $($instance.Name) in project $($project.ProjectId)" -ForegroundColor Red
         Write-Host $_ -foregroundcolor red
+        $counters.InstancesFailed++
       }
     }
     Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
@@ -352,7 +525,7 @@ foreach ($project in $projectList)
 
   $allDisks = $null
   try{
-    $allDisks = Get-GceDisk -Project $($project.ProjectId)
+    $allDisks = Get-GceDisk -Project $($project.ProjectId) 
   } catch{
     Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
     Write-Host $_ -foregroundcolor red
@@ -367,6 +540,9 @@ foreach ($project in $projectList)
       Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
       $diskCounter++
       if ($disk.Users -eq $null){
+        # Count unattached disks
+        $counters.DisksTotal++
+        $counters.DisksUnattachedTotal++
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $disk.Zone.split('/')[-1]
@@ -390,12 +566,106 @@ foreach ($project in $projectList)
         $tagCounter++
       }
       $unattachedDiskList.Add($diskObj) | Out-Null
+      $counters.DisksSuccessful++
+      $counters.DisksUnattachedSuccessful++
       }
     }
   }
   Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
+
+  # Mark project as successful if we got this far
+  $counters.ProjectsSuccessful++
+  $projectProcessedSuccessfully = $true
+
+  } catch {
+    Write-Host "Critical error processing project $($project.ProjectId), continuing with next project..." -ForegroundColor Red
+    Write-Host $_ -foregroundcolor red
+    $counters.ProjectsFailed++
+  }
 }
 Write-Progress -ID 1 -Activity "Processing project: $($project)" -Completed
+
+# Function to display comprehensive execution summary
+function Show-ExecutionSummary {
+    param(
+        [hashtable]$Counters,
+        [datetime]$StartTime
+    )
+
+    $endTime = Get-Date
+    $executionTime = $endTime - $StartTime
+    $executionTimeFormatted = "{0:D2}h {1:D2}m {2:D2}s" -f $executionTime.Hours, $executionTime.Minutes, $executionTime.Seconds
+
+    Write-Host "`n" -NoNewline
+    Write-Host "=" * 60 -ForegroundColor Green
+    Write-Host "=== GCP Sizing Script Execution Summary ===" -ForegroundColor Green
+    Write-Host "=" * 60 -ForegroundColor Green
+    Write-Host "Execution Time: $executionTimeFormatted" -ForegroundColor White
+    Write-Host "Started: $($StartTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor White
+    Write-Host "Ended: $($endTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor White
+
+    Write-Host "`nProjects:" -ForegroundColor Cyan
+
+    # Calculate rates based on total discovered projects
+    $projectsProcessed = $Counters.ProjectsTotal - $Counters.ProjectsExcluded
+    $projectSuccessRate = if ($projectsProcessed -gt 0) { [math]::Round(($Counters.ProjectsSuccessful / $projectsProcessed) * 100, 1) } else { 0 }
+    $projectFailureRate = if ($projectsProcessed -gt 0) { [math]::Round((($Counters.ProjectsFailed + $Counters.ProjectsApiDisabled + $Counters.ProjectsPermissionDenied + $Counters.ProjectsOtherErrors) / $projectsProcessed) * 100, 1) } else { 0 }
+    $projectExclusionRate = if ($Counters.ProjectsTotal -gt 0) { [math]::Round(($Counters.ProjectsExcluded / $Counters.ProjectsTotal) * 100, 1) } else { 0 }
+
+    Write-Host "  Total Discovered: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsTotal)" -ForegroundColor Yellow
+
+    if ($Counters.ProjectsExcluded -gt 0) {
+        Write-Host "  Excluded by Filter: " -NoNewline -ForegroundColor White
+        Write-Host "$($Counters.ProjectsExcluded) ($projectExclusionRate%)" -ForegroundColor Cyan
+        Write-Host "  Processed: " -NoNewline -ForegroundColor White
+        Write-Host "$projectsProcessed" -ForegroundColor White
+    }
+
+    Write-Host "  Successfully Processed: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsSuccessful) ($projectSuccessRate%)" -ForegroundColor Green
+    Write-Host "  Failed/Skipped: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsFailed + $Counters.ProjectsApiDisabled + $Counters.ProjectsPermissionDenied + $Counters.ProjectsOtherErrors) ($projectFailureRate%)" -ForegroundColor Red
+    Write-Host "    - API Disabled: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsApiDisabled)" -ForegroundColor Yellow
+    Write-Host "    - Permission Denied: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsPermissionDenied)" -ForegroundColor Yellow
+    Write-Host "    - Other Errors: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.ProjectsOtherErrors)" -ForegroundColor Red
+
+    Write-Host "`nInstances:" -ForegroundColor Cyan
+    $instanceSuccessRate = if ($Counters.InstancesTotal -gt 0) { [math]::Round(($Counters.InstancesSuccessful / $Counters.InstancesTotal) * 100, 1) } else { 0 }
+    Write-Host "  Total Discovered: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.InstancesTotal)" -ForegroundColor Yellow
+    Write-Host "  Successfully Processed: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.InstancesSuccessful) ($instanceSuccessRate%)" -ForegroundColor Green
+    Write-Host "  Failed/Skipped: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.InstancesFailed)" -ForegroundColor Red
+
+    Write-Host "`nDisks:" -ForegroundColor Cyan
+    $diskSuccessRate = if ($Counters.DisksTotal -gt 0) { [math]::Round(($Counters.DisksSuccessful / $Counters.DisksTotal) * 100, 1) } else { 0 }
+    Write-Host "  Total Discovered: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksTotal)" -ForegroundColor Yellow
+    Write-Host "    - Attached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksAttachedTotal)" -ForegroundColor White
+    Write-Host "    - Unattached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksUnattachedTotal)" -ForegroundColor White
+    Write-Host "  Successfully Processed: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksSuccessful) ($diskSuccessRate%)" -ForegroundColor Green
+    Write-Host "    - Attached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksAttachedSuccessful)" -ForegroundColor Green
+    Write-Host "    - Unattached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksUnattachedSuccessful)" -ForegroundColor Green
+    Write-Host "  Failed/Skipped: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksFailed)" -ForegroundColor Red
+    Write-Host "    - Attached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksAttachedFailed)" -ForegroundColor Red
+    Write-Host "    - Unattached: " -NoNewline -ForegroundColor White
+    Write-Host "$($Counters.DisksUnattachedFailed)" -ForegroundColor Red
+
+    Write-Host "`n" -NoNewline
+    Write-Host "=" * 60 -ForegroundColor Green
+}
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -559,10 +829,13 @@ if ($Anonymize) {
   $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
 }
 
+# Display comprehensive execution summary
+Show-ExecutionSummary -Counters $counters -StartTime $scriptStartTime
+
 $totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.sizeGb | Measure -Sum).sum
 $totalTB = ($attachedDiskList.sizeTb | Measure -Sum).sum + ($unattachedDiskList.sizeTb | Measure -Sum).sum
 
-Write-Host
+Write-Host "`nData Summary:" -ForegroundColor Cyan
 Write-Host "Total # of GCE VMs: $($instanceList.count)" -foregroundcolor green
 Write-Host "Total # of attached disks: $($attachedDiskList.count)" -foregroundcolor green
 Write-Host "Total # of unattached disks: $($unattachedDiskList.count)" -foregroundcolor green
@@ -605,14 +878,6 @@ if($Anonymize){
   Write-Host
 }
 
-} catch {
-  Write-Error "An error occurred and the script has exited prematurely:"
-  Write-Error $_
-  Write-Error $_.ScriptStackTrace
-} finally {
-  Stop-Transcript
-}
-
 # In the case of an early exit/error, this filters only the files which exist
 $existingFiles = $outputFiles | Where-Object { Test-Path $_ }
 
@@ -635,3 +900,11 @@ Write-Host
 Write-Host
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
+
+} catch {
+  Write-Error "An error occurred and the script has exited prematurely:"
+  Write-Error $_
+  Write-Error $_.ScriptStackTrace
+} finally {
+  Stop-Transcript
+}
