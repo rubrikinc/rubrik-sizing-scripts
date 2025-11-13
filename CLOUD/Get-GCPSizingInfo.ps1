@@ -248,17 +248,22 @@ foreach ($project in $projectList)
   $projectCounter++
   $instanceInfo = $null
   try{
-    $instanceInfo = Get-GceInstance -Project $($project.ProjectId) 
+    $instanceInfo = Get-GceInstance -Project $($project.ProjectId)
 
   } catch {
     Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
     Write-Host $_ -foregroundcolor red
   }
 
-  $instanceCounter = 1
-  foreach ($instance in $instanceInfo) {
-    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
-    $instanceCounter++
+  # Skip processing if instanceInfo is null (due to API failure)
+  if ($instanceInfo -eq $null) {
+    Write-Host "No instance information available for project $($project.ProjectId), skipping instance processing..." -ForegroundColor Yellow
+  } else {
+    $instanceCounter = 1
+    foreach ($instance in $instanceInfo) {
+      try {
+        Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+        $instanceCounter++
 
     $diskCount = 0
     $diskSizeGb = 0
@@ -266,7 +271,19 @@ foreach ($project in $projectList)
     $sizeEncryptedDisksGb = 0
 
     foreach($disk in $instance.Disks){
-      $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
+      $diskInfo = $null
+      try {
+        $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
+      } catch {
+        Write-Host "Failed to get disk $($disk.Source.split('/')[-1]) in project $($project.ProjectId)" -ForegroundColor Red
+        Write-Host $_ -foregroundcolor red
+        continue
+      }
+
+      if ($diskInfo -eq $null) {
+        Write-Host "Disk info is null for disk $($disk.Source.split('/')[-1]) in project $($project.ProjectId), skipping..." -ForegroundColor Yellow
+        continue
+      }
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $diskInfo.Zone.split('/')[-1]
@@ -300,7 +317,7 @@ foreach ($project in $projectList)
       }
 
       $attachedDiskList.Add($diskObj) | Out-Null
-      
+
     }
 
     $instanceObj = [PSCustomObject] @{
@@ -313,7 +330,7 @@ foreach ($project in $projectList)
       "EncryptedDisksCount" = $numDiskEncryption
       "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
       "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
-      "Status" = $vm.Status
+      "Status" = $instance.Status
     }
     $tagCounter = 0
     foreach($key in $instance.Labels.Keys){
@@ -325,22 +342,31 @@ foreach ($project in $projectList)
 
     $instanceList.Add($instanceObj) | Out-Null
 
+      } catch {
+        Write-Host "Failed to process instance $($instance.Name) in project $($project.ProjectId)" -ForegroundColor Red
+        Write-Host $_ -foregroundcolor red
+      }
+    }
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
   }
-  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
 
   $allDisks = $null
   try{
-    $allDisks = Get-GceDisk -Project $($project.ProjectId) 
+    $allDisks = Get-GceDisk -Project $($project.ProjectId)
   } catch{
     Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
     Write-Host $_ -foregroundcolor red
   }
 
-  $diskCounter = 1
-  foreach($disk in $allDisks){
-    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
-    $diskCounter++
-    if ($disk.Users -eq $null){
+  # Skip disk processing if allDisks is null (due to API failure)
+  if ($allDisks -eq $null) {
+    Write-Host "No disk information available for project $($project.ProjectId), skipping disk processing..." -ForegroundColor Yellow
+  } else {
+    $diskCounter = 1
+    foreach($disk in $allDisks){
+      Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+      $diskCounter++
+      if ($disk.Users -eq $null){
       $diskObj = [PSCustomObject] @{
         "Project" = $($project.ProjectId)
         "Zone" = $disk.Zone.split('/')[-1]
@@ -364,6 +390,7 @@ foreach ($project in $projectList)
         $tagCounter++
       }
       $unattachedDiskList.Add($diskObj) | Out-Null
+      }
     }
   }
   Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
