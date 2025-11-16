@@ -466,9 +466,10 @@ function Get-CWMetricStatisticsForAllVersion {
     [Parameter(Mandatory=$true)]
     [string]$MetricName,
 
+    # Match AWS.Tools CloudWatch cmdlet: parameter is -Dimension with alias -Dimensions
     [Parameter(Mandatory=$true)]
-    [Alias('Dimension','Dimensions')]
-    $Dimensions,
+    [Alias('Dimensions')]
+    $Dimension,
 
     [Parameter(Mandatory=$true)]
     [datetime]$StartTime,
@@ -479,9 +480,10 @@ function Get-CWMetricStatisticsForAllVersion {
     [Parameter(Mandatory=$true)]
     [int]$Period,
 
+    # Match AWS.Tools CloudWatch cmdlet: parameter is -Statistic with alias -Statistics
     [Parameter(Mandatory=$true)]
-    [Alias('Statistic','Statistics')]
-    [string[]]$Statistics,
+    [Alias('Statistics')]
+    [string[]]$Statistic,
 
     [Parameter(Mandatory=$true)]
     $Region,
@@ -495,10 +497,8 @@ function Get-CWMetricStatisticsForAllVersion {
     MetricName  = $MetricName
     Namespace   = $Namespace
     Period      = $Period
-    Dimensions = $Dimensions
-    Statistics  = $Statistics
-    StartTime   = $StartTime
-    EndTime     = $EndTime
+    Dimension   = $Dimension
+    Statistic   = $Statistic
     Region      = $Region
     Credential  = $Credential
     ErrorAction = 'Stop'
@@ -654,13 +654,13 @@ function getAWSData($cred) {
         $bucketBytesStorageDim.Name = "StorageType"
         $bucketBytesStorageDim.Value = $bytesStorageType
         try{
-          $maxBucketSizes = $(Get-CWMetricStatistic  -Statistic Maximum `
+          $maxBucketSizes = $(Get-CWMetricStatisticsForAllVersion  -Statistic Maximum `
                           -Namespace AWS/S3 -MetricName BucketSizeBytes `
-                          -UtcStartTime $utcStartTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
-                          -UtcEndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
+                          -StartTime $utcStartTime `
+                          -EndTime $utcEndTime `
                           -Period 86400  `
                           -Credential $cred -Region $awsRegion `
-                          -Dimension $bucketNameDim, $bucketBytesStorageDim -ErrorAction Stop `
+                          -Dimensions $bucketNameDim, $bucketBytesStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
           Write-Host "Failed to get S3 Info for StorageType $bytesStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
@@ -675,13 +675,13 @@ function getAWSData($cred) {
         $bucketNumObjStorageDim.Name = "StorageType"
         $bucketNumObjStorageDim.Value = $numObjStorageType
         try{
-          $maxBucketObjects = $(Get-CWMetricStatistic  -Statistic Maximum `
+          $maxBucketObjects = $(Get-CWMetricStatisticsForAllVersion  -Statistic Maximum `
                           -Namespace AWS/S3 -MetricName NumberOfObjects `
-                          -UtcStartTime $utcStartTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
-                          -UtcEndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
+                          -StartTime $utcStartTime `
+                          -EndTime $utcEndTime `
                           -Period 86400  `
                           -Credential $cred -Region $awsRegion `
-                          -Dimension $bucketNameDim, $bucketNumObjStorageDim -ErrorAction Stop `
+                          -Dimensions $bucketNameDim, $bucketNumObjStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
           Write-Host "Failed to get S3 Info for StorageType $numObjStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
@@ -1074,7 +1074,7 @@ function getAWSData($cred) {
         $metricName = "StorageUsed"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1091,7 +1091,7 @@ function getAWSData($cred) {
       } elseif($fsxObj.WindowsType -eq $true){
         $metricName = "StorageCapacityUtilization"
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1108,7 +1108,7 @@ function getAWSData($cred) {
         
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1120,7 +1120,7 @@ function getAWSData($cred) {
         
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1131,7 +1131,7 @@ function getAWSData($cred) {
         $metricName = "FreeDataStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1161,7 +1161,7 @@ function getAWSData($cred) {
         $metricName = "UsedStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
           Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -1213,7 +1213,7 @@ function getAWSData($cred) {
       )
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -1224,7 +1224,7 @@ function getAWSData($cred) {
       $metricName = "StorageCapacity"
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
         Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
