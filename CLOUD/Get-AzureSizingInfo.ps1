@@ -471,7 +471,7 @@ $outputSQL = "azure_sql_info-$($fileDate).csv"
 $outputMI = "azure_mi_sql_info-$($fileDate).csv"
 $outputMiDbLtrStrJSON = "azure_mi_db_items-$($fileDate).json"
 $outputAzSA = "azure_storage_account_info-$($fileDate).csv"
-$outputAzCon = "azure_container_info-$($fileDate).csv"
+$outputAzCon = "azure_storage_account_container_info-$($fileDate).csv"
 $outputAzFS = "azure_file_share_info-$($fileDate).csv"
 $outputAzVaults = "azure_backup_vault_info-$($fileDate).csv"
 #$outputAzVaultVMPolicies = "azure_backup_vault_VM_policies-$($fileDate).csv"
@@ -1286,7 +1286,7 @@ foreach ($sub in $subs) {
                                               $_.SnapshotTime -eq $null) 
                                             {$lengthUnknownTier = $lengthUnknownTier + $_.Length}}
           $azConBlobs | ForEach-Object {if ($_.SnapshotTime -eq $null) {$lengthAllTiers = $lengthAllTiers + $_.Length}}
-          $azConObj = [PSCustomObject] @{}        
+          $azConObj = [ordered] @{}        
           $azConObj.Add("Name",$azCon.Name)
           $azConObj.Add("StorageAccount",$azSA.StorageAccountName)
           $azConObj.Add("StorageAccountType",$azSA.Kind)
