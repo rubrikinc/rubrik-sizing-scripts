@@ -58,6 +58,7 @@ Resources:
                   - 'kms:ListKeys'
                   - 'organizations:ListAccounts'
                   - 'rds:DescribeDBInstances'
+                  - 'rds:DescribeDBClusters'
                   - 's3:GetBucketLocation'
                   - 's3:ListAllMyBuckets'
                   - 's3:GetBucketTagging'

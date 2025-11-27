@@ -74,6 +74,7 @@ To run the AWS sizing script, ensure you have the following:
                       "iam:ListAccountAliases",
                       "kms:ListKeys",
                       "organizations:ListAccounts",
+                      "rds:DescribeDBClusters",
                       "rds:DescribeDBInstances",
                       "s3:GetBucketLocation",
                       "s3:ListAllMyBuckets",
@@ -119,9 +120,12 @@ In both cases run the sizing script with the appropriate options and send the da
     ```powershell
     .\Get-AWSSizingInfo.ps1
     ```
-1. The script will output a summary to the console and create a zip file with CSV and JSON files, along with a LOG of the console output. 
+1. The script will output a summary to the console and create a zip file with CSV and JSON files, along with a LOG of the console output.
 1. Please download the ZIP file and send it to your Rubrik representative.
 
+### Aurora DB Processing
+
+Aurora databases are processed at the cluster level rather than the instance level. This is because Aurora storage is allocated at the cluster level, and Rubrik protects Aurora clusters (not individual instances). As a result, multiple Aurora instances belonging to the same cluster will appear as a single cluster entry in the output.
 
 ### Troubleshooting
 

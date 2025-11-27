@@ -866,6 +866,10 @@ function getAWSData($cred) {
     foreach ($rds in $rdsDBs) {
       Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
       $counter++
+      if($rds.Engine -like "*aurora*") {
+        Write-Debug "Skipping Aurora database $($rds.DBInstanceIdentifier)"
+        continue
+      }
       $rdsObj = [PSCustomObject] @{
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
@@ -897,6 +901,79 @@ function getAWSData($cred) {
       $rdsList.Add($rdsObj) | Out-Null
     }
     Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Completed
+
+    try {
+      $rdsDBClusters = Get-RDSDBCluster -Credential $cred -region $awsRegion -ErrorAction Stop
+    }
+    catch {
+      Write-Host "Failed to get DB Clusters Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    $clusterList = New-Object collections.arraylist
+
+    $counter = 1
+    foreach ($cluster in $rdsDBClusters) {
+      Write-Progress -ID 6 -Activity "Processing DB Cluster: $($cluster.DBClusterIdentifier)" -Status "DB Cluster $($counter) of $($rdsDBClusters.Count)" -PercentComplete (($counter / $rdsDBClusters.Count) * 100)
+      $counter++
+      if($cluster.Engine -notlike "*aurora*") {
+        Write-Debug "Skipping non-Aurora cluster $($cluster.DBClusterIdentifier)"
+        continue
+      }
+
+      $dimensions = @(
+        @{
+          Name = "DBClusterIdentifier"
+          Value = $cluster.DBClusterIdentifier
+        }
+      )
+      $storageGiB = 0
+      try {
+        $metrics = Get-CWMetricStatisticsForAllVersion -MetricName VolumeBytesUsed `
+                    -Namespace "AWS/RDS" -Dimension $dimensions -StartTime $utcStartTime `
+                    -EndTime $utcEndTime -Period 600 -Statistics Maximum `
+                    -Region $awsRegion -Credential $cred -ErrorAction Stop
+        $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
+        $storageGiB = [math]::round($($storageUsed.Maximum / 1073741824), 4)
+      }
+      catch {
+        Write-Host "Failed to get AuroraDB storage Info for $($cluster.DBClusterIdentifier) in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+        $storageGiB = $rds.AllocatedStorage
+      }
+
+      $clusterObj = [PSCustomObject] @{
+        "AwsAccountId" = $awsAccountInfo.Account
+        "AwsAccountAlias" = $awsAccountAlias
+        "DBName" = $cluster.DatabaseName
+        "DBInstanceIdentifier" = $cluster.DBClusterIdentifier
+        "SizeGiB" = $storageGiB
+        "SizeTiB" = [math]::round($($storageGiB / 1024), 4)
+        "SizeGB" = [math]::round($($storageGiB * 1.073741824), 3)
+        "SizeTB" = [math]::round($($storageGiB * 0.001073741824), 4)
+        "Region" = $awsRegion
+        "InstanceType" = $cluster.DBClusterInstanceClass
+        "Engine" = $cluster.Engine
+        "EngineVersion" = $cluster.EngineVersion
+        "DBInstanceStatus" = $cluster.Status
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
+        "BackupRetentionPeriod" = $cluster.BackupRetentionPeriod
+        "PreferredBackupWindow" = $cluster.PreferredBackupWindow
+        "StorageType" = $cluster.StorageType
+      }
+
+      foreach ($tag in $cluster.TagList) { 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
+        if($key -ne "Name"){ 
+          $clusterObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
+        } 
+      }
+
+      $clusterList.Add($clusterObj) | Out-Null
+    }
+
+    $rdsList.AddRange($clusterList)
 
     $efsListFromAPI = $null
     try{
