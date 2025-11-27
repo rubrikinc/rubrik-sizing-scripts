@@ -912,7 +912,7 @@ function getAWSData($cred) {
 
     $clusterList = New-Object collections.arraylist
 
-    $counter = 0
+    $counter = 1
     foreach ($cluster in $rdsDBClusters) {
       Write-Progress -ID 6 -Activity "Processing DB Cluster: $($cluster.DBClusterIdentifier)" -Status "DB Cluster $($counter) of $($rdsDBClusters.Count)" -PercentComplete (($counter / $rdsDBClusters.Count) * 100)
       $counter++
@@ -928,10 +928,10 @@ function getAWSData($cred) {
         }
       )
       $storageGiB = 0
-      try { 
+      try {
         $metrics = Get-CWMetricStatisticsForAllVersion -MetricName VolumeBytesUsed `
-                    -Namespace "AWS/RDS" -Dimension $dimensions -StartTime $utcStartTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") `
-                    -EndTime $utcEndTime.ToString("yyyy-MM-dd" + "T" + "HH:mm:ss" +"Z") -Period 600 -Statistics Maximum `
+                    -Namespace "AWS/RDS" -Dimension $dimensions -StartTime $utcStartTime `
+                    -EndTime $utcEndTime -Period 600 -Statistics Maximum `
                     -Region $awsRegion -Credential $cred -ErrorAction Stop
         $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
         $storageGiB = [math]::round($($storageUsed.Maximum / 1073741824), 4)
