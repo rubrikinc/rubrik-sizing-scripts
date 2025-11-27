@@ -1,5 +1,5 @@
 #requires -Version 7.0
-<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS
+<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control
 #>
 # https://build.rubrik.com
 
@@ -608,47 +608,48 @@ function getAWSData($cred) {
     Write-Host "Error: $_" -ForeGroundColor Red
   }
 
-  # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
-  # Store ALL configurations with CloudWatch enabled to handle different bucket scopes
-  $storageLensConfigsWithCloudWatch = @()
-  try {
-    # List all Storage Lens configurations for this account
-    $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $queryRegion -ErrorAction Stop
-
-    # Check each configuration and collect all with CloudWatch publishing enabled
-    foreach ($slConfig in $storageLensConfigs) {
-      try {
-        $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $awsAccountInfo.Account -ConfigId $slConfig.Id -Credential $cred -Region $queryRegion -ErrorAction Stop
-        if ($slConfigDetails.DataExport.CloudWatchMetrics.IsEnabled -eq $true -and $slConfigDetails.IsEnabled -eq $true) {
-          # Store configuration with its Include/Exclude settings
-          # Buckets are stored as ARNs like "arn:aws:s3:::bucket-name"
-          $configInfo = @{
-            ConfigId = $slConfig.Id
-            IncludeBuckets = $slConfigDetails.Include.Buckets
-            ExcludeBuckets = $slConfigDetails.Exclude.Buckets
-            IncludeRegions = $slConfigDetails.Include.Regions
-            ExcludeRegions = $slConfigDetails.Exclude.Regions
-          }
-          $storageLensConfigsWithCloudWatch += $configInfo
-          Write-Host "Found Storage Lens configuration '$($slConfig.Id)' with CloudWatch publishing enabled in account $($awsAccountInfo.Account)" -ForegroundColor Green
-        }
-      } catch {
-        Write-Debug "Could not get details for Storage Lens config $($slConfig.Id): $_"
-      }
-    }
-  } catch {
-    Write-Debug "Could not list Storage Lens configurations for account $($awsAccountInfo.Account): $_"
-  }
-
-  if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
-    Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersionBytes will not be collected." -ForegroundColor Yellow
-  } else {
-    Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
-  }
-
   # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
   $awsRegionCounter = 1
   foreach ($awsRegion in $awsRegions) {
+    # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
+    # Store ALL configurations with CloudWatch enabled to handle different bucket scopes
+    $storageLensConfigsWithCloudWatch = @()
+    try {
+      # List all Storage Lens configurations for this account
+      $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $awsRegion -ErrorAction Stop
+      Write-Host "Found $($storageLensConfigs.Count) Storage Lens configuration(s)" -ForegroundColor Green
+      # Check each configuration and collect all with CloudWatch publishing enabled
+      foreach ($slConfig in $storageLensConfigs) {
+        try {
+          $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $awsAccountInfo.Account -ConfigId $slConfig.Id -Credential $cred -Region $awsRegion -ErrorAction Stop
+          if ($slConfigDetails.DataExport.CloudWatchMetrics.IsEnabled -eq $true -and $slConfigDetails.IsEnabled -eq $true) {
+            # Store configuration with its Include/Exclude settings
+            # Buckets are stored as ARNs like "arn:aws:s3:::bucket-name"
+            $configInfo = @{
+              ConfigId = $slConfig.Id
+              IncludeBuckets = $slConfigDetails.Include.Buckets
+              ExcludeBuckets = $slConfigDetails.Exclude.Buckets
+              IncludeRegions = $slConfigDetails.Include.Regions
+              ExcludeRegions = $slConfigDetails.Exclude.Regions
+            }
+            $storageLensConfigsWithCloudWatch += $configInfo
+            Write-Host "Found Storage Lens configuration '$($slConfig.Id)' with CloudWatch publishing enabled in account $($awsAccountInfo.Account)" -ForegroundColor Green
+          }
+        } catch {
+          Write-Host "Could not get details for Storage Lens config $($slConfig.Id): $_"
+        }
+      }
+    } catch {
+      Write-Host "Could not list Storage Lens configurations for account $($awsAccountInfo.Account): $_"
+    }
+
+    if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
+      Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersionBytes will not be collected." -ForegroundColor Yellow
+    } else {
+      Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
+    }
+
+
     Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Status "Region $($awsRegionCounter) of $($awsRegions.Count)" -PercentComplete (($awsRegionCounter / $awsRegions.Count) * 100)
     $awsRegionCounter++
     try{
