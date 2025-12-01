@@ -617,7 +617,6 @@ function getAWSData($cred) {
     try {
       # List all Storage Lens configurations for this account
       $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $awsRegion -ErrorAction Stop
-      Write-Host "Found $($storageLensConfigs.Count) Storage Lens configuration(s)" -ForegroundColor Green
       # Check each configuration and collect all with CloudWatch publishing enabled
       foreach ($slConfig in $storageLensConfigs) {
         try {
@@ -633,7 +632,6 @@ function getAWSData($cred) {
               ExcludeRegions = $slConfigDetails.Exclude.Regions
             }
             $storageLensConfigsWithCloudWatch += $configInfo
-            Write-Host "Found Storage Lens configuration '$($slConfig.Id)' with CloudWatch publishing enabled in account $($awsAccountInfo.Account)" -ForegroundColor Green
           }
         } catch {
           Write-Host "Could not get details for Storage Lens config $($slConfig.Id): $_"
@@ -644,7 +642,7 @@ function getAWSData($cred) {
     }
 
     if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
-      Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersionBytes will not be collected." -ForegroundColor Yellow
+      Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersion storage details will not be collected." -ForegroundColor Yellow
     } else {
       Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
     }
@@ -733,7 +731,7 @@ function getAWSData($cred) {
       }
 
       # Query CurrentVersionStorageBytes from Storage Lens CloudWatch metrics if enabled
-      $currentVersionBytes = $null
+      $currentVersionBytesStorages = @{}
       if ($storageLensConfigsWithCloudWatch.Count -gt 0) {
         # Find a Storage Lens configuration that covers this bucket
         # Storage Lens configs can include/exclude specific buckets and regions
@@ -776,7 +774,8 @@ function getAWSData($cred) {
 
         if ($null -ne $matchingConfigId) {
           try {
-            # Set up dimensions for Storage Lens CloudWatch metrics
+            # Set up base dimensions for Storage Lens CloudWatch metrics
+            # CloudWatch requires ALL dimensions to match exactly
             $configIdDim = [Amazon.CloudWatch.Model.Dimension]::new()
             $configIdDim.Name = "configuration_id"
             $configIdDim.Value = $matchingConfigId
@@ -793,15 +792,47 @@ function getAWSData($cred) {
             $bucketDim.Name = "bucket_name"
             $bucketDim.Value = $s3Bucket
 
-            $storageLensMetrics = Get-CWMetricStatisticsForAllVersion -Statistic Average `
-                            -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
-                            -StartTime $utcStartTime `
-                            -EndTime $utcEndTime `
-                            -Period 86400 `
-                            -Credential $cred -Region $awsRegion `
-                            -Dimensions $configIdDim, $accountDim, $regionDim, $bucketDim -ErrorAction Stop
+            $metricsVersionDim = [Amazon.CloudWatch.Model.Dimension]::new()
+            $metricsVersionDim.Name = "metrics_version"
+            $metricsVersionDim.Value = "1.0"
 
-            $currentVersionBytes = ($storageLensMetrics.Datapoints | Sort-Object -Property Timestamp -Descending | Select-Object -First 1).Average
+            $recordTypeDim = [Amazon.CloudWatch.Model.Dimension]::new()
+            $recordTypeDim.Name = "record_type"
+            $recordTypeDim.Value = "BUCKET"
+
+            # Get available storage classes for CurrentVersionStorageBytes metric for this bucket
+            $slMetricFilter = @(
+              @{ Name = "configuration_id"; Value = $matchingConfigId },
+              @{ Name = "bucket_name"; Value = $s3Bucket }
+            )
+            $availableStorageClasses = $(Get-CWMetricList -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
+                            -Dimension $slMetricFilter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+                            | Select-Object -ExpandProperty Dimensions `
+                            | Where-Object -Property Name -eq "storage_class").Value | Select-Object -Unique
+
+            # Query CurrentVersionStorageBytes for each storage class
+            foreach ($storageClass in $availableStorageClasses) {
+              $storageClassDim = [Amazon.CloudWatch.Model.Dimension]::new()
+              $storageClassDim.Name = "storage_class"
+              $storageClassDim.Value = $storageClass
+
+              try {
+                # Storage Lens CloudWatch metrics are published to the dashboard's home region
+                # Must include ALL 7 dimensions
+                $storageLensMetrics = Get-CWMetricStatisticsForAllVersion -Statistic Maximum `
+                                -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
+                                -StartTime $utcStartTime `
+                                -EndTime $utcEndTime `
+                                -Period 86400 `
+                                -Credential $cred -Region $awsRegion `
+                                -Dimensions $configIdDim, $accountDim, $regionDim, $bucketDim, $metricsVersionDim, $recordTypeDim, $storageClassDim -ErrorAction Stop
+
+                $currentVersionBytesValue = ($storageLensMetrics.Datapoints | Sort-Object -Property Timestamp -Descending | Select-Object -First 1).Maximum
+                $currentVersionBytesStorages.Add($storageClass, $currentVersionBytesValue)
+              } catch {
+                Write-Debug "Failed to get CurrentVersionStorageBytes for storage class $storageClass in bucket ${s3Bucket}: $_"
+              }
+            }
           } catch {
             Write-Debug "Failed to get CurrentVersionStorageBytes for bucket $s3Bucket in region $awsRegion using config '$matchingConfigId': $_"
           }
@@ -858,25 +889,27 @@ function getAWSData($cred) {
         Add-Member -InputObject $s3obj -MemberType NoteProperty -Name ("NumberOfObjects-" + $($numObjStorage.Name)) -Value $numObjStorageNum
       }
 
-      # Add CurrentVersionBytes properties from Storage Lens metrics
-      if ($null -eq $currentVersionBytes) {
-        $currentVersionBytesVal = $null
-        $currentVersionGB = $null
-        $currentVersionTB = $null
-        $currentVersionGiB = $null
-        $currentVersionTiB = $null
-      } else {
-        $currentVersionBytesVal = $currentVersionBytes
-        $currentVersionGB = $currentVersionBytes / 1073741824
-        $currentVersionTB = $currentVersionGB / 1000
-        $currentVersionGiB = $currentVersionGB / 1.073741824
-        $currentVersionTiB = $currentVersionGiB / 1024
+      # Add CurrentVersionBytes properties from Storage Lens metrics (per storage class)
+      foreach ($cvStorage in $currentVersionBytesStorages.GetEnumerator()) {
+        if ($null -eq $($cvStorage.Value)) {
+          $cvBytesStorageSize = 0
+          $cvSizeGB = 0
+          $cvSizeTB = 0
+          $cvSizeGiB = 0
+          $cvSizeTiB = 0
+        } else {
+          $cvBytesStorageSize = $($cvStorage.Value)
+          $cvSizeGB = $($cvStorage.Value) / 1073741824
+          $cvSizeTB = $cvSizeGB / 1000
+          $cvSizeGiB = $cvSizeGB / 1.073741824
+          $cvSizeTiB = $cvSizeGiB / 1024
+        }
+        Add-Member -InputObject $s3obj -NotePropertyName ("CurrentVersion_" + $($cvStorage.Name) + "_SizeBytes") -NotePropertyValue $cvBytesStorageSize
+        Add-Member -InputObject $s3obj -NotePropertyName ("CurrentVersion_" + $($cvStorage.Name) + "_SizeGB") -NotePropertyValue $([math]::round($cvSizeGB, 3))
+        Add-Member -InputObject $s3obj -NotePropertyName ("CurrentVersion_" + $($cvStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($cvSizeTB, 4))
+        Add-Member -InputObject $s3obj -NotePropertyName ("CurrentVersion_" + $($cvStorage.Name) + "_SizeGiB") -NotePropertyValue $([math]::round($cvSizeGiB, 3))
+        Add-Member -InputObject $s3obj -NotePropertyName ("CurrentVersion_" + $($cvStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($cvSizeTiB, 4))
       }
-      Add-Member -InputObject $s3obj -NotePropertyName "CurrentVersionBytes" -NotePropertyValue $currentVersionBytesVal
-      Add-Member -InputObject $s3obj -NotePropertyName "CurrentVersionGB" -NotePropertyValue $(if ($null -ne $currentVersionGB) { [math]::round($currentVersionGB, 3) } else { $null })
-      Add-Member -InputObject $s3obj -NotePropertyName "CurrentVersionTB" -NotePropertyValue $(if ($null -ne $currentVersionTB) { [math]::round($currentVersionTB, 4) } else { $null })
-      Add-Member -InputObject $s3obj -NotePropertyName "CurrentVersionGiB" -NotePropertyValue $(if ($null -ne $currentVersionGiB) { [math]::round($currentVersionGiB, 3) } else { $null })
-      Add-Member -InputObject $s3obj -NotePropertyName "CurrentVersionTiB" -NotePropertyValue $(if ($null -ne $currentVersionTiB) { [math]::round($currentVersionTiB, 4) } else { $null })
 
       foreach ($tag in $bucketTags) {
 

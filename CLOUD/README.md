@@ -79,6 +79,8 @@ To run the AWS sizing script, ensure you have the following:
                       "s3:GetBucketLocation",
                       "s3:ListAllMyBuckets",
                       "s3:GetBucketTagging",
+                      "s3:ListStorageLensConfigurations",
+                      "s3:GetStorageLensConfiguration",
                       "secretsmanager:ListSecrets",
                       "sts:AssumeRole",
                       "sqs:ListQueues"
@@ -126,6 +128,32 @@ In both cases run the sizing script with the appropriate options and send the da
 ### Aurora DB Processing
 
 Aurora databases are processed at the cluster level rather than the instance level. This is because Aurora storage is allocated at the cluster level, and Rubrik protects Aurora clusters (not individual instances). As a result, multiple Aurora instances belonging to the same cluster will appear as a single cluster entry in the output.
+
+### S3 Storage Lens for Current Version Storage Metrics
+
+The script can collect **CurrentVersionStorageBytes** metrics for S3 buckets, which shows the size of current (non-versioned) objects per storage class. This data is useful for understanding how much storage is used by current versions vs. previous versions in versioned buckets.
+
+**To enable this feature:**
+
+1. **Create an S3 Storage Lens configuration** in your AWS account:
+   - Go to **S3** → **Storage Lens** → **Dashboards** → **Create dashboard**
+   - Give it a name (e.g., `sizing-dashboard`)
+   - Under **Metrics export**, enable **CloudWatch publishing**
+   - Save the configuration
+
+2. **Wait for metrics to be published:**
+   - Storage Lens metrics are published **once per day**
+   - It can take **up to 48 hours** for the first metrics to appear in CloudWatch after enabling
+
+**Cost considerations:**
+- S3 Storage Lens **free metrics** are available at no additional cost
+- **CloudWatch publishing** of Storage Lens metrics incurs CloudWatch metrics charges:
+  - CloudWatch custom metrics: ~$0.30 per metric per month (first 10,000 metrics)
+  - Storage Lens publishes multiple metrics per bucket per storage class
+  - For large environments with many buckets, this can add up
+- Review [AWS CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/) and [S3 Storage Lens pricing](https://aws.amazon.com/s3/pricing/) for current rates
+
+If Storage Lens with CloudWatch publishing is not configured, the script will continue to run but these fields will not be populated.
 
 ### Troubleshooting
 
