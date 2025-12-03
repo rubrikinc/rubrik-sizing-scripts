@@ -62,6 +62,8 @@ Resources:
                   - 's3:GetBucketLocation'
                   - 's3:ListAllMyBuckets'
                   - 's3:GetBucketTagging'
+                  - 's3:ListStorageLensConfigurations'
+                  - 's3:GetStorageLensConfiguration'
                   - 'secretsmanager:ListSecrets'
                   - 'sts:AssumeRole'
                   - 'sqs:ListQueues'
