@@ -491,6 +491,7 @@ function Get-CWMetricStatisticsForAllVersion {
     $Region,
 
     [Parameter(Mandatory=$true)]
+    [AllowNull()]
     $Credential
   )
 
