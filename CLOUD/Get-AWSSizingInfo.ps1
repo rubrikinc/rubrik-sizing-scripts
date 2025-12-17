@@ -609,24 +609,25 @@ function getAWSData($cred) {
     Write-Host "Error: $_" -ForeGroundColor Red
   }
 
-  # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
-  $awsRegionCounter = 1
-  foreach ($awsRegion in $awsRegions) {
-    # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
-    # Store ALL configurations with CloudWatch enabled to handle different bucket scopes
-    $storageLensConfigsWithCloudWatch = @()
+  # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
+  # This is done ONCE per account across ALL regions.
+  # Storage Lens dashboards can be in any region but monitor buckets across all regions
+  $storageLensConfigsWithCloudWatch = @()
+  foreach ($slRegion in $awsRegions) {
     try {
-      # List all Storage Lens configurations for this account
-      $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $awsRegion -ErrorAction Stop
+      # List all Storage Lens configurations for this account in this region
+      $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $slRegion -ErrorAction Stop
       # Check each configuration and collect all with CloudWatch publishing enabled
       foreach ($slConfig in $storageLensConfigs) {
         try {
-          $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $awsAccountInfo.Account -ConfigId $slConfig.Id -Credential $cred -Region $awsRegion -ErrorAction Stop
+          $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $awsAccountInfo.Account -ConfigId $slConfig.Id -Credential $cred -Region $slRegion -ErrorAction Stop
           if ($slConfigDetails.DataExport.CloudWatchMetrics.IsEnabled -eq $true -and $slConfigDetails.IsEnabled -eq $true) {
             # Store configuration with its Include/Exclude settings
             # Buckets are stored as ARNs like "arn:aws:s3:::bucket-name"
+            # Also store the dashboard's home region (where CloudWatch metrics are published)
             $configInfo = @{
               ConfigId = $slConfig.Id
+              DashboardRegion = $slRegion
               IncludeBuckets = $slConfigDetails.Include.Buckets
               ExcludeBuckets = $slConfigDetails.Exclude.Buckets
               IncludeRegions = $slConfigDetails.Include.Regions
@@ -635,20 +636,23 @@ function getAWSData($cred) {
             $storageLensConfigsWithCloudWatch += $configInfo
           }
         } catch {
-          Write-Host "Could not get details for Storage Lens config $($slConfig.Id): $_"
+          Write-Host "Could not get details for Storage Lens config $($slConfig.Id) in region ${slRegion}: $_"
         }
       }
     } catch {
-      Write-Host "Could not list Storage Lens configurations for account $($awsAccountInfo.Account): $_"
+      Write-Host "Could not list Storage Lens configurations for account $($awsAccountInfo.Account) in region ${slRegion}: $_"
     }
+  }
 
-    if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
-      Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersion storage details will not be collected." -ForegroundColor Yellow
-    } else {
-      Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
-    }
+  if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
+    Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersion storage details will not be collected." -ForegroundColor Yellow
+  } else {
+    Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
+  }
 
-
+  # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
+  $awsRegionCounter = 1
+  foreach ($awsRegion in $awsRegions) {
     Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Status "Region $($awsRegionCounter) of $($awsRegions.Count)" -PercentComplete (($awsRegionCounter / $awsRegions.Count) * 100)
     $awsRegionCounter++
     try{
@@ -769,6 +773,7 @@ function getAWSData($cred) {
 
           if ($bucketCoveredByConfig) {
             $matchingConfigId = $slConfig.ConfigId
+            $matchingDashboardRegion = $slConfig.DashboardRegion
             break
           }
         }
@@ -785,6 +790,7 @@ function getAWSData($cred) {
             $accountDim.Name = "aws_account_number"
             $accountDim.Value = $awsAccountInfo.Account
 
+            # aws_region dimension is the bucket's region (where the bucket is located)
             $regionDim = [Amazon.CloudWatch.Model.Dimension]::new()
             $regionDim.Name = "aws_region"
             $regionDim.Value = $awsRegion
@@ -802,12 +808,13 @@ function getAWSData($cred) {
             $recordTypeDim.Value = "BUCKET"
 
             # Get available storage classes for CurrentVersionStorageBytes metric for this bucket
+            # CloudWatch API call uses dashboard's home region (where metrics are published)
             $slMetricFilter = @(
               @{ Name = "configuration_id"; Value = $matchingConfigId },
               @{ Name = "bucket_name"; Value = $s3Bucket }
             )
             $availableStorageClasses = $(Get-CWMetricList -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
-                            -Dimension $slMetricFilter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+                            -Dimension $slMetricFilter -Credential $cred -Region $matchingDashboardRegion -ErrorAction Stop `
                             | Select-Object -ExpandProperty Dimensions `
                             | Where-Object -Property Name -eq "storage_class").Value | Select-Object -Unique
 
@@ -825,7 +832,7 @@ function getAWSData($cred) {
                                 -StartTime $utcStartTime `
                                 -EndTime $utcEndTime `
                                 -Period 86400 `
-                                -Credential $cred -Region $awsRegion `
+                                -Credential $cred -Region $matchingDashboardRegion `
                                 -Dimensions $configIdDim, $accountDim, $regionDim, $bucketDim, $metricsVersionDim, $recordTypeDim, $storageClassDim -ErrorAction Stop
 
                 $currentVersionBytesValue = ($storageLensMetrics.Datapoints | Sort-Object -Property Timestamp -Descending | Select-Object -First 1).Maximum
