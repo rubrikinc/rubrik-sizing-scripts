@@ -1,4 +1,4 @@
-# Cloud Sizing Scripts README.
+# Cloud Sizing Scripts README
 
 This contains information about Rubrik scripts for collecting sizing information for resources across AWS, Azure, and GCP. Below you will find detailed instructions on setting up prerequisites, running the scripts, and understanding their functionalities, including the anonymization feature.
 

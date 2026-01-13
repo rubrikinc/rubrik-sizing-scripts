@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    A script to combine CSV files with the same prefix into one file, keeping only one set of headers.
+    A script to combine CSV files with same prefix into one file keeping only one set of headers.
 .DESCRIPTION
     This PowerShell script takes in a directory path as a parameter, finds all CSV files within, and groups them by their prefix (the text before the first dash in the filename).
     Each group of files with the same prefix is combined into one CSV file. 
