@@ -21,7 +21,7 @@ This contains information about Rubrik scripts for collecting sizing information
 
 ## Introduction
 
-This repository contains scripts designed to collect and report on cloud resources across AWS, Azure, and GCP. These scripts help gather essential sizing data which will be used for scaling and pricing Rubrik solutions.
+This repository contains the scripts designed to collect and report on cloud resources across AWS, Azure, and GCP. These scripts help gather essential sizing data which will be used for scaling and pricing Rubrik solutions.
 
 ---
 
