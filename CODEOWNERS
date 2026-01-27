@@ -1,0 +1,8 @@
+# CODEOWNERS file
+# This file defines code ownership for the repository.
+# Users listed here will be automatically requested for review when a PR modifies files in their owned paths.
+# More info: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# CLOUD folder ownership
+/CLOUD/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
