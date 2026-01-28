@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Create a cross-account role to run Rubrik's Sizing Script using StackSets
+Description: Create a cross-account role to run Rubrik's Sizing Script using StackSets.
 
 Parameters:
   ScriptAWSAccountId:
