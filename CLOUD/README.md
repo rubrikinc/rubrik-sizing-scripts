@@ -207,6 +207,10 @@ To run the Azure sizing script, ensure you have the following:
 
 1. **From Azure Cloud Shell (preferred):**
     - Login to the Azure portal and open [Azure Cloud Shell](https://learn.microsoft.com/en-us/azure/cloud-shell/get-started/classic?source=recommendations&tabs=azurecli).
+    - Start Powershell by running
+        ```shell
+        pwsh
+        ```
     - Install the necessary module:
         ```powershell
         Install-Module Az.CostManagement
@@ -246,6 +250,14 @@ To run the GCP sizing script, ensure you have the following:
     - Login and initialize [GCP Cloud Shell](https://cloud.google.com/shell):
         ```shell
         gcloud init
+        ```
+    - Start Powershell by running
+        ```shell
+        pwsh
+        ```
+    - Upload and run the script:
+        ```powershell
+        .\Get-GCPSizingInfo.ps1
         ```
 
 2. **Using Cloud Tools for PowerShell:**

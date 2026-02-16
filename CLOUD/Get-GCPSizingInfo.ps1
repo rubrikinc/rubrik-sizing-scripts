@@ -606,5 +606,5 @@ Write-Host "Results have been compressed into $archiveFile and original files ha
 
 Write-Host
 Write-Host
-Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
+Write-Host "Please send $archiveFile to your Rubrik representative." -ForegroundColor Cyan
 Write-Host
