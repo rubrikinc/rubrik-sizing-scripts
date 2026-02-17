@@ -111,14 +111,15 @@
     running the 'Set-AWSCredential' command.
 
   .PARAMETER NotAnonymizeFields
-    A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
+    A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being
     anonymized). The list must be encased in quotes, with no spaces between fields.
     Note that we currently anonymize the following fields:
-    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", 
+    "AwsAccountId", "AwsAccountAlias", "BucketName", "Name",
     "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier",
     "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId",
     "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId",
     "RequestId", "TableName", "TableId", "TableArn"
+    Additionally, you can specify "Tags" to exclude all tag fields (properties starting with "Tag:") from anonymization.
 
   .PARAMETER OrgCrossAccountRoleName
     When set, the script will query the AWS Organization that the default profile or profile specified by 'Set-AWSCredential'
@@ -2435,9 +2436,13 @@ if ($Anonymize) {
       }
     }
   }
+  $global:anonymizeTags = $true
   if($NotAnonymizeFields){
     [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
     $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+    if ($notAnonFieldsList -contains "Tags") {
+      $global:anonymizeTags = $false
+    }
   }
 
   $global:anonymizeDict = @{}
@@ -2494,19 +2499,19 @@ if ($Anonymize) {
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
                 }
               }
-          } elseif ($propertyName -like "Tag:*") {
+          } elseif ($propertyName -like "Tag:*" -and $global:anonymizeTags) {
             # Must anonymize both the tag name and value
 
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
-            
+
             $tagName = $propertyName.Substring(4)
-            
+
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
             }
             $anonymizedTagKey = 'Tag:' + $global:anonymizeDict["$tagName"]
-            
+
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {

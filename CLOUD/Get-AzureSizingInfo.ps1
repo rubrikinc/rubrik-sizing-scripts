@@ -115,14 +115,15 @@ Anonymize data collected.
   quotes, with no spaces between fields.
 
 .PARAMETER NotAnonymizeFields
-  A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being 
+  A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being
   anonymized). The list must be encased in quotes, with no spaces between fields.
   Note that we currently anonymize the following fields:
-  "SubscriptionId", "Subscription", "Tenant", "Name", 
+  "SubscriptionId", "Subscription", "Tenant", "Name",
   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
   "ManagedInstance", "DatabaseID", "vmID"
+  Additionally, you can specify "Tags" to exclude all tag fields (properties starting with "Tag:") from anonymization.
 
 .NOTES
 Written by Steven Tong for community usage
@@ -1671,9 +1672,13 @@ if ($Anonymize) {
       }
     }
   }
+  $global:anonymizeTags = $true
   if($NotAnonymizeFields){
     [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
     $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+    if ($notAnonFieldsList -contains "Tags") {
+      $global:anonymizeTags = $false
+    }
   }
 
   $global:anonymizeDict = @{}
@@ -1730,20 +1735,20 @@ if ($Anonymize) {
                 }
                 #Write-Host "Set $propertyName to $($DataObject.$propertyName)" -ForegroundColor Yellow
               }
-          } 
-          elseif ($propertyName -like "Tag:*") {
+          }
+          elseif ($propertyName -like "Tag:*" -and $global:anonymizeTags) {
             # Must anonymize both the tag name and value
 
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
-            
+
             $tagName = $propertyName.Substring(4)
-            
+
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
             }
             $anonymizedTagKey = 'Tag:' + $global:anonymizeDict["$tagName"]
-            
+
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {

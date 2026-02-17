@@ -96,6 +96,7 @@ A comma separated list of fields in resulting CSVs and JSONs to not anonymize (o
 anonymized). The list must be encased in quotes, with no spaces between fields.
 Note that we currently anonymize the following fields:
 "Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey"
+Additionally, you can specify "Tags" to exclude all tag/label fields (properties starting with "Tag:" or "Label/Tag:") from anonymization.
 
 
 .NOTES
@@ -406,9 +407,13 @@ if ($Anonymize) {
       }
     }
   }
+  $global:anonymizeTags = $true
   if($NotAnonymizeFields){
     [string[]]$notAnonFieldsList = $NotAnonymizeFields.split(',')
     $global:anonymizeProperties = $global:anonymizeProperties | Where-Object { $_ -notin $notAnonFieldsList }
+    if ($notAnonFieldsList -contains "Tags") {
+      $global:anonymizeTags = $false
+    }
   }
 
   $global:anonymizeDict = @{}
@@ -442,7 +447,7 @@ if ($Anonymize) {
 
       foreach ($property in $DataObject.PSObject.Properties) {
           $propertyName = $property.Name
-          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or $propertyName -like "Tag:*"
+          $shouldAnonymize = $global:anonymizeProperties -contains $propertyName -or ($propertyName -like "Tag:*" -and $global:anonymizeTags)
 
           if ($shouldAnonymize) {
               $originalValue = $DataObject.$propertyName
@@ -466,19 +471,19 @@ if ($Anonymize) {
                 }
               }
           }
-          elseif ($propertyName -like "Label/Tag:*") {
+          elseif ($propertyName -like "Label/Tag:*" -and $global:anonymizeTags) {
             # Must anonymize both the tag name and value
 
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
-            
+
             $tagName = $propertyName.Substring(10)
-            
+
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("Label/TagName")
             }
             $anonymizedTagKey = 'Label/Tag:' + $global:anonymizeDict["$tagName"]
-            
+
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
