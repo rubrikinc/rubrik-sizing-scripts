@@ -419,6 +419,7 @@ if ($ProfileLocation) {
 
 # Filenames of the CSVs output
 $outputEc2Instance = "aws_ec2_instance_info-$date_string.csv"
+$outputEc2AttachedVolume = "aws_ec2_attached_volume_info-$date_string.csv"
 #unattached volumes are less important and we can probably ignore these. We should be tracking orphaned snapshots or those not created by AWS Backup
 $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
 $outputRDS = "aws_rds_info-$date_string.csv"
@@ -443,6 +444,7 @@ $archiveFile = "aws_sizing_results_$date_string.zip"
 # List of output files
 $outputFiles = @(
     $outputEc2Instance,
+    $outputEc2AttachedVolume,
     $outputEc2UnattachedVolume,
     $outputRDS,
     $outputS3,
@@ -949,12 +951,54 @@ function getAWSData($cred) {
       $counter++
       $volSize = 0
       # Contains list of attached volumes to the current EC2 instance
-      $volumes = $ec2.BlockDeviceMappings.ebs
+      $blockDeviceMappings = $ec2.BlockDeviceMappings
+      $volumes = $blockDeviceMappings.ebs
 
-      # Iterate through each volume and sum up the volume size
-      foreach ($vol in $volumes) {
+      # Get EC2 instance name for reference in attached volumes
+      $ec2InstanceName = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+
+      # Iterate through each volume and sum up the volume size, also collect individual volume details
+      foreach ($blockDevice in $blockDeviceMappings) {
+        $vol = $blockDevice.ebs
+        if ($null -eq $vol) { continue }
+
         try{
-          $volSize += (Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $awsRegion -ErrorAction Stop).size   
+          $volumeDetails = Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $awsRegion -ErrorAction Stop
+          $volSize += $volumeDetails.Size
+
+          # Create attached volume object with full details and tags
+          $attachedVolObj = [PSCustomObject] @{
+            "AwsAccountId" = $awsAccountInfo.Account
+            "AwsAccountAlias" = $awsAccountAlias
+            "VolumeId" = $volumeDetails.VolumeId
+            "InstanceId" = $ec2.InstanceId
+            "InstanceName" = $ec2InstanceName
+            "Name" = $volumeDetails.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+            "DeviceName" = $blockDevice.DeviceName
+            "SizeGiB" = $volumeDetails.Size
+            "SizeTiB" = [math]::round($($volumeDetails.Size / 1024), 4)
+            "SizeGB" = [math]::round($($volumeDetails.Size * 1.073741824), 3)
+            "SizeTB" = [math]::round($($volumeDetails.Size * 0.001073741824), 4)
+            "Region" = $awsRegion
+            "AvailabilityZone" = $volumeDetails.AvailabilityZone
+            "VolumeType" = $volumeDetails.VolumeType
+            "State" = $volumeDetails.State
+            "Iops" = $volumeDetails.Iops
+            "Throughput" = $volumeDetails.Throughput
+            "Encrypted" = $volumeDetails.Encrypted
+            "BackupPlans" = ""
+            "InBackupPlan" = $false
+          }
+
+          # Add volume-level tags
+          foreach ($tag in $volumeDetails.Tags) {
+            $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+            if($key -ne "Name"){
+              $attachedVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+            }
+          }
+
+          $ec2AttachedVolList.Add($attachedVolObj) | Out-Null
         } catch {
           Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
@@ -965,7 +1009,7 @@ function getAWSData($cred) {
         "AwsAccountId" = $awsAccountInfo.Account
         "AwsAccountAlias" = $awsAccountAlias
         "InstanceId" = $ec2.InstanceId
-        "Name" = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+        "Name" = $ec2InstanceName
         "Volumes" = $volumes.count
         "SizeGiB" = $volSize
         "SizeTiB" = [math]::round($($volSize / 1024), 4)
@@ -979,16 +1023,16 @@ function getAWSData($cred) {
         "InBackupPlan" = $false
       }
 
-      foreach ($tag in $ec2.Tags) { 
-        # Powershell objects have restrictions on key names, 
-        # so I use Regular Expressions to substitute non valid parts 
-        # like ' ' or '-' to '_' 
-        # This may cause small subtle changes from the tagname in AWS 
+      foreach ($tag in $ec2.Tags) {
+        # Powershell objects have restrictions on key names,
+        # so I use Regular Expressions to substitute non valid parts
+        # like ' ' or '-' to '_'
+        # This may cause small subtle changes from the tagname in AWS
         # Same applies to all other types of objects
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
       $ec2List.Add($ec2obj) | Out-Null
@@ -1732,6 +1776,7 @@ $protectedBAKobjs = @();
                 }
                 "volume" {
                   $volId = $EC2Id[1]
+                  # Check unattached volumes
                   foreach ($ec2Obj in $ec2UnattachedVolumes) {
                     # Volume id will be fetched as * if all ebs volumes are backed up
                     if (($ec2Obj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
@@ -1742,6 +1787,18 @@ $protectedBAKobjs = @();
                           $ec2Obj.BackupPlans += ", $($plan.BackupPlanName)"
                       }
                       $ec2Obj.InBackupPlan = $true
+                    }
+                  }
+                  # Check attached volumes
+                  foreach ($attachedVolObj in $ec2AttachedVolList) {
+                    if (($attachedVolObj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $attachedVolObj.Region -and $awsAccountInfo.Account -eq $attachedVolObj.AwsAccountId) {
+                      if ("" -eq $attachedVolObj.BackupPlans) {
+                          $attachedVolObj.BackupPlans = "$($plan.BackupPlanName)"
+                      }
+                      else {
+                          $attachedVolObj.BackupPlans += ", $($plan.BackupPlanName)"
+                      }
+                      $attachedVolObj.InBackupPlan = $true
                     }
                   }
                 }
@@ -1932,6 +1989,7 @@ Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
 # Contains list of EC2 instances and RDS with capacity info
 
 $ec2List = New-Object collections.arraylist
+$ec2AttachedVolList = New-Object collections.arraylist
 $ec2UnattachedVolList = New-Object collections.arraylist
 $rdsList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
@@ -2256,13 +2314,23 @@ $ec2TotalBackupGB = ($ec2InBackupPolicyList.sizeGB | Measure-Object -Sum).sum
 $ec2TotalBackupTB = ($ec2InBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
 
+$ec2AttachedVolTotalGiB = ($ec2AttachedVolList.sizeGiB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalTiB = ($ec2AttachedVolList.sizeTiB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalGB = ($ec2AttachedVolList.sizeGB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalTB = ($ec2AttachedVolList.sizeTB | Measure-Object -Sum).sum
+$ec2AttachedVolInBackupPolicyList = $ec2AttachedVolList | Where-Object { $_.InBackupPlan }
+$ec2AttachedVolTotalBackupGiB = ($ec2AttachedVolInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalBackupTiB = ($ec2AttachedVolInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalBackupGB = ($ec2AttachedVolInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
+$ec2AttachedVolTotalBackupTB = ($ec2AttachedVolInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
+
 $ec2UnVolTotalGiB = ($ec2UnattachedVolList.sizeGiB | Measure-Object -Sum).sum
 $ec2UnVolTotalTiB = ($ec2UnattachedVolList.sizeTiB | Measure-Object -Sum).sum
 $ec2UnVolTotalGB = ($ec2UnattachedVolList.sizeGB | Measure-Object -Sum).sum
 $ec2UnVolTotalTB = ($ec2UnattachedVolList.sizeTB | Measure-Object -Sum).sum
 $ec2UnVolInBackupPolicyList = $ec2UnattachedVolList | Where-Object { $_.InBackupPlan }
 $ec2UnVolTotalBackupGiB = ($ec2UnVolInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
-$ec2UnVolTotalBackupTiB = ($ec2UnVolInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
+$ec2UnVolTotalBackupTiB = ($ec2UnVolInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum
 $ec2UnVolTotalBackupGB = ($ec2UnVolInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
 $ec2UnVolTotalBackupTB = ($ec2UnVolInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
 
@@ -2422,10 +2490,10 @@ if ($Anonymize) {
   Write-Host
   Write-Host "Anonymizing..." -ForegroundColor Green
 
-  $global:anonymizeProperties = @("Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",   
-                                  "BucketName", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn", 
-                                  "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "InstanceId", "Name", "NodegroupArn", 
-                                  "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources", 
+  $global:anonymizeProperties = @("Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",
+                                  "BucketName", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn",
+                                  "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "InstanceId", "InstanceName", "Name", "NodegroupArn",
+                                  "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources",
                                   "RoleArn", "RuleId", "RuleName", "TableArn", "TableId", "TableName", "TargetBackupVaultName",
                                   "VersionId", "VolumeId")
   if($AnonymizeFields){
@@ -2583,6 +2651,7 @@ if ($Anonymize) {
   $backupCostsList = AnonymizeCollection -Collection $backupCostsList
   $ddbList = AnonymizeCollection -Collection $ddbList
   $ec2List = AnonymizeCollection -Collection $ec2List
+  $ec2AttachedVolList = AnonymizeCollection -Collection $ec2AttachedVolList
   $ec2UnattachedVolList = AnonymizeCollection -Collection $ec2UnattachedVolList
   $efsList = AnonymizeCollection -Collection $efsList
   $eksList = AnonymizeCollection -Collection $eksList
@@ -2603,6 +2672,10 @@ Write-Host ""
 addTagsToAllObjectsInList($ec2List)
 Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
 $ec2List | Export-CSV -path $outputEc2Instance
+
+addTagsToAllObjectsInList($ec2AttachedVolList)
+Write-Host "CSV file output to: $outputEc2AttachedVolume"  -ForegroundColor Green
+$ec2AttachedVolList | Export-CSV -path $outputEc2AttachedVolume
 
 addTagsToAllObjectsInList($ec2UnattachedVolList)
 Write-Host "CSV file output to: $outputEc2UnattachedVolume"  -ForegroundColor Green
@@ -2665,6 +2738,11 @@ Write-Host "Total # of volumes: $(($ec2list.volumes | Measure-Object -Sum).sum)"
 Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB or $ec2TotalTiB TiB or $ec2TotalTB TB"  -ForegroundColor Green
 Write-Host "Capacity of backed up volumes: $ec2TotalBackupGiB GiB or $ec2TotalBackupGB GB or $ec2TotalBackupTiB TiB or $ec2TotalBackupTB TB"  -ForegroundColor Green
 Write-Host
+
+Write-Host
+Write-Host "Total # of EC2 attached volumes: $($ec2AttachedVolList.count)"  -ForegroundColor Green
+Write-Host "Total capacity of all attached volumes: $ec2AttachedVolTotalGiB GiB or $ec2AttachedVolTotalGB GB or $ec2AttachedVolTotalTiB TiB or $ec2AttachedVolTotalTB TB"  -ForegroundColor Green
+Write-Host "Capacity of all backed up attached volumes: $ec2AttachedVolTotalBackupGiB GiB or $ec2AttachedVolTotalBackupGB GB or $ec2AttachedVolTotalBackupTiB TiB or $ec2AttachedVolTotalBackupTB TB"  -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of EC2 unattached volumes: $($ec2UnattachedVolList.count)"  -ForegroundColor Green
