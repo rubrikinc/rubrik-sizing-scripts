@@ -241,37 +241,47 @@ To run the Azure sizing script, ensure you have the following:
 
 To run the GCP sizing script, ensure you have the following:
 
-- GCP account with necessary IAM permissions: "compute.instances.list", "compute.disks.get", "resourcemanager.projects.get".
+- GCP account with necessary IAM permissions: "compute.instances.list", "compute.disks.get", "compute.disks.list", "resourcemanager.projects.get".
 - GCP Cloud SDK installed or use GCP Cloud Shell.
 
 ### Running the GCP Script
 
 1. **From GCP Cloud Shell:**
-    - Login and initialize [GCP Cloud Shell](https://cloud.google.com/shell):
-        ```shell
-        gcloud init
-        ```
-    - Start Powershell by running
-        ```shell
-        pwsh
-        ```
-    - Upload and run the script:
-        ```powershell
-        .\Get-GCPSizingInfo.ps1
-        ```
-
-2. **Using Cloud Tools for PowerShell:**
-    - Login to GCP:
+    - Open [GCP Cloud Shell](https://cloud.google.com/shell) — authentication is pre-configured automatically.
+    - Verify access:
         ```powershell
         gcloud auth list
         gcloud config list
+        gcloud projects list
+        ```
+    - Start PowerShell:
+        ```shell
+        pwsh
         ```
     - Run the script:
         ```powershell
         .\Get-GCPSizingInfo.ps1
         ```
 
-34. The script will output a summary to the console and create a zip file with a CSV file, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
+2. **From a local machine:**
+    - Install [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
+    - Install the [gcloud CLI](https://cloud.google.com/sdk/docs/install) and run:
+        ```shell
+        gcloud init
+        gcloud auth login
+        ```
+    - Verify access:
+        ```powershell
+        gcloud auth list
+        gcloud config list
+        gcloud projects list
+        ```
+    - Run the script:
+        ```powershell
+        .\Get-GCPSizingInfo.ps1
+        ```
+
+3. The script will output a summary to the console and create a zip file with a CSV file, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
 
 ---
 

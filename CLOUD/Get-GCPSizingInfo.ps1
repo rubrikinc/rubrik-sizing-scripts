@@ -1,5 +1,4 @@
 #requires -Version 7.0
-#requires -Modules GoogleCloud
 
 # https://build.rubrik.com
 
@@ -8,21 +7,22 @@
 Gets all GCE VMs with the # of attached disks and total sizes of all disks.
 
 .DESCRIPTION
-The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs and GCE Disk in the specified projects.
+The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs and GCE Disks in the specified projects.
 For each GCE VM it grabs the total number of disks and total size (GiB) for all disks.
 A summary of the total # of VMs, # of disks, and capacity will be output to console.
 
-A CSV file will be exported with the details along with a log file. Send the resulting 
+A CSV file will be exported with the details along with a log file. Send the resulting
 zip file to Rubrik for analysis.
 
 Pass a comma separated list of projects or a CSV file containing the project names
 If no project IDs are specified then it will run in the current config context.
 
-To run this script the following permissions are required by the user in GCP on all 
+To run this script the following permissions are required by the user in GCP on all
 projects:
 
   - compute.instances.list
   - compute.disks.get
+  - compute.disks.list
   - resourcemanager.projects.get
 
 This script can be run in one of two ways:
@@ -36,11 +36,10 @@ This script can be run in one of two ways:
 
       a) Open a new Google Cloud Shell in the Google Console
       b) Test access by running the commands:
-        
+
         - gcloud auth list
         - gcloud config list
         - gcloud projects list
-        - Get-GcpProject | select name,projectid
 
       c) Upload this script to the Google Cloud Shell by selecting the ellipses and Upload.
       d) Run the script as described in the examples or help. 
@@ -53,27 +52,18 @@ This script can be run in one of two ways:
     Run this script from a local laptop or console, do the following:
 
       a) Install Powershell 7
-      b) Install the gcloud tool (see https://cloud.google.com/sdk/docs/install for more 
+      b) Install the gcloud tool (see https://cloud.google.com/sdk/docs/install for more
           details).
-      c) Install the GoogleCloud Powershell module by running the following command
-          from inside Powershell 7:
-          
-          - Install-Module GoogleCloud
-          
-          See: https://cloud.google.com/tools/powershell/docs/quickstart for more details
-      d) Run: gcloud init
-      e) Run: gcloud auth login
+      c) Run: gcloud init
+      d) Run: gcloud auth login
           Login with a user that has the permissions that are discussed above.
-      f) Test access by running the commands:
-        
+      e) Test access by running the commands:
+
         - gcloud auth list
         - gcloud config list
         - gcloud projects list
-        - Get-GcpProject | select name,projectid
 
-      g) Run this script as described in the examples or help.
-for more information on installing the Powershell GoogleCloud Module and the
-gcloud application.
+      f) Run this script as described in the examples or help.
 
 .PARAMETER GetAllProjects
 Flag (default) to find all projects that the user has access to and gather data.
@@ -209,7 +199,12 @@ if ($projectFile -ne '')
   foreach ($project in $projectFileContents)
   {
     try {
-      $projectList += Get-GcpProject -ProjectId $project
+      $projectJson = gcloud projects describe $project --format=json 2>$null
+      if ($projectJson) {
+        $projectList += ($projectJson -join '') | ConvertFrom-Json
+      } else {
+        Write-Host "Project $project not found or not accessible" -foregroundcolor red
+      }
     } catch {
       Write-Host "Failed to get project $project" -foregroundcolor red
       Write-Host "Error: $_" -foregroundcolor red
@@ -221,7 +216,12 @@ if ($projectFile -ne '')
   $projectList = @()
   foreach ($project in $projects.split(',')) {
     try {
-      $projectList += Get-GcpProject -ProjectId $project
+      $projectJson = gcloud projects describe $project --format=json 2>$null
+      if ($projectJson) {
+        $projectList += ($projectJson -join '') | ConvertFrom-Json
+      } else {
+        Write-Host "Project $project not found or not accessible" -foregroundcolor red
+      }
     } catch {
       Write-Host "Failed to get project $project" -foregroundcolor red
       Write-Host "Error: $_" -foregroundcolor red
@@ -231,7 +231,10 @@ if ($projectFile -ne '')
   Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
   $projectList = @()
   try{
-    $projectList = Get-GcpProject
+    $projectListJson = gcloud projects list --format=json 2>$null
+    if ($projectListJson) {
+      $projectList = ($projectListJson -join '') | ConvertFrom-Json
+    }
   } catch {
     Write-Host "Failed to get projects" -foregroundcolor Red
     Write-Host "Error: $_" -foregroundcolor Red
@@ -245,20 +248,22 @@ $unattachedDiskList = New-Object collections.arraylist
 $projectCounter = 1
 foreach ($project in $projectList)
 {
-  Write-Progress -ID 1 -Activity "Processing project: $($project.ProjectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
+  Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
   $projectCounter++
   $instanceInfo = $null
   try{
-    $instanceInfo = Get-GceInstance -Project $($project.ProjectId) 
-
+    $instancesJson = gcloud compute instances list --project=$($project.projectId) --format=json 2>$null
+    if ($instancesJson) {
+      $instanceInfo = ($instancesJson -join '') | ConvertFrom-Json
+    }
   } catch {
-    Write-Host "Failed to get instances in project $($project.ProjectId)" -ForeGroundColor Red
+    Write-Host "Failed to get instances in project $($project.projectId)" -ForeGroundColor Red
     Write-Host $_ -foregroundcolor red
   }
 
   $instanceCounter = 1
   foreach ($instance in $instanceInfo) {
-    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Status "Project: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Status "Instance: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
     $instanceCounter++
 
     $diskCount = 0
@@ -266,110 +271,128 @@ foreach ($project in $projectList)
     $numDiskEncryption = 0
     $sizeEncryptedDisksGb = 0
 
-    foreach($disk in $instance.Disks){
-      $diskInfo = Get-GceDisk -Project $($project.ProjectId) -DiskName $($disk.Source.split('/')[-1])
+    foreach($disk in $instance.disks){
+      $diskName = $disk.source.split('/')[-1]
+      $diskLocationType = $disk.source.split('/')[-4]  # 'zones' or 'regions'
+      $diskLocation = $disk.source.split('/')[-3]      # zone name or region name
+      $diskInfo = $null
+      try {
+        if ($diskLocationType -eq 'regions') {
+          $diskInfoJson = gcloud compute disks describe $diskName --project=$($project.projectId) --region=$diskLocation --format=json 2>$null
+        } else {
+          $diskInfoJson = gcloud compute disks describe $diskName --project=$($project.projectId) --zone=$diskLocation --format=json 2>$null
+        }
+        if ($diskInfoJson) {
+          $diskInfo = ($diskInfoJson -join '') | ConvertFrom-Json
+        }
+      } catch {
+        Write-Host "Failed to get disk $diskName in project $($project.projectId)" -ForeGroundColor Red
+      }
+      if (-not $diskInfo) { continue }
+
+      $diskSizeGbCurrent = [double]$diskInfo.sizeGb
       $diskObj = [PSCustomObject] @{
-        "Project" = $($project.ProjectId)
-        "Zone" = $diskInfo.Zone.split('/')[-1]
-        "VMName" = $instance.Name
-        "DiskName" = $diskInfo.Name
-        "Id" = $diskInfo.Id
-        "SizeGb" = $diskInfo.SizeGb
-        "SizeTb" = $diskInfo.SizeGb / 1000
-        "DiskEncryptionKey" = $diskInfo.DiskEncryptionKey
+        "Project" = $($project.projectId)
+        "Zone" = if ($diskInfo.zone) { $diskInfo.zone.split('/')[-1] } else { $diskInfo.region.split('/')[-1] }
+        "VMName" = $instance.name
+        "DiskName" = $diskInfo.name
+        "Id" = $diskInfo.id
+        "SizeGb" = $diskSizeGbCurrent
+        "SizeTb" = $diskSizeGbCurrent / 1000
+        "DiskEncryptionKey" = $diskInfo.diskEncryptionKey -ne $null
         "SourceImageSource" = $null
         "SourceImageName" = $null
       }
-      if($diskInfo.SourceImage -ne $null){
-        $diskObj.SourceImageSource = $diskInfo.SourceImage.split('/')[-4]
-        $diskObj.SourceImageName = $diskInfo.SourceImage.split('/')[-1]
+      if($diskInfo.sourceImage -ne $null){
+        $diskObj.SourceImageSource = $diskInfo.sourceImage.split('/')[-4]
+        $diskObj.SourceImageName = $diskInfo.sourceImage.split('/')[-1]
       }
 
-      $tagCounter = 0
-      foreach($key in $diskInfo.Labels.Keys){
-        $value = $diskInfo.Labels.Values.Split('\n')[$tagCounter]
-        $key = $key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
-        $tagCounter++
+      if ($diskInfo.labels) {
+        foreach ($prop in $diskInfo.labels.PSObject.Properties) {
+          $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+          $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+        }
       }
 
       $diskCount++
-      $diskSizeGb += $diskInfo.SizeGb
-      if($diskInfo.DiskEncryptionKey){
+      $diskSizeGb += $diskSizeGbCurrent
+      if($diskInfo.diskEncryptionKey){
         $numDiskEncryption++
-        $sizeEncryptedDisksGb += $diskInfo.SizeGb
+        $sizeEncryptedDisksGb += $diskSizeGbCurrent
       }
 
       $attachedDiskList.Add($diskObj) | Out-Null
-      
     }
 
     $instanceObj = [PSCustomObject] @{
-      "Project" = $($project.ProjectId)
-      "Zone" = $instance.Zone.split('/')[-1]
-      "Name" = $instance.Name
+      "Project" = $($project.projectId)
+      "Zone" = $instance.zone.split('/')[-1]
+      "Name" = $instance.name
       "TotalDiskCount" = $diskCount
       "TotalDiskSizeGb" = $diskSizeGb
       "TotalDiskSizeTb" = $diskSizeGb / 1000
       "EncryptedDisksCount" = $numDiskEncryption
       "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
       "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
-      "Status" = $vm.Status
+      "Status" = $instance.status
     }
-    $tagCounter = 0
-    foreach($key in $instance.Labels.Keys){
-      $value = $instance.Labels.Values.Split('\n')[$tagCounter]
-      $key = $key -replace '[^a-zA-Z0-9]', '_' 
-      $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
-      $tagCounter++
+    if ($instance.labels) {
+      foreach ($prop in $instance.labels.PSObject.Properties) {
+        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+        $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+      }
     }
 
     $instanceList.Add($instanceObj) | Out-Null
 
   }
-  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.Name)" -Completed
+  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Completed
 
   $allDisks = $null
   try{
-    $allDisks = Get-GceDisk -Project $($project.ProjectId) 
+    $allDisksJson = gcloud compute disks list --project=$($project.projectId) --format=json 2>$null
+    if ($allDisksJson) {
+      $allDisks = ($allDisksJson -join '') | ConvertFrom-Json
+    }
   } catch{
-    Write-Host "Failed to get disks in project $($project.ProjectId)" -foregroundcolor red
+    Write-Host "Failed to get disks in project $($project.projectId)" -foregroundcolor red
     Write-Host $_ -foregroundcolor red
   }
 
   $diskCounter = 1
   foreach($disk in $allDisks){
-    Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+    Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
     $diskCounter++
-    if ($disk.Users -eq $null){
+    if (-not $disk.users){
+      $diskSizeGbCurrent = [double]$disk.sizeGb
       $diskObj = [PSCustomObject] @{
-        "Project" = $($project.ProjectId)
-        "Zone" = $disk.Zone.split('/')[-1]
-        "DiskName" = $disk.Name
-        "Id" = $disk.Id
-        "SizeGb" = $disk.SizeGb
-        "SizeTb" = $disk.SizeGb / 1000
-        "DiskEncryptionKey" = $disk.DiskEncryptionKey
+        "Project" = $($project.projectId)
+        "Zone" = if ($disk.zone) { $disk.zone.split('/')[-1] } else { $disk.region.split('/')[-1] }
+        "DiskName" = $disk.name
+        "Id" = $disk.id
+        "SizeGb" = $diskSizeGbCurrent
+        "SizeTb" = $diskSizeGbCurrent / 1000
+        "DiskEncryptionKey" = $disk.diskEncryptionKey
         "SourceImageSource" = $null
         "SourceImageName" = $null
       }
-      if($disk.SourceImage -ne $null){
-        $diskObj.SourceImageSource = $disk.SourceImage.split('/')[-4]
-        $diskObj.SourceImageName = $disk.SourceImage.split('/')[-1]
+      if($disk.sourceImage -ne $null){
+        $diskObj.SourceImageSource = $disk.sourceImage.split('/')[-4]
+        $diskObj.SourceImageName = $disk.sourceImage.split('/')[-1]
       }
-      $tagCounter = 0
-      foreach($key in $disk.Labels.Keys){
-        $value = $disk.Labels.Values.Split('\n')[$tagCounter]
-        $key = $key -replace '[^a-zA-Z0-9]', '_' 
-        $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $key" -Value $value -Force 
-        $tagCounter++
+      if ($disk.labels) {
+        foreach ($prop in $disk.labels.PSObject.Properties) {
+          $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+          $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+        }
       }
       $unattachedDiskList.Add($diskObj) | Out-Null
     }
   }
-  Write-Progress -ID 3 -Activity "Processing disk: $($disk.Name)" -Completed
+  Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Completed
 }
-Write-Progress -ID 1 -Activity "Processing project: $($project)" -Completed
+Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Completed
 
 function addTagsToAllObjectsInList($list) {
   # Determine all unique tag keys
@@ -595,7 +618,9 @@ if($Anonymize){
 $existingFiles = $outputFiles | Where-Object { Test-Path $_ }
 
 # Compress the files into a zip archive
-Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
+if ($existingFiles) {
+  Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
+}
 
 # Remove the original files
 foreach ($file in $outputFiles) {
