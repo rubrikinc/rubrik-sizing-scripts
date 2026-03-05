@@ -523,7 +523,7 @@ switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
     Write-Host "Finding specified subscription(s)..." -ForegroundColor Green
     $subs = @()
-    foreach ($subscription in $Subscriptions.split(',')) {
+    foreach ($subscription in ($Subscriptions -split ',' | ForEach-Object { $_.Trim() })) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionName "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
@@ -537,7 +537,7 @@ switch ($PSCmdlet.ParameterSetName) {
   'SubscriptionIds' {
     Write-Host "Finding specified subscription(s)..." -ForegroundColor Green
     $subs = @()
-    foreach ($subscription in $SubscriptionIds.split(',')) {
+    foreach ($subscription in ($SubscriptionIds -split ',' | ForEach-Object { $_.Trim() })) {
       Write-Host "Getting subscription information for: $($subscription)..."
       try {
         $subs = $subs + $(Get-AzSubscription -SubscriptionId "$subscription" -TenantId $context.Tenant.Id -ErrorAction Stop)
@@ -575,12 +575,15 @@ switch ($PSCmdlet.ParameterSetName) {
     # If Azure Management Groups are used, look for all subscriptions in the Azure Management Group
     Write-Host "Gathering subscription information from Management Groups..." -ForegroundColor Green
     $subs = @()
-    foreach ($managementGroup in $ManagementGroups) {
+    foreach ($managementGroup in ($ManagementGroups -split ',' | ForEach-Object { $_.Trim() })) {
       try {
-        $subs = $subs + $(Get-AzSubscription  -TenantId $context.Tenant.Id  `
-                                              -SubscriptionName $(Search-AzGraph `
-                                              -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" `
-                                              -ManagementGroup $managementGroup).name -ErrorAction Stop)
+        $subscriptionNames = $(Search-AzGraph `
+          -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" `
+          -ManagementGroup $managementGroup -ErrorAction Stop).name
+        foreach ($subName in $subscriptionNames) {
+          $sub = Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $subName -ErrorAction Stop
+          $subs += $sub
+        }
       } catch {
         Write-Error "Unable to gather subscriptions from Management Group: $($managementGroup)"
         Write-Error "Error: $_"
