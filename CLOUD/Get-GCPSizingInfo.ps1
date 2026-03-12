@@ -4,14 +4,19 @@
 
 <#
 .SYNOPSIS
-Gets all GCE VMs with the # of attached disks and total sizes of all disks.
+Gets all GCE VMs, GCE disks, Cloud SQL instances, and Spanner instances with sizing information.
 
 .DESCRIPTION
-The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs and GCE Disks in the specified projects.
-For each GCE VM it grabs the total number of disks and total size (GiB) for all disks.
-A summary of the total # of VMs, # of disks, and capacity will be output to console.
+The 'Get-GCPSizingInfo.ps1' script gets all GCE VMs, GCE Disks, Cloud SQL instances, and
+Spanner instances in the specified projects. For each GCE VM it grabs the total number of
+disks and total size (GiB) for all disks. For Cloud SQL instances, it collects storage size,
+database count, and backup configuration. For Spanner instances, it collects node count,
+processing units, and database count.
 
-A CSV file will be exported with the details along with a log file. Send the resulting
+A summary of the total # of VMs, disks, Cloud SQL instances, and Spanner instances with
+capacity will be output to console.
+
+CSV files will be exported with the details along with a log file. Send the resulting
 zip file to Rubrik for analysis.
 
 Pass a comma separated list of projects or a CSV file containing the project names
@@ -23,6 +28,10 @@ projects:
   - compute.instances.list
   - compute.disks.get
   - compute.disks.list
+  - cloudsql.instances.list
+  - cloudsql.databases.list
+  - spanner.instances.list
+  - spanner.databases.list
   - resourcemanager.projects.get
 
 This script can be run in one of two ways:
@@ -85,7 +94,7 @@ quotes, with no spaces between fields.
 A comma separated list of fields in resulting CSVs and JSONs to not anonymize (only required for fields which are by default being
 anonymized). The list must be encased in quotes, with no spaces between fields.
 Note that we currently anonymize the following fields:
-"Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey"
+"Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName"
 Additionally, you can specify "Tags" to exclude all tag/label fields (properties starting with "Tag:" or "Label/Tag:") from anonymization.
 
 
@@ -177,6 +186,8 @@ $PSBoundParameters | Format-Table
 $outputVM = "gce_vm_info-$date_string.csv"
 $outputAttachedDisks = "gce_attached_disk_info-$date_string.csv"
 $outputUnattachedDisks = "gce_unattached_disk_info-$date_string.csv"
+$outputCloudSQL = "gce_cloudsql_info-$date_string.csv"
+$outputSpanner = "gce_spanner_info-$date_string.csv"
 
 $archiveFile = "gcp_sizing_results_$date_string.zip"
 
@@ -185,6 +196,8 @@ $outputFiles = @(
     $outputVM,
     $outputAttachedDisks,
     $outputUnattachedDisks,
+    $outputCloudSQL,
+    $outputSpanner,
     $output_log
 )
 
@@ -244,6 +257,8 @@ if ($projectFile -ne '')
 $instanceList = New-Object collections.arraylist
 $attachedDiskList = New-Object collections.arraylist
 $unattachedDiskList = New-Object collections.arraylist
+$cloudSQLList = New-Object collections.arraylist
+$spannerList = New-Object collections.arraylist
 # Loop through each project and grab the VM and disk info
 $projectCounter = 1
 foreach ($project in $projectList)
@@ -391,6 +406,142 @@ foreach ($project in $projectList)
     }
   }
   Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Completed
+
+  # Cloud SQL collection
+  $cloudSQLInstances = $null
+  try {
+    $cloudSQLInstancesJson = gcloud sql instances list --project=$($project.projectId) --format=json 2>$null
+    if ($cloudSQLInstancesJson) {
+      $cloudSQLInstances = ($cloudSQLInstancesJson -join '') | ConvertFrom-Json
+    }
+  } catch {
+    Write-Verbose "Cloud SQL API not available in project $($project.projectId): $_"
+  }
+
+  $sqlInstanceCounter = 1
+  foreach ($sqlInstance in $cloudSQLInstances) {
+    Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Status "Instance: $($sqlInstanceCounter) of $($cloudSQLInstances.Count)"  -PercentComplete (($sqlInstanceCounter / $cloudSQLInstances.Count) * 100)
+    $sqlInstanceCounter++
+
+    # Derive DatabaseEngine from databaseVersion prefix
+    $databaseEngine = switch -Regex ($sqlInstance.databaseVersion) {
+      '^POSTGRES' { 'PostgreSQL' }
+      '^MYSQL'    { 'MySQL' }
+      '^SQLSERVER' { 'SQL Server' }
+      default     { $sqlInstance.databaseVersion }
+    }
+
+    # Define system databases per engine for filtering
+    $systemDatabases = switch ($databaseEngine) {
+      'PostgreSQL' { @('information_schema', 'postgres', 'template0', 'template1', 'cloudsqladmin') }
+      'MySQL'      { @('information_schema', 'mysql', 'performance_schema', 'sys') }
+      'SQL Server' { @('information_schema', 'master', 'tempdb', 'model', 'msdb') }
+      default      { @() }
+    }
+
+    # Count user databases (excluding system databases)
+    $numberOfDatabases = 0
+    try {
+      $databasesJson = gcloud sql databases list --instance=$($sqlInstance.name) --project=$($project.projectId) --format=json 2>$null
+      if ($databasesJson) {
+        $databases = ($databasesJson -join '') | ConvertFrom-Json
+        $numberOfDatabases = ($databases | Where-Object { $systemDatabases -notcontains $_.name }).Count
+      }
+    } catch {
+      Write-Host "Failed to get databases for Cloud SQL instance $($sqlInstance.name) in project $($project.projectId)" -ForeGroundColor Red
+      # NumberOfDatabases remains 0 on failure
+    }
+
+    # Build Cloud SQL object
+    $cloudSQLObj = [PSCustomObject] @{
+      "Project" = $($project.projectId)
+      "InstanceName" = $sqlInstance.name
+      "InstanceType" = $sqlInstance.instanceType
+      "DatabaseEngine" = $databaseEngine
+      "EngineVersion" = $sqlInstance.databaseVersion
+      "Region" = $sqlInstance.region
+      "Tier" = $sqlInstance.settings.tier
+      "StorageSizeGb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb } else { 0 }
+      "StorageSizeTb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb / 1000 } else { 0 }
+      "StorageType" = $sqlInstance.settings.dataDiskType
+      "State" = $sqlInstance.state
+      "NumberOfDatabases" = $numberOfDatabases
+      "BackupEnabled" = if ($null -ne $sqlInstance.settings.backupConfiguration.enabled) { $sqlInstance.settings.backupConfiguration.enabled } else { $false }
+      "BackupRetentionCount" = $sqlInstance.settings.backupConfiguration.backupRetentionSettings.retainedBackups
+      "BackupStartTime" = $sqlInstance.settings.backupConfiguration.startTime
+      "AvailabilityType" = $sqlInstance.settings.availabilityType
+    }
+
+    # Add labels as Label/Tag: columns
+    if ($sqlInstance.settings.userLabels) {
+      foreach ($prop in $sqlInstance.settings.userLabels.PSObject.Properties) {
+        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+        $cloudSQLObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+      }
+    }
+
+    $cloudSQLList.Add($cloudSQLObj) | Out-Null
+  }
+  Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Completed
+
+  # Spanner collection
+  $spannerInstances = $null
+  try {
+    $spannerInstancesJson = gcloud spanner instances list --project=$($project.projectId) --format=json 2>$null
+    if ($spannerInstancesJson) {
+      $spannerInstances = ($spannerInstancesJson -join '') | ConvertFrom-Json
+    }
+  } catch {
+    Write-Verbose "Spanner API not available in project $($project.projectId): $_"
+  }
+
+  $spannerInstanceCounter = 1
+  foreach ($spannerInstance in $spannerInstances) {
+    Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Status "Instance: $($spannerInstanceCounter) of $($spannerInstances.Count)"  -PercentComplete (($spannerInstanceCounter / $spannerInstances.Count) * 100)
+    $spannerInstanceCounter++
+
+    # Extract short name from full resource path (e.g., "projects/foo/instances/bar" -> "bar")
+    $instanceName = $spannerInstance.name.split('/')[-1]
+
+    # Extract config name (last segment of config path)
+    $config = $spannerInstance.config.split('/')[-1]
+
+    # Count databases
+    $numberOfDatabases = 0
+    try {
+      $databasesJson = gcloud spanner databases list --instance=$instanceName --project=$($project.projectId) --format=json 2>$null
+      if ($databasesJson) {
+        $databases = ($databasesJson -join '') | ConvertFrom-Json
+        $numberOfDatabases = $databases.Count
+      }
+    } catch {
+      Write-Host "Failed to get databases for Spanner instance $instanceName in project $($project.projectId)" -ForeGroundColor Red
+      # NumberOfDatabases remains 0 on failure
+    }
+
+    # Build Spanner object
+    $spannerObj = [PSCustomObject] @{
+      "Project" = $($project.projectId)
+      "InstanceName" = $instanceName
+      "DisplayName" = $spannerInstance.displayName
+      "Config" = $config
+      "State" = $spannerInstance.state
+      "NumberOfDatabases" = $numberOfDatabases
+      "NodeCount" = if ($spannerInstance.nodeCount) { $spannerInstance.nodeCount } else { 0 }
+      "ProcessingUnits" = if ($spannerInstance.processingUnits) { $spannerInstance.processingUnits } else { 0 }
+    }
+
+    # Add labels as Label/Tag: columns
+    if ($spannerInstance.labels) {
+      foreach ($prop in $spannerInstance.labels.PSObject.Properties) {
+        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+        $spannerObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+      }
+    }
+
+    $spannerList.Add($spannerObj) | Out-Null
+  }
+  Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Completed
 }
 Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Completed
 
@@ -420,7 +571,7 @@ function addTagsToAllObjectsInList($list) {
 
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey")
+  $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName")
 
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
@@ -558,16 +709,24 @@ if ($Anonymize) {
   $instanceList = Anonymize-Collection -Collection $instanceList
   $attachedDiskList = Anonymize-Collection -Collection $attachedDiskList
   $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
+  $cloudSQLList = Anonymize-Collection -Collection $cloudSQLList
+  $spannerList = Anonymize-Collection -Collection $spannerList
 }
 
 $totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.sizeGb | Measure -Sum).sum
 $totalTB = ($attachedDiskList.sizeTb | Measure -Sum).sum + ($unattachedDiskList.sizeTb | Measure -Sum).sum
+
+$cloudSQLStorageGB = ($cloudSQLList.StorageSizeGb | Measure -Sum).sum
+$cloudSQLStorageTB = ($cloudSQLList.StorageSizeTb | Measure -Sum).sum
 
 Write-Host
 Write-Host "Total # of GCE VMs: $($instanceList.count)" -foregroundcolor green
 Write-Host "Total # of attached disks: $($attachedDiskList.count)" -foregroundcolor green
 Write-Host "Total # of unattached disks: $($unattachedDiskList.count)" -foregroundcolor green
 Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foregroundcolor green
+Write-Host "Total # of Cloud SQL instances: $($cloudSQLList.count)" -foregroundcolor green
+Write-Host "Total Cloud SQL storage: $cloudSQLStorageGB GB or $cloudSQLStorageTB TB" -foregroundcolor green
+Write-Host "Total # of Spanner instances: $($spannerList.count)" -foregroundcolor green
 
 # Export to CSV
 Write-Host
@@ -582,6 +741,14 @@ Write-Host
 addTagsToAllObjectsInList($unattachedDiskList)
 Write-Host "CSV file output to: $outputUnattachedDisks" -foregroundcolor green
 $unattachedDiskList | Export-CSV -path $outputUnattachedDisks
+Write-Host
+addTagsToAllObjectsInList($cloudSQLList)
+Write-Host "CSV file output to: $outputCloudSQL" -foregroundcolor green
+$cloudSQLList | Export-CSV -path $outputCloudSQL
+Write-Host
+addTagsToAllObjectsInList($spannerList)
+Write-Host "CSV file output to: $outputSpanner" -foregroundcolor green
+$spannerList | Export-CSV -path $outputSpanner
 
 Write-Host
 Write-Host

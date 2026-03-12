@@ -241,7 +241,15 @@ To run the Azure sizing script, ensure you have the following:
 
 To run the GCP sizing script, ensure you have the following:
 
-- GCP account with necessary IAM permissions: "compute.instances.list", "compute.disks.get", "compute.disks.list", "resourcemanager.projects.get".
+- GCP account with necessary IAM permissions:
+  - `compute.instances.list`
+  - `compute.disks.get`
+  - `compute.disks.list`
+  - `cloudsql.instances.list`
+  - `cloudsql.databases.list`
+  - `spanner.instances.list`
+  - `spanner.databases.list`
+  - `resourcemanager.projects.get`
 - GCP Cloud SDK installed or use GCP Cloud Shell.
 
 ### Running the GCP Script
@@ -281,7 +289,15 @@ To run the GCP sizing script, ensure you have the following:
         .\Get-GCPSizingInfo.ps1
         ```
 
-3. The script will output a summary to the console and create a zip file with a CSV file, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
+3. The script will output a summary to the console and create a zip file with CSV files for VMs, disks, Cloud SQL instances, and Spanner instances, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
+
+**Output files:**
+- `gce_vm_info-<timestamp>.csv` - GCE VM information
+- `gce_attached_disk_info-<timestamp>.csv` - Attached disk information
+- `gce_unattached_disk_info-<timestamp>.csv` - Unattached disk information
+- `gce_cloudsql_info-<timestamp>.csv` - Cloud SQL instance information
+- `gce_spanner_info-<timestamp>.csv` - Spanner instance information
+- `output_gcp_<timestamp>.log` - Console output log
 
 ---
 
@@ -292,7 +308,7 @@ The anonymization feature allows you to anonymize specific fields in the output 
 - Use the tag `-Anonymize`. Fields anonymized by default are as follows:
 
     - **AWS:** "AwsAccountId", "AwsAccountAlias", "BucketName", "Name", "InstanceId", "VolumeId", "RDSInstance", "DBInstanceIdentifier", "FileSystemId", "FileSystemDNSName", "FileSystemOwnerId", "OwnerId", "RuleId", "RuleName", "BackupPlanArn", "BackupPlanId", "VersionId", "RequestId"
-    - **GCP:** "Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey"
+    - **GCP:** "Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName"
     - **Azure:** "SubscriptionId", "Subscription", "Tenant", "Name", "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id", "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName", "ProtectedItemDataSourceId", "StorageAccount", "Database", "Server", "ElasticPool", "ManagedInstance", "DatabaseID", "vmID"
 
 - To customize anonymization:

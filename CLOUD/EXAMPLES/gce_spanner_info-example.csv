@@ -1,0 +1,4 @@
+Project,InstanceName,DisplayName,Config,State,NumberOfDatabases,NodeCount,ProcessingUnits,Label/Tag: app,Label/Tag: env
+demo-project-1,spanner-main,Main Spanner Instance,regional-us-central1,READY,3,5,0,backend,production
+demo-project-1,spanner-analytics,Analytics Instance,nam6,READY,2,0,2000,analytics,production
+demo-project-2,spanner-dev,Development Instance,regional-us-east1,READY,1,1,0,testing,development

@@ -1,0 +1,5 @@
+Project,InstanceName,InstanceType,DatabaseEngine,EngineVersion,Region,Tier,StorageSizeGb,StorageSizeTb,StorageType,State,NumberOfDatabases,BackupEnabled,BackupRetentionCount,BackupStartTime,AvailabilityType,Label/Tag: env,Label/Tag: team
+demo-project-1,postgres-prod-1,CLOUD_SQL_INSTANCE,PostgreSQL,POSTGRES_15,us-central1,db-n1-standard-4,500,0.5,PD_SSD,RUNNABLE,5,True,7,03:00,REGIONAL,production,database
+demo-project-1,mysql-app-1,CLOUD_SQL_INSTANCE,MySQL,MYSQL_8_0,us-east1,db-n1-standard-2,200,0.2,PD_SSD,RUNNABLE,3,True,14,02:00,ZONAL,staging,app
+demo-project-2,sqlserver-biz-1,CLOUD_SQL_INSTANCE,SQL Server,SQLSERVER_2019_STANDARD,us-west1,db-custom-4-16384,1000,1.0,PD_SSD,RUNNABLE,8,True,7,04:00,REGIONAL,production,finance
+demo-project-2,postgres-replica-1,READ_REPLICA_INSTANCE,PostgreSQL,POSTGRES_15,us-east1,db-n1-standard-4,500,0.5,PD_SSD,RUNNABLE,5,False,,,ZONAL,production,database
