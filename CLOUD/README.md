@@ -250,7 +250,22 @@ To run the GCP sizing script, ensure you have the following:
   - `spanner.instances.list`
   - `spanner.databases.list`
   - `resourcemanager.projects.get`
+  - `serviceusage.services.list`
 - GCP Cloud SDK installed or use GCP Cloud Shell.
+- The following GCP APIs must be enabled on each project for full data collection:
+
+    | API | Data Collected | If Not Enabled |
+    |-----|---------------|----------------|
+    | Compute Engine API (`compute.googleapis.com`) | VMs, attached disks, unattached disks | No VM or disk data collected for that project |
+    | Cloud SQL Admin API (`sqladmin.googleapis.com`) | Cloud SQL instances, databases, storage | No Cloud SQL data collected for that project |
+    | Cloud Spanner API (`spanner.googleapis.com`) | Spanner instances, databases, node counts | No Spanner data collected for that project |
+
+    The script automatically detects which APIs are enabled per project. If an API is not enabled, the script skips that service and displays a warning — it will not prompt or fail. To enable an API, run:
+    ```shell
+    gcloud services enable compute.googleapis.com --project=PROJECT_ID
+    gcloud services enable sqladmin.googleapis.com --project=PROJECT_ID
+    gcloud services enable spanner.googleapis.com --project=PROJECT_ID
+    ```
 
 ### Running the GCP Script
 

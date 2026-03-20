@@ -18,7 +18,7 @@ solution pricing and capacity planning.
 |------|-------|---------|
 | `Get-AWSSizingInfo.ps1` | ~2,800 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, Backup, KMS, SQS, Secrets Manager |
 | `Get-AzureSizingInfo.ps1` | ~2,400 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
-| `Get-GCPSizingInfo.ps1` | ~800 | GCP sizing — GCE VMs, Disks |
+| `Get-GCPSizingInfo.ps1` | ~800 | GCP sizing — GCE VMs, Disks, Cloud SQL, Spanner |
 | `consolidate.ps1` | | Merges multi-region CSV outputs into single files |
 | `Get-AWSSizingInfo-Permissions.cft` | | CloudFormation template for cross-account IAM role |
 | `EXAMPLES/` | | Sample output CSV/JSON files |
@@ -157,6 +157,7 @@ normalization, anonymization, metric calculations, error handling).
 4. **Region SCP blocks (AWS):** Service Control Policies may block API calls in certain regions. Use `-Regions` to limit to allowed regions
 5. **AWS SSO region:** `Invalid grant provided` usually means wrong `-SSORegion`. Check AWS Console → SSO settings for the correct region
 6. **No shared code:** Each cloud script is fully self-contained. Changes to one do not affect the others
+7. **GCP interactive prompts:** `gcloud` prompts to enable disabled APIs when running in an interactive TTY. The GCP script sets `$env:CLOUDSDK_CORE_DISABLE_PROMPTS = 1` at startup to prevent this. It also proactively checks which APIs are enabled per project and logs yellow warnings for disabled ones, skipping those service blocks entirely
 
 ## Dependencies
 

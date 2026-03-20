@@ -161,6 +161,9 @@ $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
 [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
+# Disable gcloud interactive prompts for scripted execution
+$env:CLOUDSDK_CORE_DISABLE_PROMPTS = 1
+
 try{
 $date = Get-Date
 $date_string = $($date.ToString("yyyy-MM-dd_HHmmss"))
@@ -265,7 +268,28 @@ foreach ($project in $projectList)
 {
   Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
   $projectCounter++
+
+  # Proactive API enablement check — one call per project, filtered to the 3 APIs we need
+  $enabledApis = gcloud services list --enabled --project=$($project.projectId) `
+    --filter="config.name:(compute.googleapis.com OR sqladmin.googleapis.com OR spanner.googleapis.com)" `
+    --format="value(config.name)" --quiet 2>$null
+
+  $hasCompute  = $enabledApis -contains 'compute.googleapis.com'
+  $hasCloudSQL = $enabledApis -contains 'sqladmin.googleapis.com'
+  $hasSpanner  = $enabledApis -contains 'spanner.googleapis.com'
+
+  if (-not $hasCompute) {
+    Write-Host "WARNING: Compute Engine API is not enabled on project [$($project.projectId)]. Skipping Compute data collection." -ForegroundColor Yellow
+  }
+  if (-not $hasCloudSQL) {
+    Write-Host "WARNING: Cloud SQL Admin API is not enabled on project [$($project.projectId)]. Skipping Cloud SQL data collection." -ForegroundColor Yellow
+  }
+  if (-not $hasSpanner) {
+    Write-Host "WARNING: Cloud Spanner API is not enabled on project [$($project.projectId)]. Skipping Spanner data collection." -ForegroundColor Yellow
+  }
+
   $instanceInfo = $null
+  if ($hasCompute) {
   try{
     $instancesJson = gcloud compute instances list --project=$($project.projectId) --format=json 2>$null
     if ($instancesJson) {
@@ -363,7 +387,9 @@ foreach ($project in $projectList)
 
   }
   Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Completed
+  } # end if ($hasCompute) — instances
 
+  if ($hasCompute) {
   $allDisks = $null
   try{
     $allDisksJson = gcloud compute disks list --project=$($project.projectId) --format=json 2>$null
@@ -406,8 +432,10 @@ foreach ($project in $projectList)
     }
   }
   Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Completed
+  } # end if ($hasCompute) — unattached disks
 
   # Cloud SQL collection
+  if ($hasCloudSQL) {
   $cloudSQLInstances = $null
   try {
     $cloudSQLInstancesJson = gcloud sql instances list --project=$($project.projectId) --format=json 2>$null
@@ -483,8 +511,10 @@ foreach ($project in $projectList)
     $cloudSQLList.Add($cloudSQLObj) | Out-Null
   }
   Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Completed
+  } # end if ($hasCloudSQL)
 
   # Spanner collection
+  if ($hasSpanner) {
   $spannerInstances = $null
   try {
     $spannerInstancesJson = gcloud spanner instances list --project=$($project.projectId) --format=json 2>$null
@@ -542,6 +572,7 @@ foreach ($project in $projectList)
     $spannerList.Add($spannerObj) | Out-Null
   }
   Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Completed
+  } # end if ($hasSpanner)
 }
 Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Completed
 
