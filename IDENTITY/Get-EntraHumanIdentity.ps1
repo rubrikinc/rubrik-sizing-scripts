@@ -17,6 +17,8 @@
         - **Summary**: A high-level report with aggregated counts for each domain.
 
     The script generates both CSV and HTML reports that can be shared with Rubrik for licensing purposes.
+    
+    Author : Aymeric Jaouen
 
 .PARAMETER UserServiceAccountNamesLike
     This is an optional parameter that allows you to identify service accounts based on their User Principal Name (UPN). You can provide a list of wildcard patterns, and any user account with a UPN matching one of these patterns will be flagged as a service account in the report.
@@ -204,12 +206,16 @@ function Get-ReportHeaders {
             $baseHeaders = [ordered]@{
                 Directory               = 'Directory'
                 User                    = 'User'
+                GuestAccount            = 'Guest'
+                MemberAccount           = 'Member'
                 AccountEnabled          = 'Account Enabled'
-                ActiveUser              = 'Active Users'
-                InactiveUser            = 'Inactive Users'
+                DisabledUser            = 'Account Disabled'
+                ActiveUser              = 'Active Identity'
+                InactiveUser            = 'Inactive Identity'
                 NeverLoggedInUser       = 'Never Logged In'
                 PatternMatchedUser      = 'Service Account Pattern'
                 SyncFromAD              = 'Synch from AD'
+                CloudOnly               = 'Cloud Only'
                 ADSourceDomain          = 'Source AD'
             }
 
@@ -225,16 +231,71 @@ function Get-ReportHeaders {
             return [PSCustomObject]@{
                 Domain                        = 'Directory'
                 TotalUsers                    = 'Total Users'
-                ActiveUsers                   = 'Active Users'
-                InactiveUsers                 = 'Inactive Users'
+                GuestUsers                    = 'Guest Users'
+                MemberUsers                   = 'Member Users'
+                AccountEnabledCount           = 'Account Enabled'
+                DisabledUsers                 = 'Account Disabled'
+                ActiveUsers                   = 'Active Identity'
+                InactiveUsers                 = 'Inactive Identity'
                 NeverLoggedInUsers            = 'Never Logged In Users'
                 PatternMatchedUsers           = 'Service Account Pattern'
+                SyncFromADCount               = 'Synch from AD'
+                CloudOnlyCount                = 'Cloud Only'
+                ADSourceDomainCounts          = 'Source AD'
                 DomainApplicationsCount       = 'Applications'
                 DomainServicePrincipalCount   = 'Service Principals'
                 DomainManagedIdentitiesCount  = 'Managed Identities'
+                ValidEnterpriseAppsCount      = 'Valid Enterprise Apps'
             }
         }
     }
+}
+
+#-------------------------------------------------------------------
+# Helpers
+#-------------------------------------------------------------------
+function Get-DomainFromValue {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    if ($Value -match '@(?<Domain>[^@]+)$') { return $Matches['Domain'].ToLowerInvariant() }
+    return $null
+}
+
+function Get-EffectiveUserDomain {
+    param(
+        [Parameter(Mandatory)]
+        $User,
+        [string]$UpnDomain
+    )
+
+    $userType = if ($User.UserType) { $User.UserType.Trim() } else { '' }
+    $isGuest  = $userType -eq 'Guest'
+
+    if ($isGuest) {
+        $candidateDomains = @(
+            (Get-DomainFromValue -Value $User.Mail),
+            (Get-DomainFromValue -Value ($User.OtherMails | Select-Object -First 1))
+        )
+
+        if ($User.Identities) {
+            foreach ($identity in $User.Identities) {
+                if ($identity.IssuerAssignedId) {
+                    $candidateDomains += Get-DomainFromValue -Value $identity.IssuerAssignedId
+                }
+            }
+        }
+
+        $guestSourceDomain = $candidateDomains | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+        if ($guestSourceDomain) { return $guestSourceDomain }
+        return $UpnDomain
+    }
+
+    if ($User.OnPremisesSyncEnabled -and -not [string]::IsNullOrWhiteSpace($User.OnPremisesDomainName)) {
+        return $User.OnPremisesDomainName.ToLowerInvariant()
+    }
+
+    return $UpnDomain
 }
 
 #-------------------------------------------------------------------
@@ -264,7 +325,7 @@ function Get-ByUserData {
     process {
         Write-Verbose "Retrieving users..."
         $users = Get-MgUser -All `
-            -Property Id,UserPrincipalName,AccountEnabled,SignInActivity, `
+            -Property Id,UserPrincipalName,Mail,OtherMails,Identities,UserType,AccountEnabled,SignInActivity, `
                       OnPremisesSyncEnabled,OnPremisesDomainName `
             -ErrorAction Stop
 
@@ -318,9 +379,13 @@ function Get-ByUserData {
         foreach ($u in $users) {
             Write-Verbose "Processing user: $($u.UserPrincipalName)"
 
-            $parts     = if ($u.UserPrincipalName) { $u.UserPrincipalName.Split('@') } else { @('','') }
-            $user      = $parts[0]
-            $directory = $parts[1]
+            $parts      = if ($u.UserPrincipalName) { $u.UserPrincipalName.Split('@') } else { @('','') }
+            $user       = $parts[0]
+            $upnDomain  = if ($parts.Count -gt 1) { $parts[1].ToLowerInvariant() } else { '' }
+            $directory  = Get-EffectiveUserDomain -User $u -UpnDomain $upnDomain
+            $normalizedUserType = if ($u.UserType) { $u.UserType.Trim() } else { '' }
+            $isGuest = $normalizedUserType -eq 'Guest'
+            $isMember = $normalizedUserType -eq 'Member'
 
             $lastSignIn = if ($u.SignInActivity?.LastSignInDateTime) {
                 [datetime]$u.SignInActivity.LastSignInDateTime
@@ -328,9 +393,17 @@ function Get-ByUserData {
                 $null
             }
 
-            $isNeverLoggedIn = -not $lastSignIn
-            $isActive        = $lastSignIn -and ($lastSignIn -ge $cutoff)
-            $isInactive      = -not $isActive
+            $isEnabled = [bool]$u.AccountEnabled
+            $isNeverLoggedIn = [bool](-not $lastSignIn)
+
+            if ($isEnabled) {
+                $isActive   = [bool]($lastSignIn -and ($lastSignIn -ge $cutoff))
+                $isInactive = [bool](-not $isActive)
+            }
+            else {
+                $isActive   = $false
+                $isInactive = $false
+            }
 
             $patternMatched = $false
             foreach ($p in $ServicePattern) {
@@ -340,8 +413,13 @@ function Get-ByUserData {
                 }
             }
 
-            $syncFromAD     = [bool]$u.OnPremisesSyncEnabled
-            $adSourceDomain = if ($syncFromAD) { $u.OnPremisesDomainName } else { $false }
+            $syncFromAD = [bool]$u.OnPremisesSyncEnabled
+            $cloudOnly  = [int](-not $syncFromAD)
+            $adSourceDomain = if ($syncFromAD -and -not [string]::IsNullOrWhiteSpace($u.OnPremisesDomainName)) {
+                $u.OnPremisesDomainName.ToLowerInvariant()
+            } else {
+                'N/A'
+            }
 
             $ownedCount      = $appOwners[$u.Id]      -or 0
             $enterpriseCount = $spAppOwners[$u.Id]    -or 0
@@ -350,12 +428,16 @@ function Get-ByUserData {
             $script:output += [PSCustomObject]@{
                 Directory               = $directory
                 User                    = $user
-                AccountEnabled          = [int]$u.AccountEnabled
+                GuestAccount            = [int]$isGuest
+                MemberAccount           = [int]$isMember
+                AccountEnabled          = [int]$isEnabled
+                DisabledUser            = [int](-not $isEnabled)
                 ActiveUser              = [int]$isActive
                 InactiveUser            = [int]$isInactive
                 NeverLoggedInUser       = [int]$isNeverLoggedIn
                 PatternMatchedUser      = [int]$patternMatched
                 SyncFromAD              = [int]$syncFromAD
+                CloudOnly               = $cloudOnly
                 ADSourceDomain          = $adSourceDomain
                 OwnedAppsCount          = $ownedCount
                 EnterpriseAppsCount     = $enterpriseCount
@@ -370,10 +452,10 @@ function Get-ByUserData {
 
         # Build a grand-total row
         $totals = [ordered]@{ Directory = "TOTAL"; User = "" }
-        foreach ($col in $script:output | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -ne 'Directory' -and $_ -ne 'User' -and $_ -ne 'ADSourceDomain' }) {
+        foreach ($col in $script:output | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -notin @('Directory','User','ADSourceDomain') }) {
             $totals[$col] = ($script:output | Measure-Object -Property $col -Sum).Sum
         }
-        $totals['ADSourceDomain'] = ''
+        $totals['ADSourceDomain'] = 'N/A'
 
         # Add the total row to the end of the data and return it
         $script:output += [PSCustomObject]$totals
@@ -447,18 +529,21 @@ function Get-ByDomainData {
         $rows += [PSCustomObject]@{
           Domain = $domain
           TotalUsers = $grpUsers.Count
+          GuestUsers = ($grpUsers | Where-Object { $_.GuestAccount -eq 1 }).Count
+          MemberUsers = ($grpUsers | Where-Object { $_.MemberAccount -eq 1 }).Count
           AccountEnabledCount = ($grpUsers | Where-Object { $_.AccountEnabled -eq 1 }).Count
+          DisabledUsers = ($grpUsers | Where-Object { $_.DisabledUser -eq 1 }).Count
           ActiveUsers = ($grpUsers | Where-Object { $_.ActiveUser -eq 1 }).Count
           InactiveUsers = ($grpUsers | Where-Object { $_.InactiveUser -eq 1 }).Count
           NeverLoggedInUsers = ($grpUsers | Where-Object { $_.NeverLoggedInUser -eq 1 }).Count
           PatternMatchedUsers = ($grpUsers | Where-Object { $_.PatternMatchedUser -eq 1 }).Count
           SyncFromADCount = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
-          ADSourceDomainCounts = (
+          CloudOnlyCount = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
+          ADSourceDomainCounts = @(
             $grpUsers |
-            Where-Object { $_.SyncFromAD -eq 1 } |
-            Group-Object -Property ADSourceDomain |
-            ForEach-Object { "$($_.Name):$($_.Count)" }
-          ) -join '; '
+            Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
+            Select-Object -ExpandProperty ADSourceDomain -Unique
+          ).Count
           DomainApplicationsCount = $domainAppsCount
           DomainServicePrincipalCount = $tenantAppsCount
           DomainManagedIdentitiesCount = $tenantMIsCount
@@ -485,13 +570,16 @@ function Get-ByDomainData {
     $rows += [PSCustomObject]@{
       Domain = "Service Principals from other Domains"
       TotalUsers = 0
+      GuestUsers = 0
+      MemberUsers = 0
       AccountEnabledCount = 0
       ActiveUsers = 0
       InactiveUsers = 0
       NeverLoggedInUsers = 0
       PatternMatchedUsers = 0
       SyncFromADCount = 0
-      ADSourceDomainCounts = ""
+      CloudOnlyCount = 0
+      ADSourceDomainCounts = 0
       DomainApplicationsCount = $otherApps.Count
       DomainServicePrincipalCount = ($otherSPs | Where-Object ServicePrincipalType -eq 'Application').Count
       DomainManagedIdentitiesCount = $otherMIs.Count
@@ -502,11 +590,9 @@ function Get-ByDomainData {
   end {
     # Build a grand‐total row
     $totals = [ordered]@{ Domain = 'TOTAL' }
-    foreach ($col in $rows | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -ne 'Domain' -and $_ -ne 'ADSourceDomainCounts' }) {
+    foreach ($col in $rows | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -ne 'Domain' }) {
       $totals[$col] = ($rows | Measure-Object -Property $col -Sum).Sum
     }
-    # Add a blank value for ADSourceDomainCounts (since it can't be summed)
-    $totals['ADSourceDomainCounts'] = ''
 
     Write-Log "Successfully aggregated $($rows.Count-1) different domain(s)." "INFO" "Green"
     return $rows + [PSCustomObject]$totals
@@ -614,7 +700,7 @@ function Export-HtmlReport {
             $html += "<div class='table-header-logo'>$svgContent</div>"
             $html += "<h2>$TableTitle</h2>"
             $html += "</div>"
-            $html += '<table>'
+            $html += "<div class='table-scroll'><table>"
 
             # Add headers
             $html += '<thead><tr>'
@@ -642,7 +728,7 @@ function Export-HtmlReport {
                 $html += '</tr>'
             }
 
-            $html += '</tbody></table>'
+            $html += '</tbody></table></div>'
             return $html
         }
 
@@ -660,12 +746,14 @@ function Export-HtmlReport {
         padding: 0;
     }
     .report-container {
-        max-width: 1200px;
+        width: 98%;
+        max-width: none;
         margin: 20px auto;
         padding: 20px;
         background-color: #fff;
         border-radius: 8px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        box-sizing: border-box;
     }
     .header {
         background-color: #0d47a1;
@@ -704,15 +792,22 @@ function Export-HtmlReport {
         padding-bottom: 10px;
         margin-top: 30px;
     }
+    .table-scroll {
+        width: 100%;
+        margin-bottom: 20px;
+    }
     table {
         width: 100%;
         border-collapse: collapse;
-        margin-bottom: 20px;
+        table-layout: auto;
     }
     th, td {
         padding: 12px;
         text-align: center;
         border: 1px solid #ddd;
+    }
+    td:first-child, th:first-child {
+        white-space: normal;
     }
     thead th {
         background-color: #2c3e50;
