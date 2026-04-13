@@ -131,7 +131,7 @@ Aurora databases are processed at the cluster level rather than the instance lev
 
 ### S3 Storage Lens for Current Version Storage Metrics
 
-The script can collect **CurrentVersionStorageBytes** metrics for S3 buckets, which shows the size of current (non-versioned) objects per storage class. This data is useful for understanding how much storage is used by current versions vs. previous versions in versioned buckets.
+The script can collect **CurrentVersionStorageBytes** and **CurrentVersionObjectCount** metrics for S3 buckets. These show the size and number of current-version objects per storage class. This data is useful for understanding how much storage and how many objects are current versions vs. previous versions in versioned buckets.
 
 **To enable this feature:**
 

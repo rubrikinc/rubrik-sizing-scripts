@@ -276,6 +276,9 @@ param (
   [string]$NotAnonymizeFields
 )
 
+# Script version — update this with every PR that modifies this script.
+$scriptVersion = "1.0.1"
+
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
@@ -303,6 +306,7 @@ if($Anonymize){
   Start-Transcript -Path "./$output_log"
 }
 
+Write-Host "Script version: $scriptVersion" -ForeGroundColor Cyan
 Write-Host "Arguments passed to $($MyInvocation.MyCommand.Name):" -ForeGroundColor Green
 $PSBoundParameters | Format-Table
 
