@@ -74,7 +74,8 @@ may take a long time when large blob stores are located.
 
 
 .PARAMETER ManagementGroups
-A comma separated list of Azure Management Groups to gather data from.
+A comma separated list of Azure Management Group IDs or display names to gather data from.
+If a display name is provided, the script will attempt to resolve it to the management group ID.
 
 .PARAMETER GetKeyVaultAmounts
 Gets number of key vaults, and amount of certificates, keys, and secrets in each key vault. One must add the
@@ -581,9 +582,22 @@ switch ($PSCmdlet.ParameterSetName) {
     $subs = @()
     foreach ($managementGroup in ($ManagementGroups -split ',' | ForEach-Object { $_.Trim() })) {
       try {
+        # Search-AzGraph requires the management group ID, not the display name.
+        # Attempt to resolve the input as a display name first.
+        $mgId = $managementGroup
+        try {
+          $allMGs = Get-AzManagementGroup -ErrorAction Stop
+          $match = $allMGs | Where-Object { $_.DisplayName -eq $managementGroup }
+          if ($match) {
+            $mgId = $match.Name
+            Write-Host "Resolved management group display name '$managementGroup' to ID '$mgId'" -ForegroundColor Green
+          }
+        } catch {
+          Write-Host "Could not query management groups to resolve display name, using '$managementGroup' as-is" -ForegroundColor Yellow
+        }
         $subscriptionNames = $(Search-AzGraph `
           -Query "ResourceContainers | where type =~ 'microsoft.resources/subscriptions'" `
-          -ManagementGroup $managementGroup -ErrorAction Stop).name
+          -ManagementGroup $mgId -ErrorAction Stop).name
         foreach ($subName in $subscriptionNames) {
           $sub = Get-AzSubscription -TenantId $context.Tenant.Id -SubscriptionName $subName -ErrorAction Stop
           $subs += $sub
