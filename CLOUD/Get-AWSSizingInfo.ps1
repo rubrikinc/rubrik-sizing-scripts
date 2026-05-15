@@ -350,7 +350,13 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.1"
+$scriptVersion = "1.0.2"
+
+# Provider-specific anonymization configuration
+$script:tagPrefix = "Tag:"
+$script:tagPrefixLength = 4
+$script:tagKeyAnonField = "TagName"
+$script:tagValueAnonField = "TagValue"
 
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -522,178 +528,163 @@ function Get-CWMetricStatisticsForAllVersion {
   }
 }
 
-function getEC2Inventory($qregion, $cred,$awsAccountInfo) {
-  try {
-    $ec2Instances = (Get-EC2Instance -Credential $cred -region $qregion -ErrorAction Stop).Instances;
-  } catch {
-    Write-Host "Failed to get EC2 Info for region $qregion in account $($awsAccountInfo.Account)" -ForegroundColor Red;
-    Write-Host "Error $_" -ForegroundColor Red;
-  }
-  $counter = 1;
-  foreach ($ec2 in $ec2Instances) {
-    Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Status "Instance $($counter) of $($ec2Instances.Count)" -PercentComplete (($counter / $ec2Instances.Count) *100);
-    $counter++;
-    $volSize = 0;
-    #containes list of attached volumes to the current EC2 instance
-    $volumes = $ec2.BlockDeviceMappings.ebs;
-    #Iterate through each volume and sum up the volume size
-    foreach ($vol in $volumes) {
-      try {
-        $volSize += (Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $qregion -ErrorAction Stop).size;
-      } catch {
-        Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $qregion in account $($awsAccountInfo.Account)" -ForegroundColor Red;
-        Write-Host "Error: $_" -ForegroundColor Red;
-      }
-    }
-    $ec2obj = [PSCustomObject] @{
-      "AwsAccountId" = $awsAccountInfo.Account;
-      "AwsAccountAlias" = $awsAccountAlias;
-      "InstanceId" = $ec2.InstanceId;
-      "Name" = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
-      "Volumes" = $volumes.count;
-      "SizeGiB" = $volSize;
-      "SizeTiB" = [math]::round($($volSize / 1024), 4);
-      "SizeGB" = [math]::round($($volSize * 1.073741824), 3);
-      "SizeTB" = [math]::round($($volSize * 0.001073741824), 4);
-      "Region" = $awsRegion;
-      #We do not need instance type
-      "InstanceType" = $ec2.InstanceType;
-      #we do not need platform
-      "Platform" = $ec2.Platform;
-      #We do not need product code
-      "ProductCode" = $ec2.ProductCodes.ProductCodeType;
-      #Backup Plans is something we need to evaluate
-      "BackupPlans" = "";
-      "InBackupPlan" = $false;
-    }
-
-    foreach ($tag in $ec2.Tags) { 
-      # Powershell objects have restrictions on key names, 
-      # so I use Regular Expressions to substitute non valid parts 
-      # like ' ' or '-' to '_' 
-      # This may cause small subtle changes from the tagname in AWS 
-      # Same applies to all other types of objects
-      $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-      if($key -ne "Name"){ 
-        $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-      } 
-    }
-
-    $ec2List.Add($ec2obj) | Out-Null
-
-  }
-}
-# Monolithic Function to do the work
-function getAWSData($cred) {
-  # Set the regions that you want to get EC2 instance and volume details for
-  if ($Regions -ne '') {
-    [string[]]$awsRegions = $Regions.split(',')
-  }
-  else {
-    try {
-      Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
-      $awsRegions = Get-EC2Region @profileLocationOpt -Region $queryRegion -Credential $cred | Select-Object -ExpandProperty RegionName
-    } catch {
-      Write-Host "Failed to get EC2 Regions for profile name $awsProfile in region $queryRegion" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
-  }
-
-  
-  Write-Host "Current identity:"  -ForegroundColor Green
-  Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
-  try{
-    $awsAccountInfo = Get-STSCallerIdentity  -Credential $cred -Region $queryRegion -ErrorAction Stop
-  } catch {
-    Write-Host "Failed to get AWS Account Info for region $queryRegion for profile name $awsProfile" -ForeGroundColor Red
-    Write-Host "Error: $_" -ForeGroundColor Red
-  }
-  $awsAccountInfo | format-table
-  try{
-    $awsAccountAlias = Get-IAMAccountAlias -Credential $cred -Region $queryRegion -ErrorAction Stop
-  } catch {
-    Write-Host "Failed to get IAM Account Alias Info for region $queryRegion for profile name $awsProfile in account $($awsAccountInfo.Account)" -ForeGroundColor Red
-    Write-Host "Error: $_" -ForeGroundColor Red
-  }
-
-  # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
-  # This is done ONCE per account across ALL regions.
-  # Storage Lens dashboards can be in any region but monitor buckets across all regions
-  $storageLensConfigsWithCloudWatch = @()
-  foreach ($slRegion in $awsRegions) {
-    try {
-      # List all Storage Lens configurations for this account in this region
-      $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $awsAccountInfo.Account -Credential $cred -Region $slRegion -ErrorAction Stop
-      # Check each configuration and collect all with CloudWatch publishing enabled
-      foreach ($slConfig in $storageLensConfigs) {
-        try {
-          $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $awsAccountInfo.Account -ConfigId $slConfig.Id -Credential $cred -Region $slRegion -ErrorAction Stop
-          if ($slConfigDetails.DataExport.CloudWatchMetrics.IsEnabled -eq $true -and $slConfigDetails.IsEnabled -eq $true) {
-            # Store configuration with its Include/Exclude settings
-            # Buckets are stored as ARNs like "arn:aws:s3:::bucket-name"
-            # Also store the dashboard's home region (where CloudWatch metrics are published)
-            $configInfo = @{
-              ConfigId = $slConfig.Id
-              DashboardRegion = $slRegion
-              IncludeBuckets = $slConfigDetails.Include.Buckets
-              ExcludeBuckets = $slConfigDetails.Exclude.Buckets
-              IncludeRegions = $slConfigDetails.Include.Regions
-              ExcludeRegions = $slConfigDetails.Exclude.Regions
+function Add-TagsToAllObjectsInList($list) {
+    # Determine all unique tag keys
+    $allTagKeys = @{}
+    foreach ($obj in $list) {
+        $properties = $obj.PSObject.Properties
+        foreach ($property in $properties) {
+            if (-not $allTagKeys.ContainsKey($property.Name)) {
+                $allTagKeys[$property.Name] = $true
             }
-            $storageLensConfigsWithCloudWatch += $configInfo
-          }
-        } catch {
-          Write-Host "Could not get details for Storage Lens config $($slConfig.Id) in region ${slRegion}: $_"
         }
-      }
-    } catch {
-      Write-Host "Could not list Storage Lens configurations for account $($awsAccountInfo.Account) in region ${slRegion}: $_"
     }
-  }
 
-  if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
-    Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersion storage and object count details will not be collected." -ForegroundColor Yellow
-  } else {
-    Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
-  }
+    $allTagKeys = $allTagKeys.Keys
 
-  # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
-  $awsRegionCounter = 1
-  foreach ($awsRegion in $awsRegions) {
-    Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Status "Region $($awsRegionCounter) of $($awsRegions.Count)" -PercentComplete (($awsRegionCounter / $awsRegions.Count) * 100)
-    $awsRegionCounter++
+    # Ensure each object has all possible tag keys
+    foreach ($obj in $list) {
+        foreach ($key in $allTagKeys) {
+            if (-not $obj.PSObject.Properties.Name.Contains($key)) {
+                $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
+            }
+        }
+    }
+}
+
+function ConvertTo-SizeUnits {
+    param(
+        [double]$Value,
+        [string]$Prefix,
+        [ValidateSet('Bytes', 'GiB')]
+        [string]$InputUnit = 'Bytes',
+        [int]$GiBPrecision = 4,
+        [int]$TiBPrecision = 4,
+        [int]$GBPrecision = 4,
+        [int]$TBPrecision = 4
+    )
+    if ($InputUnit -eq 'Bytes') {
+        $gib = $Value / 1073741824
+        $tib = $gib / 1024
+        $gb  = $Value / 1000000000
+        $tb  = $gb / 1000
+    } else {
+        $gib = $Value
+        $tib = $Value / 1024
+        $gb  = $Value * 1.073741824
+        $tb  = $Value * 0.001073741824
+    }
+    @{
+        "${Prefix}GiB" = [math]::round($gib, $GiBPrecision)
+        "${Prefix}TiB" = [math]::round($tib, $TiBPrecision)
+        "${Prefix}GB"  = [math]::round($gb, $GBPrecision)
+        "${Prefix}TB"  = [math]::round($tb, $TBPrecision)
+    }
+}
+
+function Compress-SizingArchive {
+    param(
+        [string[]]$OutputFiles,
+        [string]$ArchiveFile
+    )
+    $existingFiles = $OutputFiles | Where-Object { Test-Path $_ }
+    if ($existingFiles) {
+        Compress-Archive -Path $existingFiles -DestinationPath $ArchiveFile
+    }
+    foreach ($file in $OutputFiles) {
+        Remove-Item -Path $file -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-AWSStorageLensConfigs {
+    param(
+        $Credential,
+        $AccountInfo,
+        [string[]]$Regions
+    )
+    $storageLensConfigsWithCloudWatch = @()
+    foreach ($slRegion in $Regions) {
+        try {
+            # List all Storage Lens configurations for this account in this region
+            $storageLensConfigs = Get-S3CStorageLensConfigurationList -AccountId $AccountInfo.Account -Credential $Credential -Region $slRegion -ErrorAction Stop
+            # Check each configuration and collect all with CloudWatch publishing enabled
+            foreach ($slConfig in $storageLensConfigs) {
+                try {
+                    $slConfigDetails = Get-S3CStorageLensConfiguration -AccountId $AccountInfo.Account -ConfigId $slConfig.Id -Credential $Credential -Region $slRegion -ErrorAction Stop
+                    if ($slConfigDetails.DataExport.CloudWatchMetrics.IsEnabled -eq $true -and $slConfigDetails.IsEnabled -eq $true) {
+                        # Store configuration with its Include/Exclude settings
+                        # Buckets are stored as ARNs like "arn:aws:s3:::bucket-name"
+                        # Also store the dashboard's home region (where CloudWatch metrics are published)
+                        $configInfo = @{
+                            ConfigId = $slConfig.Id
+                            DashboardRegion = $slRegion
+                            IncludeBuckets = $slConfigDetails.Include.Buckets
+                            ExcludeBuckets = $slConfigDetails.Exclude.Buckets
+                            IncludeRegions = $slConfigDetails.Include.Regions
+                            ExcludeRegions = $slConfigDetails.Exclude.Regions
+                        }
+                        $storageLensConfigsWithCloudWatch += $configInfo
+                    }
+                } catch {
+                    Write-Host "Could not get details for Storage Lens config $($slConfig.Id) in region ${slRegion}: $_"
+                }
+            }
+        } catch {
+            Write-Host "Could not list Storage Lens configurations for account $($AccountInfo.Account) in region ${slRegion}: $_"
+        }
+    }
+    return $storageLensConfigsWithCloudWatch
+}
+
+function Get-AWSS3Inventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $StorageLensConfigs,
+        [switch]$SkipBucketTags,
+        [datetime]$UtcStartTime,
+        [datetime]$UtcEndTime
+    )
+
+    $s3Result = New-Object collections.arraylist
+
+    $cwBucketInfo = $null
     try{
-      $cwBucketInfo = Get-CWmetriclist -namespace AWS/S3 -Region $awsRegion -Credential $cred -ErrorAction Stop
+      $cwBucketInfo = Get-CWmetriclist -namespace AWS/S3 -Region $Region -Credential $Credential -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+      Write-Host "Failed to get S3 Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-#Start Ingesting information on S3 Buckets
-    try{ 
-      $s3Buckets = $(Get-S3Bucket -Credential $cred -Region $awsRegion -BucketRegion $awsRegion -ErrorAction Stop).BucketName
+
+    $s3Buckets = $null
+    try{
+      $s3Buckets = $(Get-S3Bucket -Credential $Credential -Region $Region -BucketRegion $Region -ErrorAction Stop).BucketName
     } catch {
-      Write-Host "Failed to get S3 Info for region $awsRegion in account $($awsAccountInfo.Account) using Get-S3Bucket" -ForeGroundColor Red
+      Write-Host "Failed to get S3 Info for region $Region in account $($AccountInfo.Account) using Get-S3Bucket" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-  $counter = 1
+
+    $counter = 1
     foreach ($s3Bucket in $s3Buckets) {
       Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Status "Bucket $($counter) of $($s3Buckets.Count)" -PercentComplete (($counter / $s3Buckets.Count) * 100)
       $counter++
       #This needs to be simplified. We only need the total bucket size, not the size per storage category
-      $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new() 
+      $filter = [Amazon.CloudWatch.Model.DimensionFilter]::new()
       $filter.Name = 'BucketName'
       $filter.Value = $s3Bucket
       try{
-        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+        $bytesStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $Credential -Region $Region -ErrorAction Stop `
                                 | Where-Object -Property MetricName -eq 'BucketSizeBytes' `
                                 | Select-Object -ExpandProperty Dimensions `
-                                | Where-Object -Property Name -eq StorageType).Value  
-        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $cred -Region $awsRegion -ErrorAction Stop `
+                                | Where-Object -Property Name -eq StorageType).Value
+        $numObjStorageTypes = $(Get-CWmetriclist -Dimension $filter -Credential $Credential -Region $Region -ErrorAction Stop `
                                 | Where-Object -Property MetricName -eq 'NumberOfObjects' `
                                 | Select-Object -ExpandProperty Dimensions `
-                                | Where-Object -Property Name -eq StorageType).Value 
+                                | Where-Object -Property Name -eq StorageType).Value
       } catch {
-        Write-Host "Failed to get S3 Info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+        Write-Host "Failed to get S3 Info for bucket $s3Bucket in region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $bucketNameDim = [Amazon.CloudWatch.Model.Dimension]::new()
@@ -707,14 +698,14 @@ function getAWSData($cred) {
         try{
           $maxBucketSizes = $(Get-CWMetricStatisticsForAllVersion  -Statistic Maximum `
                           -Namespace AWS/S3 -MetricName BucketSizeBytes `
-                          -StartTime $utcStartTime `
-                          -EndTime $utcEndTime `
+                          -StartTime $UtcStartTime `
+                          -EndTime $UtcEndTime `
                           -Period 86400  `
-                          -Credential $cred -Region $awsRegion `
+                          -Credential $Credential -Region $Region `
                           -Dimensions $bucketNameDim, $bucketBytesStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
-          Write-Host "Failed to get S3 Info for StorageType $bytesStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get S3 Info for StorageType $bytesStorageType in bucket $s3Bucket in region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $maxBucketSize = $($maxBucketSizes | Measure-Object -Maximum).Maximum
@@ -728,14 +719,14 @@ function getAWSData($cred) {
         try{
           $maxBucketObjects = $(Get-CWMetricStatisticsForAllVersion  -Statistic Maximum `
                           -Namespace AWS/S3 -MetricName NumberOfObjects `
-                          -StartTime $utcStartTime `
-                          -EndTime $utcEndTime `
+                          -StartTime $UtcStartTime `
+                          -EndTime $UtcEndTime `
                           -Period 86400  `
-                          -Credential $cred -Region $awsRegion `
+                          -Credential $Credential -Region $Region `
                           -Dimensions $bucketNameDim, $bucketNumObjStorageDim -ErrorAction Stop `
                           | Select-Object -ExpandProperty Datapoints).Maximum
         } catch {
-          Write-Host "Failed to get S3 Info for StorageType $numObjStorageType in bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get S3 Info for StorageType $numObjStorageType in bucket $s3Bucket in region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $maxBucketObjs = $($maxBucketObjects | Measure-Object -Maximum).Maximum
@@ -745,13 +736,13 @@ function getAWSData($cred) {
       # Query CurrentVersionStorageBytes and CurrentVersionObjectCount from Storage Lens CloudWatch metrics if enabled
       $currentVersionBytesStorages = @{}
       $currentVersionObjectStorages = @{}
-      if ($storageLensConfigsWithCloudWatch.Count -gt 0) {
+      if ($StorageLensConfigs.Count -gt 0) {
         # Find a Storage Lens configuration that covers this bucket
         # Storage Lens configs can include/exclude specific buckets and regions
         $bucketArn = "arn:aws:s3:::$s3Bucket"
         $matchingConfigId = $null
 
-        foreach ($slConfig in $storageLensConfigsWithCloudWatch) {
+        foreach ($slConfig in $StorageLensConfigs) {
           $bucketCoveredByConfig = $true
 
           # If Include.Buckets is set, bucket must be in the list
@@ -762,7 +753,7 @@ function getAWSData($cred) {
           }
           # If Include.Regions is set, region must be in the list
           if ($bucketCoveredByConfig -and $null -ne $slConfig.IncludeRegions -and $slConfig.IncludeRegions.Count -gt 0) {
-            if ($awsRegion -notin $slConfig.IncludeRegions) {
+            if ($Region -notin $slConfig.IncludeRegions) {
               $bucketCoveredByConfig = $false
             }
           }
@@ -774,7 +765,7 @@ function getAWSData($cred) {
           }
           # If Exclude.Regions is set, region must NOT be in the list
           if ($bucketCoveredByConfig -and $null -ne $slConfig.ExcludeRegions -and $slConfig.ExcludeRegions.Count -gt 0) {
-            if ($awsRegion -in $slConfig.ExcludeRegions) {
+            if ($Region -in $slConfig.ExcludeRegions) {
               $bucketCoveredByConfig = $false
             }
           }
@@ -796,12 +787,12 @@ function getAWSData($cred) {
 
             $accountDim = [Amazon.CloudWatch.Model.Dimension]::new()
             $accountDim.Name = "aws_account_number"
-            $accountDim.Value = $awsAccountInfo.Account
+            $accountDim.Value = $AccountInfo.Account
 
             # aws_region dimension is the bucket's region (where the bucket is located)
             $regionDim = [Amazon.CloudWatch.Model.Dimension]::new()
             $regionDim.Name = "aws_region"
-            $regionDim.Value = $awsRegion
+            $regionDim.Value = $Region
 
             $bucketDim = [Amazon.CloudWatch.Model.Dimension]::new()
             $bucketDim.Name = "bucket_name"
@@ -822,7 +813,7 @@ function getAWSData($cred) {
               @{ Name = "bucket_name"; Value = $s3Bucket }
             )
             $availableStorageClasses = $(Get-CWMetricList -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
-                            -Dimension $slMetricFilter -Credential $cred -Region $matchingDashboardRegion -ErrorAction Stop `
+                            -Dimension $slMetricFilter -Credential $Credential -Region $matchingDashboardRegion -ErrorAction Stop `
                             | Select-Object -ExpandProperty Dimensions `
                             | Where-Object -Property Name -eq "storage_class").Value | Select-Object -Unique
 
@@ -837,10 +828,10 @@ function getAWSData($cred) {
                 # Must include ALL 7 dimensions
                 $storageLensMetrics = Get-CWMetricStatisticsForAllVersion -Statistic Maximum `
                                 -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionStorageBytes" `
-                                -StartTime $utcStartTime `
-                                -EndTime $utcEndTime `
+                                -StartTime $UtcStartTime `
+                                -EndTime $UtcEndTime `
                                 -Period 86400 `
-                                -Credential $cred -Region $matchingDashboardRegion `
+                                -Credential $Credential -Region $matchingDashboardRegion `
                                 -Dimensions $configIdDim, $accountDim, $regionDim, $bucketDim, $metricsVersionDim, $recordTypeDim, $storageClassDim -ErrorAction Stop
 
                 $currentVersionBytesValue = ($storageLensMetrics.Datapoints | Sort-Object -Property Timestamp -Descending | Select-Object -First 1).Maximum
@@ -859,10 +850,10 @@ function getAWSData($cred) {
               try {
                 $storageLensObjMetrics = Get-CWMetricStatisticsForAllVersion -Statistic Maximum `
                                 -Namespace "AWS/S3/Storage-Lens" -MetricName "CurrentVersionObjectCount" `
-                                -StartTime $utcStartTime `
-                                -EndTime $utcEndTime `
+                                -StartTime $UtcStartTime `
+                                -EndTime $UtcEndTime `
                                 -Period 86400 `
-                                -Credential $cred -Region $matchingDashboardRegion `
+                                -Credential $Credential -Region $matchingDashboardRegion `
                                 -Dimensions $configIdDim, $accountDim, $regionDim, $bucketDim, $metricsVersionDim, $recordTypeDim, $storageClassDim -ErrorAction Stop
 
                 $currentVersionObjValue = ($storageLensObjMetrics.Datapoints | Sort-Object -Property Timestamp -Descending | Select-Object -First 1).Maximum
@@ -872,10 +863,10 @@ function getAWSData($cred) {
               }
             }
           } catch {
-            Write-Debug "Failed to get CurrentVersionStorageBytes/CurrentVersionObjectCount for bucket $s3Bucket in region $awsRegion using config '$matchingConfigId': $_"
+            Write-Debug "Failed to get CurrentVersionStorageBytes/CurrentVersionObjectCount for bucket $s3Bucket in region $Region using config '$matchingConfigId': $_"
           }
         } else {
-          Write-Debug "Bucket $s3Bucket in region $awsRegion is not covered by any Storage Lens configuration with CloudWatch publishing"
+          Write-Debug "Bucket $s3Bucket in region $Region is not covered by any Storage Lens configuration with CloudWatch publishing"
         }
       }
 
@@ -883,21 +874,22 @@ function getAWSData($cred) {
         $bucketTags = @()
       } else {
         try {
-          $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $cred -Region $awsRegion 
+          $bucketTags = Get-S3BucketTagging -BucketName $s3Bucket -Credential $Credential -Region $Region
         } catch {
-          Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $awsRegion in account $($awsAccountInfo.Account)." -ForeGroundColor Red
+          Write-Host "Failed to get S3 tag info for bucket $s3Bucket in region $Region in account $($AccountInfo.Account)." -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
       }
 
       $s3obj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "BucketName" = $s3Bucket
-        "Region" = $awsRegion
+        "Region" = $Region
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      # S3 size conversions have swapped GB/GiB labels (existing behavior preserved as-is)
       foreach ($bytesStorage in $bytesStorages.GetEnumerator()) {
         if ($null -eq $($bytesStorage.Value)) {
           $bytesStorageSize = 0
@@ -916,7 +908,7 @@ function getAWSData($cred) {
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTB") -NotePropertyValue $([math]::round($s3SizeTB, 4))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeGiB") -NotePropertyValue $([math]::round($s3SizeGiB, 3))
         Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeTiB") -NotePropertyValue $([math]::round($s3SizeTiB, 4))
-        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize        
+        Add-Member -InputObject $s3obj -NotePropertyName ($($bytesStorage.Name) + "_SizeBytes") -NotePropertyValue $bytesStorageSize
       }
       foreach ($numObjStorage in $numObjStorages.GetEnumerator()) {
         if ($null -eq $($numObjStorage.Value)) {
@@ -961,24 +953,39 @@ function getAWSData($cred) {
 
       foreach ($tag in $bucketTags) {
 
-        # Powershell objects have restrictions on key names, 
-        # so I use Regular Expressions to substitute non valid parts 
-        # like ' ' or '-' to '_' 
-        # This may cause small subtle changes from the tagname in AWS 
+        # Powershell objects have restrictions on key names,
+        # so I use Regular Expressions to substitute non valid parts
+        # like ' ' or '-' to '_'
+        # This may cause small subtle changes from the tagname in AWS
         # Same applies to all other types of objects
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        Add-Member -InputObject $s3obj -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force  
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        Add-Member -InputObject $s3obj -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
       }
 
-      $s3List.Add($s3obj) | Out-Null
-    }  
+      $s3Result.Add($s3obj) | Out-Null
+    }
     Write-Progress -ID 3 -Activity "Processing bucket: $($s3Bucket)" -Completed
-#Start Ingesting EC2 instances
+
+    return ,$s3Result
+}
+
+function Get-AWSEC2Inventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $ec2InstanceResult = New-Object collections.arraylist
+    $ec2AttachedVolResult = New-Object collections.arraylist
+    $ec2UnattachedVolResult = New-Object collections.arraylist
+
     $ec2Instances = $null
     try{
-      $ec2Instances = (Get-EC2Instance -Credential $cred -region $awsRegion -ErrorAction Stop).instances    
+      $ec2Instances = (Get-EC2Instance -Credential $Credential -region $Region -ErrorAction Stop).instances
     } catch {
-      Write-Host "Failed to get EC2 Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get EC2 Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
@@ -1000,23 +1007,24 @@ function getAWSData($cred) {
         if ($null -eq $vol) { continue }
 
         try{
-          $volumeDetails = Get-EC2Volume -VolumeId $vol.VolumeId -Credential $cred -region $awsRegion -ErrorAction Stop
+          $volumeDetails = Get-EC2Volume -VolumeId $vol.VolumeId -Credential $Credential -region $Region -ErrorAction Stop
           $volSize += $volumeDetails.Size
 
           # Create attached volume object with full details and tags
+          $volSizes = ConvertTo-SizeUnits -Value $volumeDetails.Size -Prefix "Size" -InputUnit GiB -GBPrecision 3
           $attachedVolObj = [PSCustomObject] @{
-            "AwsAccountId" = $awsAccountInfo.Account
-            "AwsAccountAlias" = $awsAccountAlias
+            "AwsAccountId" = $AccountInfo.Account
+            "AwsAccountAlias" = $AccountAlias
             "VolumeId" = $volumeDetails.VolumeId
             "InstanceId" = $ec2.InstanceId
             "InstanceName" = $ec2InstanceName
             "Name" = $volumeDetails.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
             "DeviceName" = $blockDevice.DeviceName
-            "SizeGiB" = $volumeDetails.Size
-            "SizeTiB" = [math]::round($($volumeDetails.Size / 1024), 4)
-            "SizeGB" = [math]::round($($volumeDetails.Size * 1.073741824), 3)
-            "SizeTB" = [math]::round($($volumeDetails.Size * 0.001073741824), 4)
-            "Region" = $awsRegion
+            "SizeGiB" = $volSizes["SizeGiB"]
+            "SizeTiB" = $volSizes["SizeTiB"]
+            "SizeGB" = $volSizes["SizeGB"]
+            "SizeTB" = $volSizes["SizeTB"]
+            "Region" = $Region
             "AvailabilityZone" = $volumeDetails.AvailabilityZone
             "VolumeType" = $volumeDetails.VolumeType
             "State" = $volumeDetails.State
@@ -1035,24 +1043,25 @@ function getAWSData($cred) {
             }
           }
 
-          $ec2AttachedVolList.Add($attachedVolObj) | Out-Null
+          $ec2AttachedVolResult.Add($attachedVolObj) | Out-Null
         } catch {
-          Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+          Write-Host "Failed to get size of EC2 Volume $($vol.VolumeId) in $($ec2.InstanceId) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
       }
 
+      $instSizes = ConvertTo-SizeUnits -Value $volSize -Prefix "Size" -InputUnit GiB -GBPrecision 3
       $ec2obj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "InstanceId" = $ec2.InstanceId
         "Name" = $ec2InstanceName
         "Volumes" = $volumes.count
-        "SizeGiB" = $volSize
-        "SizeTiB" = [math]::round($($volSize / 1024), 4)
-        "SizeGB" = [math]::round($($volSize * 1.073741824), 3)
-        "SizeTB" = [math]::round($($volSize * 0.001073741824), 4)
-        "Region" = $awsRegion
+        "SizeGiB" = $instSizes["SizeGiB"]
+        "SizeTiB" = $instSizes["SizeTiB"]
+        "SizeGB" = $instSizes["SizeGB"]
+        "SizeTB" = $instSizes["SizeTB"]
+        "Region" = $Region
         "InstanceType" = $ec2.InstanceType
         "Platform" = $ec2.Platform
         "ProductCode" = $ec2.ProductCodes.ProductCodeType
@@ -1072,58 +1081,78 @@ function getAWSData($cred) {
         }
       }
 
-      $ec2List.Add($ec2obj) | Out-Null
+      $ec2InstanceResult.Add($ec2obj) | Out-Null
     }
     Write-Progress -ID 4 -Activity "Processing EC2 Instance: $($ec2.InstanceId)" -Completed
 
     $ec2UnattachedVolumes = $null
     try{
-      $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $cred -region $awsRegion -Filter @{ Name="status"; Values="available" } -ErrorAction Stop)
+      $ec2UnattachedVolumes = (Get-EC2Volume  -Credential $Credential -region $Region -Filter @{ Name="status"; Values="available" } -ErrorAction Stop)
     } catch {
-      Write-Host "Failed to get EC2 Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get EC2 Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-#Counter for unattached volumes. Do we need to include these?
+
     $counter = 1
     foreach ($ec2UnattachedVolume in $ec2UnattachedVolumes) {
       Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Status "Unattached EC2 volume $($counter) of $($ec2UnattachedVolumes.Count)" -PercentComplete (($counter / $ec2UnattachedVolumes.Count) * 100)
       $counter++
-      $volSize = 0
 
+      $unVolSizes = ConvertTo-SizeUnits -Value $ec2UnattachedVolume.Size -Prefix "Size" -InputUnit GiB -GBPrecision 3
       $ec2UnVolObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "VolumeId" = $ec2UnattachedVolume.VolumeId
         "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
-        "SizeGiB" = $ec2UnattachedVolume.Size
-        "SizeTiB" = [math]::round($($ec2UnattachedVolume.Size / 1024), 4)
-        "SizeGB" = [math]::round($($ec2UnattachedVolume.Size * 1.073741824), 3)
-        "SizeTB" = [math]::round($($ec2UnattachedVolume.Size * 0.001073741824), 4)
-        "Region" = $awsRegion
+        "SizeGiB" = $unVolSizes["SizeGiB"]
+        "SizeTiB" = $unVolSizes["SizeTiB"]
+        "SizeGB" = $unVolSizes["SizeGB"]
+        "SizeTB" = $unVolSizes["SizeTB"]
+        "Region" = $Region
         "VolumeType" = $ec2UnattachedVolume.VolumeType
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
 
-      foreach ($tag in $ec2UnattachedVolume.Tags) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $ec2UnattachedVolume.Tags) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
-      $ec2UnattachedVolList.Add($ec2UnVolObj) | Out-Null
+      $ec2UnattachedVolResult.Add($ec2UnVolObj) | Out-Null
       Write-Progress -ID 5 -Activity "Processing unattached EC2 volume: $($ec2UnattachedVolume.VolumeId)" -Completed
     }
-    
+
+    return @{
+      Instances = $ec2InstanceResult
+      AttachedVolumes = $ec2AttachedVolResult
+      UnattachedVolumes = $ec2UnattachedVolResult
+      UnattachedVolumesRaw = $ec2UnattachedVolumes
+    }
+}
+
+function Get-AWSRDSInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        [datetime]$UtcStartTime,
+        [datetime]$UtcEndTime
+    )
+
+    $rdsResult = New-Object collections.arraylist
+
     $rdsDBs = $null
     try{
-      $rdsDBs = Get-RDSDBInstance -Credential $cred -region $awsRegion -ErrorAction Stop
+      $rdsDBs = Get-RDSDBInstance -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get RDS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get RDS Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-#Ingest RDS Databases
+
     $counter = 1
     foreach ($rds in $rdsDBs) {
       Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
@@ -1132,16 +1161,17 @@ function getAWSData($cred) {
         Write-Debug "Skipping Aurora database $($rds.DBInstanceIdentifier)"
         continue
       }
+      $rdsSizes = ConvertTo-SizeUnits -Value $rds.AllocatedStorage -Prefix "Size" -InputUnit GiB -GBPrecision 3
       $rdsObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "DBName" = $rds.DBName
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
-        "SizeGiB" = $rds.AllocatedStorage
-        "SizeTiB" = [math]::round($($rds.AllocatedStorage / 1024), 4)
-        "SizeGB" = [math]::round($($rds.AllocatedStorage * 1.073741824), 3)
-        "SizeTB" = [math]::round($($rds.AllocatedStorage * 0.001073741824), 4)
-        "Region" = $awsRegion
+        "SizeGiB" = $rdsSizes["SizeGiB"]
+        "SizeTiB" = $rdsSizes["SizeTiB"]
+        "SizeGB" = $rdsSizes["SizeGB"]
+        "SizeTB" = $rdsSizes["SizeTB"]
+        "Region" = $Region
         "InstanceType" = $rds.DBInstanceClass
         "Engine" = $rds.Engine
         "EngineVersion" = $rds.EngineVersion
@@ -1153,22 +1183,22 @@ function getAWSData($cred) {
         "StorageType" = $rds.StorageType
       }
 
-      foreach ($tag in $rds.TagList) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $rdsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $rds.TagList) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $rdsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
-      $rdsList.Add($rdsObj) | Out-Null
+      $rdsResult.Add($rdsObj) | Out-Null
     }
     Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Completed
 
     try {
-      $rdsDBClusters = Get-RDSDBCluster -Credential $cred -region $awsRegion -ErrorAction Stop
+      $rdsDBClusters = Get-RDSDBCluster -Credential $Credential -region $Region -ErrorAction Stop
     }
     catch {
-      Write-Host "Failed to get DB Clusters Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get DB Clusters Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
@@ -1192,28 +1222,29 @@ function getAWSData($cred) {
       $storageGiB = 0
       try {
         $metrics = Get-CWMetricStatisticsForAllVersion -MetricName VolumeBytesUsed `
-                    -Namespace "AWS/RDS" -Dimension $dimensions -StartTime $utcStartTime `
-                    -EndTime $utcEndTime -Period 600 -Statistics Maximum `
-                    -Region $awsRegion -Credential $cred -ErrorAction Stop
+                    -Namespace "AWS/RDS" -Dimension $dimensions -StartTime $UtcStartTime `
+                    -EndTime $UtcEndTime -Period 600 -Statistics Maximum `
+                    -Region $Region -Credential $Credential -ErrorAction Stop
         $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
         $storageGiB = [math]::round($($storageUsed.Maximum / 1073741824), 4)
       }
       catch {
-        Write-Host "Failed to get AuroraDB storage Info for $($cluster.DBClusterIdentifier) in region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+        Write-Host "Failed to get AuroraDB storage Info for $($cluster.DBClusterIdentifier) in region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
         $storageGiB = $rds.AllocatedStorage
       }
 
+      $clusterSizes = ConvertTo-SizeUnits -Value $storageGiB -Prefix "Size" -InputUnit GiB -GBPrecision 3
       $clusterObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "DBName" = $cluster.DatabaseName
         "DBInstanceIdentifier" = $cluster.DBClusterIdentifier
-        "SizeGiB" = $storageGiB
-        "SizeTiB" = [math]::round($($storageGiB / 1024), 4)
-        "SizeGB" = [math]::round($($storageGiB * 1.073741824), 3)
-        "SizeTB" = [math]::round($($storageGiB * 0.001073741824), 4)
-        "Region" = $awsRegion
+        "SizeGiB" = $clusterSizes["SizeGiB"]
+        "SizeTiB" = $clusterSizes["SizeTiB"]
+        "SizeGB" = $clusterSizes["SizeGB"]
+        "SizeTB" = $clusterSizes["SizeTB"]
+        "Region" = $Region
         "InstanceType" = $cluster.DBClusterInstanceClass
         "Engine" = $cluster.Engine
         "EngineVersion" = $cluster.EngineVersion
@@ -1225,122 +1256,150 @@ function getAWSData($cred) {
         "StorageType" = $cluster.StorageType
       }
 
-      foreach ($tag in $cluster.TagList) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $clusterObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $cluster.TagList) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $clusterObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
       $clusterList.Add($clusterObj) | Out-Null
     }
 
-    $rdsList.AddRange($clusterList)
+    $rdsResult.AddRange($clusterList)
+
+    return ,$rdsResult
+}
+
+function Get-AWSEFSInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $efsResult = New-Object collections.arraylist
 
     $efsListFromAPI = $null
     try{
-      $efsListFromAPI = Get-EFSFileSystem -Credential $cred -region $awsRegion -ErrorAction Stop
+      $efsListFromAPI = Get-EFSFileSystem -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get EFS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get EFS Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
-    }    
-#Ingest EFS Filesystems
+    }
     $counter = 1
     foreach ($efs in $efsListFromAPI) {
       Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Status "EFS file system $($counter) of $($efsListFromAPI.Count)" -PercentComplete (($counter / $efsListFromAPI.Count) * 100)
       $counter++
+
+      $efsSizes = ConvertTo-SizeUnits -Value $efs.SizeInBytes.Value -Prefix "Size" -InputUnit Bytes
       $efsObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "FileSystemId" = $efs.FileSystemId
         "FileSystemProtection" = $efs.FileSystemProtection.ReplicationOverwriteProtection.Value
         "Name" = $efs.Name
         "SizeInBytes" = $efs.SizeInBytes.Value
-        "SizeGiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824), 4)
-        "SizeTiB" = [math]::round($($efs.SizeInBytes.Value / 1073741824 / 1024), 4)
-        "SizeGB" = [math]::round($($efs.SizeInBytes.Value / 1000000000), 4)
-        "SizeTB" = [math]::round($($efs.SizeInBytes.Value / 1000000000000), 4)
+        "SizeGiB" = $efsSizes["SizeGiB"]
+        "SizeTiB" = $efsSizes["SizeTiB"]
+        "SizeGB" = $efsSizes["SizeGB"]
+        "SizeTB" = $efsSizes["SizeTB"]
         "NumberOfMountTargets" = $efs.NumberOfMountTargets
         "OwnerId" = $efs.OwnerId
         "PerformanceMode" = $efs.PerformanceMode
         "ProvisionedThroughputInMibps" = $efs.ProvisionedThroughputInMibps
         "DBInstanceIdentifier" = $efs.DBInstanceIdentifier
-        "Region" = $awsRegion
+        "Region" = $Region
         "ThroughputMode" = $efs.ThroughputMode
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
 
-      foreach ($tag in $efs.Tags) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $efsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $efs.Tags) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $efsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
-      $efsList.Add($efsObj) | Out-Null
+      $efsResult.Add($efsObj) | Out-Null
     }
     Write-Progress -ID 7 -Activity "Processing EFS file system: $($efs.Name)" -Completed
 
+    return ,$efsResult
+}
+
+function Get-AWSEKSInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $eksClusterResult = New-Object collections.arraylist
+    $eksNodeGroupResult = New-Object collections.arraylist
+
     $eksListFromAPI = $null
     try{
-      $eksListFromAPI = Get-EKSClusterList -Credential $cred -region $awsRegion -ErrorAction Stop
+      $eksListFromAPI = Get-EKSClusterList -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get EKS Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
-    }    
+    }
 #Ingest EKS clusters. Do we need this information at all?
     $counter = 1
     foreach ($eks in $eksListFromAPI) {
       try{
-        $eks = Get-EKSCluster -Credential $cred -region $awsRegion -Name $eks -ErrorAction Stop
+        $eks = Get-EKSCluster -Credential $Credential -region $Region -Name $eks -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
-      }  
+      }
       Write-Progress -ID 8 -Activity "Processing EKS Cluster: $($eks.Name)" -Status "EKS Cluster $($counter) of $($eksListFromAPI.Count)" -PercentComplete (($counter / $eksListFromAPI.Count) * 100)
       $counter++
       $eksObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
         "Name" = $eks.Name
         "Version" = $eks.Version
         "PlatformVersion" = $eks.PlatformVersion
         "Status" = $eks.Status.Value
         "Arn" = $eks.Arn
         "RoleArn" = $eks.RoleArn
-        "Region" = $awsRegion
+        "Region" = $Region
       }
       # Note: As of August 2024, cannot add EKS to a backup plan, hence those fields are not here
 
       $tagCounter = 0
       foreach($key in $eks.Tags.Keys){
         $value = $eks.Tags.Values.Split('\n')[$tagCounter]
-        $key = $key -replace '[^a-zA-Z0-9]', '_' 
-        $eksObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force 
+        $key = $key -replace '[^a-zA-Z0-9]', '_'
+        $eksObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force
         $tagCounter++
       }
-      
-      $eksList.Add($eksObj) | Out-Null
+
+      $eksClusterResult.Add($eksObj) | Out-Null
 
       $eksNodeGroupListFromCluster = $null
       try{
-        $eksNodeGroupListFromCluster = Get-EKSNodegroupList -Credential $cred -region $awsRegion -ClusterName $eks.Name -ErrorAction Stop
+        $eksNodeGroupListFromCluster = Get-EKSNodegroupList -Credential $Credential -region $Region -ClusterName $eks.Name -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get EKS Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get EKS Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
-      }    
+      }
 
       foreach($nodeGroup in $eksNodeGroupListFromCluster){
         try{
-          $eksNodeGroup = Get-EKSNodegroup -Credential $cred -region $awsRegion -ClusterName $eks.Name -NodegroupName $nodeGroup -ErrorAction Stop
+          $eksNodeGroup = Get-EKSNodegroup -Credential $Credential -region $Region -ClusterName $eks.Name -NodegroupName $nodeGroup -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+          Write-Host "Failed to get EKS node group for node group $($nodeGroup.NodegroupName) in cluster $($eks.Name) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
-        }   
+        }
         $eksNodeGroupObj = [PSCustomObject] @{
-          "AwsAccountId" = $awsAccountInfo.Account
-          "AwsAccountAlias" = $awsAccountAlias
+          "AwsAccountId" = $AccountInfo.Account
+          "AwsAccountAlias" = $AccountAlias
           "NodegroupName" = $eksNodeGroup.NodegroupName
           "ClusterName" = $eksNodeGroup.ClusterName
           "DiskSize" = $eksNodeGroup.DiskSize
@@ -1351,28 +1410,44 @@ function getAWSData($cred) {
           "Status" = $eksNodeGroup.Status
           "ReleaseVersion" = $eksNodeGroup.ReleaseVersion
           "Version" = $eksNodeGroup.Version
-          "Region" = $awsRegion
+          "Region" = $Region
         }
 
         $tagCounter = 0
         foreach($key in $eksNodeGroup.Tags.Keys){
           $value = $eksNodeGroup.Tags.Values.Split('\n')[$tagCounter]
-          $key = $key -replace '[^a-zA-Z0-9]', '_' 
-          $eksNodeGroupObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force  
+          $key = $key -replace '[^a-zA-Z0-9]', '_'
+          $eksNodeGroupObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force
           $tagCounter++
         }
-  
-        $eksNodeGroupList.Add($eksNodeGroupObj) | Out-Null
+
+        $eksNodeGroupResult.Add($eksNodeGroupObj) | Out-Null
       }
 
     }
     Write-Progress -ID 8 -Activity "Processing EKS Cluster: $($eks.Name)" -Completed
-    
+
+    return @{ Clusters = $eksClusterResult; NodeGroups = $eksNodeGroupResult }
+}
+
+function Get-AWSFSxInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $UtcStartTime,
+        $UtcEndTime
+    )
+
+    $fsxFileSystemResult = New-Object collections.arraylist
+    $fsxVolumeResult = New-Object collections.arraylist
+
     $fsxFileSystemListFromAPI = $null
     try{
-      $fsxFileSystemListFromAPI = Get-FSXFileSystem -Credential $cred -region $awsRegion -ErrorAction Stop
+      $fsxFileSystemListFromAPI = Get-FSXFileSystem -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get FSX File System Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get FSX File System Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 #Ingest FSX File systems
@@ -1380,10 +1455,12 @@ function getAWSData($cred) {
     foreach ($fileSystem in $fsxFileSystemListFromAPI) {
       Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Status "FSx file system $($counter) of $($fsxFileSystemListFromAPI.Count)" -PercentComplete (($counter / $fsxFileSystemListFromAPI.Count) * 100)
       $counter++
+
+      $fsxCapSizes = ConvertTo-SizeUnits -Value $fileSystem.StorageCapacity -Prefix "StorageCapacity" -InputUnit GiB
       $fsxObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
         "FileSystemId" = $filesystem.FileSystemId
         "FileSystemDNSName" = $filesystem.DNSName
         "FileSystemType" = $filesystem.FileSystemType.Value
@@ -1396,10 +1473,10 @@ function getAWSData($cred) {
         "LustreType" = ($null -ne $filesystem.LustreConfiguration)
         "OpenZFSType" = ($null -ne $filesystem.OpenZFSConfiguration)
         "StorageCapacityBytes" = $filesystem.StorageCapacity * 1073741824
-        "StorageCapacityGiB" = $filesystem.StorageCapacity
-        "StorageCapacityTiB" = [math]::round($($filesystem.StorageCapacity / 1024), 4)
-        "StorageCapacityGB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000), 4)
-        "StorageCapacityTB" = [math]::round($($filesystem.StorageCapacity * 1073741824 / 1000000000000), 4)
+        "StorageCapacityGiB" = $fsxCapSizes["StorageCapacityGiB"]
+        "StorageCapacityTiB" = $fsxCapSizes["StorageCapacityTiB"]
+        "StorageCapacityGB" = $fsxCapSizes["StorageCapacityGB"]
+        "StorageCapacityTB" = $fsxCapSizes["StorageCapacityTB"]
       }
       $namespace = "AWS/FSx"
       $dimensions = @(
@@ -1413,26 +1490,27 @@ function getAWSData($cred) {
         $metricName = "StorageUsed"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
         $maxStorageUsed = $storageUsed.Maximum
 
+        $usedSizes = ConvertTo-SizeUnits -Value $maxStorageUsed -Prefix "StorageUsed" -InputUnit Bytes
         $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedBytes" -Value $maxStorageUsed -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGiB" -Value $usedSizes["StorageUsedGiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTiB" -Value $usedSizes["StorageUsedTiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedGB" -Value $usedSizes["StorageUsedGB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "StorageUsedTB" -Value $usedSizes["StorageUsedTB"] -Force
 
       } elseif($fsxObj.WindowsType -eq $true){
         $metricName = "StorageCapacityUtilization"
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $storageCapacityUtil = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
@@ -1444,24 +1522,24 @@ function getAWSData($cred) {
         # Getting Sum instead of Maximum for these statistics as Maximum is max for any disk,
         # whereas sum sums the space across all disks
         $metricName = "PhysicalDiskUsage"
-        
+
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $physicalDiskUsage = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
         $maxPhysicalDiskUsage = $storageUsed.Sum
 
         $metricName = "LogicalDiskUsage"
-        
+
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $logicalDiskUsage = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
@@ -1470,67 +1548,71 @@ function getAWSData($cred) {
         $metricName = "FreeDataStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Sum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
 #        $freeDataStorageCapacity = $metrics.Datapoints | Sort-Object -Property Sum -Descending | Select-Object -Index 0
         $minFreeDataStorageCapacity = $storageUsed.Sum
 
+        $physicalSizes = ConvertTo-SizeUnits -Value $maxPhysicalDiskUsage -Prefix "PhysicalDiskUsage" -InputUnit Bytes
         $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageBytes" -Value $maxPhysicalDiskUsage -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTiB" -Value $([math]::round($($maxPhysicalDiskUsage / 1073741824 / 1024), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTB" -Value $([math]::round($($maxPhysicalDiskUsage / 1000000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGiB" -Value $physicalSizes["PhysicalDiskUsageGiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTiB" -Value $physicalSizes["PhysicalDiskUsageTiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageGB" -Value $physicalSizes["PhysicalDiskUsageGB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "PhysicalDiskUsageTB" -Value $physicalSizes["PhysicalDiskUsageTB"] -Force
 
+        $logicalSizes = ConvertTo-SizeUnits -Value $maxLogicalDiskUsage -Prefix "LogicalDiskUsage" -InputUnit Bytes
         $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageBytes" -Value $maxLogicalDiskUsage -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTiB" -Value $([math]::round($($maxLogicalDiskUsage / 1073741824 / 1024), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTB" -Value $([math]::round($($maxLogicalDiskUsage / 1000000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGiB" -Value $logicalSizes["LogicalDiskUsageGiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTiB" -Value $logicalSizes["LogicalDiskUsageTiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageGB" -Value $logicalSizes["LogicalDiskUsageGB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "LogicalDiskUsageTB" -Value $logicalSizes["LogicalDiskUsageTB"] -Force
 
+        $freeSizes = ConvertTo-SizeUnits -Value $minFreeDataStorageCapacity -Prefix "FreeDataStorageCapacity" -InputUnit Bytes
         $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityBytes" -Value $minFreeDataStorageCapacity -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTiB" -Value $([math]::round($($minFreeDataStorageCapacity / 1073741824 / 1024), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTB" -Value $([math]::round($($minFreeDataStorageCapacity / 1000000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGiB" -Value $freeSizes["FreeDataStorageCapacityGiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTiB" -Value $freeSizes["FreeDataStorageCapacityTiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityGB" -Value $freeSizes["FreeDataStorageCapacityGB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "FreeDataStorageCapacityTB" -Value $freeSizes["FreeDataStorageCapacityTB"] -Force
 
       } elseif($fsxObj.OpenZFSType -eq $true) {
         $metricName = "UsedStorageCapacity"
         $metrics = $null
         try{
-          $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+          $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
         } catch {
-          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+          Write-Host "Failed to get FSX FileSystem $($filesystem.FileSystemId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
         $maxStorageUsed = $storageUsed.Maximum
 
+        $usedCapSizes = ConvertTo-SizeUnits -Value $maxStorageUsed -Prefix "UsedStorageCapacity" -InputUnit Bytes
         $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityBytes" -Value $maxStorageUsed -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGiB" -Value $([math]::round($($maxStorageUsed / 1073741824), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTiB" -Value $([math]::round($($maxStorageUsed / 1073741824 / 1024), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGB" -Value $([math]::round($($maxStorageUsed / 1000000000), 4)) -Force
-        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTB" -Value $([math]::round($($maxStorageUsed / 1000000000000), 4)) -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGiB" -Value $usedCapSizes["UsedStorageCapacityGiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTiB" -Value $usedCapSizes["UsedStorageCapacityTiB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityGB" -Value $usedCapSizes["UsedStorageCapacityGB"] -Force
+        $fsxObj | Add-Member -MemberType NoteProperty -Name "UsedStorageCapacityTB" -Value $usedCapSizes["UsedStorageCapacityTB"] -Force
 
       }
 
-      foreach ($tag in $fileSystem.Tags) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $fileSystem.Tags) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
-      $fsxFileSystemList.Add($fsxObj) | Out-Null
+      $fsxFileSystemResult.Add($fsxObj) | Out-Null
     }
     Write-Progress -ID 9 -Activity "Processing FSx file system: $($fileSystem.DNSName)" -Completed
 
     $fsxListFromAPI = $null
     try{
-      $fsxListFromAPI = Get-FSXVolume -Credential $cred -region $awsRegion -ErrorAction Stop
+      $fsxListFromAPI = Get-FSXVolume -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get FSX Volume Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get FSX Volume Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
@@ -1552,9 +1634,9 @@ function getAWSData($cred) {
       )
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+        Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $storageUsed = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
@@ -1563,9 +1645,9 @@ function getAWSData($cred) {
       $metricName = "StorageCapacity"
       $metrics = $null
       try{
-        $metrics = Get-CWMetricStatisticsForAllVersion -Region $awsRegion -Credential $cred -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $utcStartTime -EndTime $utcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
+        $metrics = Get-CWMetricStatisticsForAllVersion -Region $Region -Credential $Credential -MetricName $metricName -Namespace $namespace -Dimensions $dimensions -StartTime $UtcStartTime -EndTime $UtcEndTime -Period 3600 -Statistics Maximum -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $awsRegion in account $($awsAccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
+        Write-Host "Failed to get FSX File Volume $($fsx.VolumeId) Size Info for region $Region in account $($AccountInfo.Account) using Cloud Watch Metrics" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $storageCapacity = $metrics.Datapoints | Sort-Object -Property Maximum -Descending | Select-Object -Index 0
@@ -1573,16 +1655,18 @@ function getAWSData($cred) {
 
       $filesystem = $null
       try{
-        $filesystem = Get-FSXFileSystem -Credential $cred -region $awsRegion -FileSystemId $fsx.FileSystemId -ErrorAction Stop
+        $filesystem = Get-FSXFileSystem -Credential $Credential -region $Region -FileSystemId $fsx.FileSystemId -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get FSX File System $($fsx.FileSystemId) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get FSX File System $($fsx.FileSystemId) Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
 
+      $volUsedSizes = ConvertTo-SizeUnits -Value $maxStorageUsed -Prefix "StorageUsed" -InputUnit Bytes
+      $volCapSizes = ConvertTo-SizeUnits -Value $maxStorageCapacity -Prefix "StorageCapacity" -InputUnit Bytes
       $fsxObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
         "FileSystemId" = $fsx.FileSystemId
         "FileSystemDNSName" = $filesystem.DNSName
         "FileSystemType" = $filesystem.FileSystemType
@@ -1594,77 +1678,48 @@ function getAWSData($cred) {
         "VolumeType" = $fsx.VolumeType
         "LifeCycle" = $fsx.LifeCycle
         "StorageUsedBytes" = $maxStorageUsed
-        "StorageUsedGiB" = [math]::round($($maxStorageUsed / 1073741824), 4)
-        "StorageUsedTiB" = [math]::round($($maxStorageUsed / 1073741824 / 1024), 4)
-        "StorageUsedGB" = [math]::round($($maxStorageUsed / 1000000000), 4)
-        "StorageUsedTB" = [math]::round($($maxStorageUsed / 1000000000000), 4)
+        "StorageUsedGiB" = $volUsedSizes["StorageUsedGiB"]
+        "StorageUsedTiB" = $volUsedSizes["StorageUsedTiB"]
+        "StorageUsedGB" = $volUsedSizes["StorageUsedGB"]
+        "StorageUsedTB" = $volUsedSizes["StorageUsedTB"]
         "StorageCapacityBytes" = $maxStorageCapacity
-        "StorageCapacityGiB" = [math]::round($($maxStorageCapacity / 1073741824), 4)
-        "StorageCapacityTiB" = [math]::round($($maxStorageCapacity / 1073741824 / 1024), 4)
-        "StorageCapacityGB" = [math]::round($($maxStorageCapacity / 1000000000), 4)
-        "StorageCapacityTB" = [math]::round($($maxStorageCapacity / 1000000000000), 4)
+        "StorageCapacityGiB" = $volCapSizes["StorageCapacityGiB"]
+        "StorageCapacityTiB" = $volCapSizes["StorageCapacityTiB"]
+        "StorageCapacityGB" = $volCapSizes["StorageCapacityGB"]
+        "StorageCapacityTB" = $volCapSizes["StorageCapacityTB"]
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
 
-      foreach ($tag in $fsx.Tags) { 
-        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_' 
-        if($key -ne "Name"){ 
-          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force 
-        } 
+      foreach ($tag in $fsx.Tags) {
+        $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+        if($key -ne "Name"){
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
       }
 
-      $fsxList.Add($fsxObj) | Out-Null
+      $fsxVolumeResult.Add($fsxObj) | Out-Null
     }
     Write-Progress -ID 10 -Activity "Processing FSx volume: $($fsx.VolumeId)" -Status "FSx volume $($counter) of $($fsxListFromAPI.Count)" -Completed
-#Start ingesting KMS key information
-    try{
-      $numberOfKMS = (Get-KMSKeyList -Region $awsRegion -ErrorAction Stop).Count
-      $keyObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
-        "Keys" = $numberOfKMS
-      }
-      $kmsList.Add($keyObj) | Out-Null
-    } catch{
-      Write-Host "Failed to get # of KMS keys for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
-#Start ingesting SecretsManager information
-    try{
-      $numberOfSecrets = (Get-SECSecretList -Region $awsRegion -ErrorAction Stop).Count
-      $secretsObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
-        "Secrets" = $numberOfSecrets
-      }
-      $secretsList.Add($secretsObj) | Out-Null
-    } catch{
-      Write-Host "Failed to get # of secrets for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
-  #Ingest SQS Queues
-    try{
-      $numberOfSQSQueues = (Get-SQSQueue -Region $awsRegion -ErrorAction Stop).Count
-      $sqsObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
-        "Queues" = $numberOfSQSQueues
-      }
-      $sqsList.Add($sqsObj) | Out-Null
-    } catch{
-      Write-Host "Failed to get # of SQS Queues for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
-#Ingest DynamoDB Databases
+
+    return @{ FileSystems = $fsxFileSystemResult; Volumes = $fsxVolumeResult }
+}
+
+function Get-AWSDynamoDBInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $ddbResult = New-Object collections.arraylist
+
     $ddbListFromAPI = $null
     try{
-      $ddbListFromAPI = Get-DDBTableList -Credential $cred -region $awsRegion -ErrorAction Stop
+      $ddbListFromAPI = Get-DDBTableList -Credential $Credential -region $Region -ErrorAction Stop
     } catch {
-      Write-Host "Failed to get DynamoDB Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get DynamoDB Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
@@ -1672,25 +1727,26 @@ function getAWSData($cred) {
 
       $ddbItem = $null
       try{
-        $ddbItem = Get-DDBTable -TableName $ddbName -Credential $cred -region $awsRegion -ErrorAction Stop
+        $ddbItem = Get-DDBTable -TableName $ddbName -Credential $Credential -region $Region -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get DynamoDB Table $($ddbName) Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get DynamoDB Table $($ddbName) Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
 
+      $ddbSizes = ConvertTo-SizeUnits -Value $ddbItem.TableSizeBytes -Prefix "TableSize" -InputUnit Bytes
       $ddbObj = [PSCustomObject] @{
-        "AwsAccountId" = $awsAccountInfo.Account
-        "AwsAccountAlias" = $awsAccountAlias
-        "Region" = $awsRegion
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
         "TableName" = $ddbItem.TableName
         "TableId" = $ddbItem.TableId
         "TableArn" = $ddbItem.TableArn
         "TableSizeBytes" = $ddbItem.TableSizeBytes
         "TableStatus" = $ddbItem.TableStatus.Value
-        "TableSizeGiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824), 4)
-        "TableSizeTiB" = [math]::round($($ddbItem.TableSizeBytes / 1073741824 / 1024), 4)
-        "TableSizeGB" = [math]::round($($ddbItem.TableSizeBytes/ 1000000000), 4)
-        "TableSizeTB" = [math]::round($($ddbItem.TableSizeBytes / 1000000000000), 4)
+        "TableSizeGiB" = $ddbSizes["TableSizeGiB"]
+        "TableSizeTiB" = $ddbSizes["TableSizeTiB"]
+        "TableSizeGB" = $ddbSizes["TableSizeGB"]
+        "TableSizeTB" = $ddbSizes["TableSizeTB"]
         "ItemCount" = $ddbItem.ItemCount
         "DeletionProtectionEnabled" = $ddbItem.DeletionProtectionEnabled
         "GlobalTableVersion" = $ddbItem.GlobalTableVersion
@@ -1702,26 +1758,103 @@ function getAWSData($cred) {
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
-      $ddbList.add($ddbObj) | Out-Null
+      $ddbResult.add($ddbObj) | Out-Null
 
     }
+
+    return ,$ddbResult
+}
+
+function Get-AWSSimpleServiceCounts {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $kmsObj = $null
+    $secretsObj = $null
+    $sqsObj = $null
+
+#Start ingesting KMS key information
+    try{
+      $numberOfKMS = (Get-KMSKeyList -Region $Region -ErrorAction Stop).Count
+      $kmsObj = [PSCustomObject] @{
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
+        "Keys" = $numberOfKMS
+      }
+    } catch{
+      Write-Host "Failed to get # of KMS keys for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+#Start ingesting SecretsManager information
+    try{
+      $numberOfSecrets = (Get-SECSecretList -Region $Region -ErrorAction Stop).Count
+      $secretsObj = [PSCustomObject] @{
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
+        "Secrets" = $numberOfSecrets
+      }
+    } catch{
+      Write-Host "Failed to get # of secrets for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+  #Ingest SQS Queues
+    try{
+      $numberOfSQSQueues = (Get-SQSQueue -Region $Region -ErrorAction Stop).Count
+      $sqsObj = [PSCustomObject] @{
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Region" = $Region
+        "Queues" = $numberOfSQSQueues
+      }
+    } catch{
+      Write-Host "Failed to get # of SQS Queues for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    return @{ KMS = $kmsObj; Secrets = $secretsObj; SQS = $sqsObj }
+}
+
+function Get-AWSBackupPlanInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $EC2List,
+        $EC2UnattachedVolumesRaw,
+        $EC2AttachedVolList,
+        $RDSList,
+        $EFSList,
+        $FSxList,
+        $S3List,
+        $DDBList
+    )
+
+    $backupPlanResult = New-Object collections.arraylist
+
 #Ingest AWS Backup Plans and evaluate protected resources
     $BackupPlans = $null
     try{
-      $BackupPlans = Get-BAKBackupPlanList -Credential $cred -region $awsRegion -ErrorAction Stop;
-      
+      $BackupPlans = Get-BAKBackupPlanList -Credential $Credential -region $Region -ErrorAction Stop;
+
     } catch {
-      Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Failed to get Backup Plans Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 #Custom Object for Protected Backup Objects
 <# $protectedBAKobjs = [PSCustomObject] @{
-  "AwsAccountId" = $awsAccountInfo.Account
-  "AwsAccountAlias" = $awsAccountAlias
+  "AwsAccountId" = $AccountInfo.Account
+  "AwsAccountAlias" = $AccountAlias
   "ResourceName" = $s3Bucket
   "Resource" = "undefined"
   "ResourceType" = "undefined"
-  "Region" = $awsRegion
+  "Region" = $Region
   "RuleName" = "undefined"
   "BackupPlans" = ""
   "BackupVault" = "Default"
@@ -1733,20 +1866,20 @@ $protectedBAKobjs = @();
       Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
       $counter++
       #Traverse Backup Vaults for protected items
-      $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId -Credential $cred -region $awsRegion ).BackupPlan.Rules;
+      $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId -Credential $Credential -region $Region ).BackupPlan.Rules;
       foreach($rule in $backupPlanRules) {
-        $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName -Credential $cred -region $awsRegion ;
-        $protectedResourceList = Get-BAKProtectedResourceList -Credential $cred -region $awsRegion  | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
+        $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
+        $protectedResourceList = Get-BAKProtectedResourceList -Credential $Credential -region $Region  | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
         #add resource to array .resourceName, .resourcetype
         foreach($resource in $protectedResourceList) {
-          $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName -Credential $cred -region $awsRegion ;
+          $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
           $protectedBAKobjs += [PSCustomObject]@{
-            "AWSAccountId" = $awsAccountInfo.Account
-            "AWSAccountAlias" = $awsAccountAlias
+            "AWSAccountId" = $AccountInfo.Account
+            "AWSAccountAlias" = $AccountAlias
             "ResourceName" = $resource.ResourceName
             "Resource" = $resource.resourceArn
             "ResourceType" = $resource.ResourceType
-            "Region" = $awsRegion
+            "Region" = $Region
             "RuleName" = $rule.RuleName
             "BackupPlans" = $plan.BackupPlanName
             "BackupVault" = $rule.TargetBackupVaultName
@@ -1765,17 +1898,17 @@ $protectedBAKobjs = @();
 
       #Continue remaineder of primary script
       try{
-        $BackupPlanObject = (Get-BAKBackupPlan -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+        $BackupPlanObject = (Get-BAKBackupPlan -Credential $Credential -region $Region -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
       } catch {
-        Write-Host "Failed to get Backup Plans $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get Backup Plans $($plan.BackupPlanId) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $BackupPlanObject | Add-Member -MemberType NoteProperty -Name "Resources" -Value @()
       $selections = $null
       try{
-        $selections = Get-BAKBackupSelectionList -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
+        $selections = Get-BAKBackupSelectionList -Credential $Credential -region $Region -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
       } catch {
-        Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $selectionCounter = 1
@@ -1783,9 +1916,9 @@ $protectedBAKobjs = @();
         Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Status "Backup Plan/Selection $($selectionCounter) of $($selections.Count)" -PercentComplete (($selectionCounter / $selections.Count) * 100)
         $selectionCounter++
         try{
-          $foundSelection = Get-BakBackupSelection -Credential $cred -region $awsRegion -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
+          $foundSelection = Get-BakBackupSelection -Credential $Credential -region $Region -BackupPlanId $plan.BackupPlanId -SelectionId $selection.SelectionId
         } catch {
-          Write-Host "Failed to get Backup Selection $($selection.SelectionId) for Plan $($plan.BackupPlanId) for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+          Write-Host "Failed to get Backup Selection $($selection.SelectionId) for Plan $($plan.BackupPlanId) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
           Write-Host "Error: $_" -ForeGroundColor Red
         }
         $resources = $foundSelection.BackupSelection.Resources
@@ -1798,9 +1931,9 @@ $protectedBAKobjs = @();
               switch ($EC2Id[0]) {
                 "instance" {
                   $instanceId = $EC2Id[1]
-                  foreach ($ec2Obj in $ec2List) {
+                  foreach ($ec2Obj in $EC2List) {
                     # Instance id will be fetched as * if all instances are backed up
-                    if (($ec2Obj.InstanceId -eq $instanceId -or "*" -eq $instanceId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
+                    if (($ec2Obj.InstanceId -eq $instanceId -or "*" -eq $instanceId) -and $Region -eq $ec2Obj.Region -and $AccountInfo.Account -eq $ec2Obj.AwsAccountId) {
                       if ("" -eq $ec2Obj.BackupPlans) {
                           $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
                       }
@@ -1814,9 +1947,9 @@ $protectedBAKobjs = @();
                 "volume" {
                   $volId = $EC2Id[1]
                   # Check unattached volumes
-                  foreach ($ec2Obj in $ec2UnattachedVolumes) {
+                  foreach ($ec2Obj in $EC2UnattachedVolumesRaw) {
                     # Volume id will be fetched as * if all ebs volumes are backed up
-                    if (($ec2Obj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $ec2Obj.Region -and $awsAccountInfo.Account -eq $ec2Obj.AwsAccountId) {
+                    if (($ec2Obj.VolumeId -eq $volId -or "*" -eq $volId) -and $Region -eq $ec2Obj.Region -and $AccountInfo.Account -eq $ec2Obj.AwsAccountId) {
                       if ("" -eq $ec2Obj.BackupPlans) {
                           $ec2Obj.BackupPlans = "$($plan.BackupPlanName)"
                       }
@@ -1827,8 +1960,8 @@ $protectedBAKobjs = @();
                     }
                   }
                   # Check attached volumes
-                  foreach ($attachedVolObj in $ec2AttachedVolList) {
-                    if (($attachedVolObj.VolumeId -eq $volId -or "*" -eq $volId) -and $awsRegion -eq $attachedVolObj.Region -and $awsAccountInfo.Account -eq $attachedVolObj.AwsAccountId) {
+                  foreach ($attachedVolObj in $EC2AttachedVolList) {
+                    if (($attachedVolObj.VolumeId -eq $volId -or "*" -eq $volId) -and $Region -eq $attachedVolObj.Region -and $AccountInfo.Account -eq $attachedVolObj.AwsAccountId) {
                       if ("" -eq $attachedVolObj.BackupPlans) {
                           $attachedVolObj.BackupPlans = "$($plan.BackupPlanName)"
                       }
@@ -1843,8 +1976,8 @@ $protectedBAKobjs = @();
             }
             "rds" {
                 $RDSId = ($resource -split ':')[6]
-                foreach ($rdsObj in $rdsList) {
-                  if (($rdsObj.DBInstanceIdentifier -eq $RDSId -or "*" -eq $RDSId) -and $awsRegion -eq $rdsObj.Region -and $awsAccountInfo.Account -eq $rdsObj.AwsAccountId) {
+                foreach ($rdsObj in $RDSList) {
+                  if (($rdsObj.DBInstanceIdentifier -eq $RDSId -or "*" -eq $RDSId) -and $Region -eq $rdsObj.Region -and $AccountInfo.Account -eq $rdsObj.AwsAccountId) {
                     if ("" -eq $rdsObj.BackupPlans) {
                         $rdsObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1854,11 +1987,11 @@ $protectedBAKobjs = @();
                     $rdsObj.InBackupPlan = $true
                   }
                 }
-            } 
+            }
             "elasticfilesystem" {
               $EFSId = ($resource -split '/')[1]
-                foreach ($efsObj in $efsList) {
-                  if (($efsObj.FileSystemId -eq $EFSId -or "*" -eq $EFSId) -and $awsRegion -eq $efsObj.Region -and $awsAccountInfo.Account -eq $efsObj.AwsAccountId) {
+                foreach ($efsObj in $EFSList) {
+                  if (($efsObj.FileSystemId -eq $EFSId -or "*" -eq $EFSId) -and $Region -eq $efsObj.Region -and $AccountInfo.Account -eq $efsObj.AwsAccountId) {
                     if ("" -eq $efsObj.BackupPlans) {
                         $efsObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1872,8 +2005,8 @@ $protectedBAKobjs = @();
             "fsx" {
               # arn:*:fsx:* in the case of 'all fsx's'
               if(($resource -split ':')[-1] -eq "*") {
-                foreach ($fsxObj in $fsxList) {
-                  if ($awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
+                foreach ($fsxObj in $FSxList) {
+                  if ($Region -eq $fsxObj.Region -and $AccountInfo.Account -eq $fsxObj.AwsAccountId) {
                     if ("" -eq $fsxObj.BackupPlans) {
                         $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1887,8 +2020,8 @@ $protectedBAKobjs = @();
                 $FSXInfo = ($resource -split '/')
                 $FileSystemId = $FSXInfo[1]
                 $VolumeId = $FSXInfo[2]
-                foreach ($fsxObj in $fsxList) {
-                  if ($fsxObj.VolumeId -eq $VolumeId -and $fsxObj.FileSystemId -eq $FileSystemId -and $awsRegion -eq $fsxObj.Region -and $awsAccountInfo.Account -eq $fsxObj.AwsAccountId) {
+                foreach ($fsxObj in $FSxList) {
+                  if ($fsxObj.VolumeId -eq $VolumeId -and $fsxObj.FileSystemId -eq $FileSystemId -and $Region -eq $fsxObj.Region -and $AccountInfo.Account -eq $fsxObj.AwsAccountId) {
                     if ("" -eq $fsxObj.BackupPlans) {
                         $fsxObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1903,8 +2036,8 @@ $protectedBAKobjs = @();
             "s3" {
               # arn:aws:s3:::* in the case of 'all s3's'
               if(($resource -split ':')[-1] -eq "*") {
-                foreach ($s3Obj in $s3List) {
-                  if ($awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
+                foreach ($s3Obj in $S3List) {
+                  if ($Region -eq $s3Obj.Region -and $AccountInfo.Account -eq $s3Obj.AwsAccountId) {
                     if ("" -eq $s3Obj.BackupPlans) {
                         $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1916,8 +2049,8 @@ $protectedBAKobjs = @();
                 }
               } else {
                 $S3Name = ($resource -split '/')[1]
-                foreach ($s3Obj in $s3List) {
-                  if ($s3Obj.BucketName -eq $S3Name -and $awsRegion -eq $s3Obj.Region -and $awsAccountInfo.Account -eq $s3Obj.AwsAccountId) {
+                foreach ($s3Obj in $S3List) {
+                  if ($s3Obj.BucketName -eq $S3Name -and $Region -eq $s3Obj.Region -and $AccountInfo.Account -eq $s3Obj.AwsAccountId) {
                     if ("" -eq $s3Obj.BackupPlans) {
                         $s3Obj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1931,8 +2064,8 @@ $protectedBAKobjs = @();
             }
             "dynamodb" {
               if(($resource -split ':')[-1] -eq "*") {
-                foreach ($ddbObj in $ddbList) {
-                  if ($awsRegion -eq $ddbObj.Region -and $awsAccountInfo.Account -eq $ddbObj.AwsAccountId) {
+                foreach ($ddbObj in $DDBList) {
+                  if ($Region -eq $ddbObj.Region -and $AccountInfo.Account -eq $ddbObj.AwsAccountId) {
                     if ("" -eq $ddbObj.BackupPlans) {
                         $ddbObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1944,8 +2077,8 @@ $protectedBAKobjs = @();
                 }
               } else {
                 $ddbName = ($resource -split '/')[1]
-                foreach ($ddbObj in $ddbList) {
-                  if ($ddbObj.BucketName -eq $ddbName -and $awsRegion -eq $ddbObj.Region -and $awsAccountInfo.Account -eq $ddbObj.AwsAccountId) {
+                foreach ($ddbObj in $DDBList) {
+                  if ($ddbObj.BucketName -eq $ddbName -and $Region -eq $ddbObj.Region -and $AccountInfo.Account -eq $ddbObj.AwsAccountId) {
                     if ("" -eq $ddbObj.BackupPlans) {
                         $ddbObj.BackupPlans = "$($plan.BackupPlanName)"
                     }
@@ -1961,66 +2094,217 @@ $protectedBAKobjs = @();
         }
       }
       Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Completed
-      $backupPlanList.Add($BackupPlanObject) | Out-Null
+      $backupPlanResult.Add($BackupPlanObject) | Out-Null
     }
-  } catch { 
-    Write-Host "Failed to query backup vaults for region $awsRegion";
-  }
-    Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Completed
-  }
-  
-  $filter = @{
-    Dimensions = @{
-        Key = "SERVICE"
-        Values = @("AWS Backup")
-    }
-  }
-
-  # Create a date interval for past 12 months
-  $startDate = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
-  $endDate = (Get-Date).ToString("yyyy-MM-dd")
-  $timePeriod = @{
-      Start = $startDate
-      End = $endDate
-  }
-
-  $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
-
-  $result = @{ResultsByTime = @()}
-  try{
-    $result = Get-CECostAndUsage `
-      -TimePeriod $timePeriod `
-      -Granularity MONTHLY `
-      -Metrics $metrics `
-      -Filter $filter -Credential $cred -Region $awsRegion -ErrorAction Stop
   } catch {
-    Write-Host "Failed to get Backup Plans Info for region $awsRegion in account $($awsAccountInfo.Account)" -ForeGroundColor Red
+    Write-Host "Failed to query backup vaults for region $Region";
+  }
+  Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Completed
+
+  return , $backupPlanResult
+}
+
+function Get-AWSBackupCosts {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $backupCostsResult = New-Object collections.arraylist
+
+    $filter = @{
+      Dimensions = @{
+          Key = "SERVICE"
+          Values = @("AWS Backup")
+      }
+    }
+
+    $startDate = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
+    $endDate = (Get-Date).ToString("yyyy-MM-dd")
+    $timePeriod = @{
+        Start = $startDate
+        End = $endDate
+    }
+
+    $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
+
+    $result = @{ResultsByTime = @()}
+    try{
+      $result = Get-CECostAndUsage `
+        -TimePeriod $timePeriod `
+        -Granularity MONTHLY `
+        -Metrics $metrics `
+        -Filter $filter -Credential $Credential -Region $Region -ErrorAction Stop
+    } catch {
+      Write-Host "Failed to get Backup cost info for account $($AccountInfo.Account)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    $counter = 1
+    foreach ($resultItem in $result.ResultsByTime) {
+      Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Status "Item $($counter) of $($result.ResultsByTime.Count)" -PercentComplete (($counter / $result.ResultsByTime.count) * 100)
+      $counter++
+      $monthCostObj = [PSCustomObject] @{
+        "AwsAccountId" = $AccountInfo.Account
+        "AwsAccountAlias" = $AccountAlias
+        "Time-Period-Start" = $resultItem.TimePeriod.Start
+        "Time-Period-End" = $resultItem.TimePeriod.End
+      }
+      foreach ($metric in $metrics) {
+          if ($metric -like "*Cost") {
+            $cost = "$" + "$([math]::round($resultItem.Total[$metric].Amount, 2))"
+          } else {
+            $cost = "$([math]::round($resultItem.Total[$metric].Amount, 3))"
+          }
+          $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
+      }
+      $backupCostsResult.Add($monthCostObj) | Out-Null
+    }
+    Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Completed
+
+    return , $backupCostsResult
+}
+
+# Orchestrator function
+function getAWSData($cred) {
+  # Set the regions that you want to get EC2 instance and volume details for
+  if ($Regions -ne '') {
+    [string[]]$awsRegions = $Regions.split(',')
+  }
+  else {
+    try {
+      Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
+      $awsRegions = Get-EC2Region @profileLocationOpt -Region $queryRegion -Credential $cred | Select-Object -ExpandProperty RegionName
+    } catch {
+      Write-Host "Failed to get EC2 Regions for profile name $awsProfile in region $queryRegion" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+  }
+
+  
+  Write-Host "Current identity:"  -ForegroundColor Green
+  Write-Debug "Profile name is $awsProfile and queryRegion name is $queryRegion"
+  try{
+    $awsAccountInfo = Get-STSCallerIdentity  -Credential $cred -Region $queryRegion -ErrorAction Stop
+  } catch {
+    Write-Host "Failed to get AWS Account Info for region $queryRegion for profile name $awsProfile" -ForeGroundColor Red
+    Write-Host "Error: $_" -ForeGroundColor Red
+  }
+  $awsAccountInfo | format-table
+  try{
+    $awsAccountAlias = Get-IAMAccountAlias -Credential $cred -Region $queryRegion -ErrorAction Stop
+  } catch {
+    Write-Host "Failed to get IAM Account Alias Info for region $queryRegion for profile name $awsProfile in account $($awsAccountInfo.Account)" -ForeGroundColor Red
     Write-Host "Error: $_" -ForeGroundColor Red
   }
 
-  $counter = 1
-  foreach ($resultItem in $result.ResultsByTime) {
-    Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Status "Item $($counter) of $($result.ResultsByTime.Count)" -PercentComplete (($counter / $result.ResultsByTime.count) * 100)
-    $counter++
-    $monthCostObj = [PSCustomObject] @{
-      "AwsAccountId" = $awsAccountInfo.Account
-      "AwsAccountAlias" = $awsAccountAlias
-      "Time-Period-Start" = $resultItem.TimePeriod.Start
-      "Time-Period-End" = $resultItem.TimePeriod.End
-    }
-    foreach ($metric in $metrics) {
-        if ($metric -like "*Cost") {
-          $cost = "$" + "$([math]::round($resultItem.Total[$metric].Amount, 2))"
-        } else {
-          $cost = "$([math]::round($resultItem.Total[$metric].Amount, 3))"
-        }
-        $monthCostObj | Add-Member -MemberType NoteProperty -Name "AWSBackup${metric}" -Value "$cost"
-    }
-    $backupCostsList.Add($monthCostObj) | Out-Null
+  # Check for Storage Lens configurations with CloudWatch publishing enabled (account-level check)
+  # This is done ONCE per account across ALL regions.
+  # Storage Lens dashboards can be in any region but monitor buckets across all regions
+  $storageLensConfigsWithCloudWatch = Get-AWSStorageLensConfigs -Credential $cred -AccountInfo $awsAccountInfo -Regions $awsRegions
+
+  if ($storageLensConfigsWithCloudWatch.Count -eq 0) {
+    Write-Host "No Storage Lens configuration with CloudWatch publishing found for account $($awsAccountInfo.Account). CurrentVersion storage and object count details will not be collected." -ForegroundColor Yellow
+  } else {
+    Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
   }
-  Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Completed 
+
+  # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
+  $awsRegionCounter = 1
+  foreach ($awsRegion in $awsRegions) {
+    Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Status "Region $($awsRegionCounter) of $($awsRegions.Count)" -PercentComplete (($awsRegionCounter / $awsRegions.Count) * 100)
+    $awsRegionCounter++
+    # Collect S3 inventory for this region
+    $s3SkipTagsParam = @{}
+    if ($SkipBucketTags) { $s3SkipTagsParam['SkipBucketTags'] = $true }
+    $s3Result = Get-AWSS3Inventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias -StorageLensConfigs $storageLensConfigsWithCloudWatch `
+        -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime @s3SkipTagsParam
+    if ($null -ne $s3Result) {
+      foreach ($s3Item in $s3Result) { $s3List.Add($s3Item) | Out-Null }
+    }
+
+    # Collect EC2 inventory for this region
+    $ec2Result = Get-AWSEC2Inventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    $ec2UnattachedVolumesRaw = $null
+    if ($null -ne $ec2Result) {
+      foreach ($inst in $ec2Result.Instances) { $ec2List.Add($inst) | Out-Null }
+      foreach ($vol in $ec2Result.AttachedVolumes) { $ec2AttachedVolList.Add($vol) | Out-Null }
+      foreach ($uvol in $ec2Result.UnattachedVolumes) { $ec2UnattachedVolList.Add($uvol) | Out-Null }
+      $ec2UnattachedVolumesRaw = $ec2Result.UnattachedVolumesRaw
+    }
+
+    # Collect RDS inventory for this region
+    $rdsResult = Get-AWSRDSInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime
+    if ($null -ne $rdsResult) {
+      foreach ($rdsItem in $rdsResult) { $rdsList.Add($rdsItem) | Out-Null }
+    }
+
+    # Collect EFS inventory for this region
+    $efsResult = Get-AWSEFSInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $efsResult) {
+      foreach ($efsItem in $efsResult) { $efsList.Add($efsItem) | Out-Null }
+    }
+
+    # Collect EKS inventory for this region
+    $eksResult = Get-AWSEKSInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $eksResult) {
+      foreach ($eksItem in $eksResult.Clusters) { $eksList.Add($eksItem) | Out-Null }
+      foreach ($ngItem in $eksResult.NodeGroups) { $eksNodeGroupList.Add($ngItem) | Out-Null }
+    }
+
+    # Collect FSx inventory for this region
+    $fsxResult = Get-AWSFSxInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias -UtcStartTime $utcStartTime -UtcEndTime $utcEndTime
+    if ($null -ne $fsxResult) {
+      foreach ($fsxFsItem in $fsxResult.FileSystems) { $fsxFileSystemList.Add($fsxFsItem) | Out-Null }
+      foreach ($fsxVolItem in $fsxResult.Volumes) { $fsxList.Add($fsxVolItem) | Out-Null }
+    }
+
+    # Collect simple service counts for this region
+    $simpleResult = Get-AWSSimpleServiceCounts -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $simpleResult) {
+      if ($null -ne $simpleResult.KMS) { $kmsList.Add($simpleResult.KMS) | Out-Null }
+      if ($null -ne $simpleResult.Secrets) { $secretsList.Add($simpleResult.Secrets) | Out-Null }
+      if ($null -ne $simpleResult.SQS) { $sqsList.Add($simpleResult.SQS) | Out-Null }
+    }
+
+    # Collect DynamoDB inventory for this region
+    $ddbResult = Get-AWSDynamoDBInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $ddbResult) {
+      foreach ($ddbItem in $ddbResult) { $ddbList.Add($ddbItem) | Out-Null }
+    }
+
+    # Collect backup plan inventory for this region
+    $backupPlanResult = Get-AWSBackupPlanInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias -EC2List $ec2List -EC2UnattachedVolumesRaw $ec2UnattachedVolumesRaw `
+        -EC2AttachedVolList $ec2AttachedVolList -RDSList $rdsList -EFSList $efsList -FSxList $fsxList `
+        -S3List $s3List -DDBList $ddbList
+    if ($null -ne $backupPlanResult) {
+      foreach ($bpItem in $backupPlanResult) { $backupPlanList.Add($bpItem) | Out-Null }
+    }
+  }
+  Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
+
+  # Collect backup costs once per account (Cost Explorer API returns account-level data).
+  # Skip when region discovery yielded nothing — matches master's per-region loop, which
+  # would have iterated 0 times in this scenario and never made the call.
+  if ($awsRegions.Count -gt 0) {
+    $backupCostsResult = Get-AWSBackupCosts -Credential $cred -Region $awsRegions[0] -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $backupCostsResult) {
+      foreach ($bcItem in $backupCostsResult) { $backupCostsList.Add($bcItem) | Out-Null }
+    }
+  }
 }
-Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
 
 
 # Contains list of EC2 instances and RDS with capacity info
@@ -2499,30 +2783,6 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
     $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
   }
 
-function addTagsToAllObjectsInList($list) {
-  # Determine all unique tag keys
-  $allTagKeys = @{}
-  foreach ($obj in $list) {
-      $properties = $obj.PSObject.Properties
-      foreach ($property in $properties) {
-          if (-not $allTagKeys.ContainsKey($property.Name)) {
-              $allTagKeys[$property.Name] = $true
-          }
-      }
-  }
-  
-  $allTagKeys = $allTagKeys.Keys
-  
-  # Ensure each object has all possible tag keys
-  foreach ($obj in $list) {
-      foreach ($key in $allTagKeys) {
-          if (-not $obj.PSObject.Properties.Name.Contains($key)) {
-              $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
-          }
-      }
-  }
-}
-
 if ($Anonymize) {
   Write-Host
   Write-Host "Anonymizing..." -ForegroundColor Green
@@ -2568,13 +2828,13 @@ if ($Anonymize) {
           $newValue = $charSet[$counter % $base] + $newValue
           $counter = [math]::Floor($counter / $base)
       }
-      
+
       $paddedValue = $newValue.PadLeft(5, '0')
 
       return "$($anonField)-$($paddedValue)"
   }
 
-  function AnonymizeData {
+  function Invoke-Anonymization {
       param (
           [PSObject]$DataObject
       )
@@ -2604,23 +2864,23 @@ if ($Anonymize) {
                   $DataObject.$propertyName = $global:anonymizeDict[$originalValue]
                 }
               }
-          } elseif ($propertyName -like "Tag:*" -and $global:anonymizeTags) {
+          } elseif ($propertyName -like "$($script:tagPrefix)*" -and $global:anonymizeTags) {
             # Must anonymize both the tag name and value
 
             $tagValue = $DataObject.$propertyName
             $anonymizedTagKey = ""
 
-            $tagName = $propertyName.Substring(4)
+            $tagName = $propertyName.Substring($script:tagPrefixLength)
 
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
-                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue("TagName")
+                $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue($script:tagKeyAnonField)
             }
-            $anonymizedTagKey = 'Tag:' + $global:anonymizeDict["$tagName"]
+            $anonymizedTagKey = $script:tagPrefix + $global:anonymizeDict["$tagName"]
 
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
                 if (-not $global:anonymizeDict.ContainsKey("$($tagValue)")) {
-                    $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue("TagValue")#$anonymizedTagKey
+                    $global:anonymizeDict[$tagValue] = Get-NextAnonymizedValue($script:tagValueAnonField)#$anonymizedTagKey
                 }
                 $anonymizedTagValue = $global:anonymizeDict[$tagValue]
             }
@@ -2646,13 +2906,13 @@ if ($Anonymize) {
             }
           }
           elseif ($property.Value -is [PSObject]) {
-              $DataObject.$propertyName = AnonymizeData -DataObject $property.Value
+              $DataObject.$propertyName = Invoke-Anonymization -DataObject $property.Value
           }
           elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
               $anonymizedCollection = @()
               foreach ($item in $property.Value) {
                   if ($item -is [PSObject]) {
-                      $anonymizedItem = AnonymizeData -DataObject $item
+                      $anonymizedItem = Invoke-Anonymization -DataObject $item
                       $anonymizedCollection += $anonymizedItem
                   } else {
                       $anonymizedCollection += $item
@@ -2665,7 +2925,7 @@ if ($Anonymize) {
       return $DataObject
   }
 
-  function AnonymizeCollection {
+  function Invoke-CollectionAnonymization {
       param (
           [System.Collections.IEnumerable]$Collection
       )
@@ -2673,7 +2933,7 @@ if ($Anonymize) {
       $anonymizedCollection = @()
       foreach ($item in $Collection) {
           if ($item -is [PSObject]) {
-              $anonymizedItem = AnonymizeData -DataObject $item
+              $anonymizedItem = Invoke-Anonymization -DataObject $item
               $anonymizedCollection += $anonymizedItem
           } else {
               $anonymizedCollection += $item
@@ -2684,56 +2944,56 @@ if ($Anonymize) {
   }
 
   # Anonymize each list
-  $backupPlanList = AnonymizeCollection -Collection $backupPlanList
-  $backupCostsList = AnonymizeCollection -Collection $backupCostsList
-  $ddbList = AnonymizeCollection -Collection $ddbList
-  $ec2List = AnonymizeCollection -Collection $ec2List
-  $ec2AttachedVolList = AnonymizeCollection -Collection $ec2AttachedVolList
-  $ec2UnattachedVolList = AnonymizeCollection -Collection $ec2UnattachedVolList
-  $efsList = AnonymizeCollection -Collection $efsList
-  $eksList = AnonymizeCollection -Collection $eksList
-  $eksNodeGroupList = AnonymizeCollection -Collection $eksNodeGroupList
-  $fsxFileSystemList = AnonymizeCollection -Collection $fsxFileSystemList
-  $fsxList = AnonymizeCollection -Collection $fsxList
-  $kmsList = AnonymizeCollection -Collection $kmsList
-  $rdsList = AnonymizeCollection -Collection $rdsList
-  $s3List = AnonymizeCollection -Collection $s3List
-  $s3ListAg = AnonymizeCollection -Collection $s3ListAg
-  $secretsList = AnonymizeCollection -Collection $secretsList
-  $sqsList = AnonymizeCollection -Collection $sqsList
+  $backupPlanList = Invoke-CollectionAnonymization -Collection $backupPlanList
+  $backupCostsList = Invoke-CollectionAnonymization -Collection $backupCostsList
+  $ddbList = Invoke-CollectionAnonymization -Collection $ddbList
+  $ec2List = Invoke-CollectionAnonymization -Collection $ec2List
+  $ec2AttachedVolList = Invoke-CollectionAnonymization -Collection $ec2AttachedVolList
+  $ec2UnattachedVolList = Invoke-CollectionAnonymization -Collection $ec2UnattachedVolList
+  $efsList = Invoke-CollectionAnonymization -Collection $efsList
+  $eksList = Invoke-CollectionAnonymization -Collection $eksList
+  $eksNodeGroupList = Invoke-CollectionAnonymization -Collection $eksNodeGroupList
+  $fsxFileSystemList = Invoke-CollectionAnonymization -Collection $fsxFileSystemList
+  $fsxList = Invoke-CollectionAnonymization -Collection $fsxList
+  $kmsList = Invoke-CollectionAnonymization -Collection $kmsList
+  $rdsList = Invoke-CollectionAnonymization -Collection $rdsList
+  $s3List = Invoke-CollectionAnonymization -Collection $s3List
+  $s3ListAg = Invoke-CollectionAnonymization -Collection $s3ListAg
+  $secretsList = Invoke-CollectionAnonymization -Collection $secretsList
+  $sqsList = Invoke-CollectionAnonymization -Collection $sqsList
 }
 
 # Export to CSV
 Write-Host ""
 
-addTagsToAllObjectsInList($ec2List)
+Add-TagsToAllObjectsInList($ec2List)
 Write-Host "CSV file output to: $outputEc2Instance"  -ForegroundColor Green
 $ec2List | Export-CSV -path $outputEc2Instance
 
-addTagsToAllObjectsInList($ec2AttachedVolList)
+Add-TagsToAllObjectsInList($ec2AttachedVolList)
 Write-Host "CSV file output to: $outputEc2AttachedVolume"  -ForegroundColor Green
 $ec2AttachedVolList | Export-CSV -path $outputEc2AttachedVolume
 
-addTagsToAllObjectsInList($ec2UnattachedVolList)
+Add-TagsToAllObjectsInList($ec2UnattachedVolList)
 Write-Host "CSV file output to: $outputEc2UnattachedVolume"  -ForegroundColor Green
 $ec2UnattachedVolList | Export-CSV -path $outputEc2UnattachedVolume
 
-addTagsToAllObjectsInList($rdsList)
+Add-TagsToAllObjectsInList($rdsList)
 Write-Host "CSV file output to: $outputRDS"  -ForegroundColor Green
 $rdsList | Export-CSV -path $outputRDS
 
 Write-Host "CSV file output to: $outputS3"  -ForegroundColor Green
 $s3ListAg | Export-CSV -path $outputS3
 
-addTagsToAllObjectsInList($efsList)
+Add-TagsToAllObjectsInList($efsList)
 Write-Host "CSV file output to: $outputEFS"  -ForegroundColor Green
 $efsList | Export-CSV -path $outputEFS
 
-addTagsToAllObjectsInList($fsxFileSystemList)
+Add-TagsToAllObjectsInList($fsxFileSystemList)
 Write-Host "CSV file output to: $outputFSXfilesystems"  -ForegroundColor Green
 $fsxFileSystemList | Export-CSV -path $outputFSXfilesystems
 
-addTagsToAllObjectsInList($fsxList)
+Add-TagsToAllObjectsInList($fsxList)
 Write-Host "CSV file output to: $outputFSX"  -ForegroundColor Green
 $fsxList | Export-CSV -path $outputFSX
 
@@ -2904,16 +3164,7 @@ if($Anonymize){
   Stop-Transcript
 }
 
-# In the case of an early exit/error, this filters only the files which exist
-$existingFiles = $outputFiles | Where-Object { Test-Path $_ }
-
-# Compress the files into a zip archive
-Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
-
-# Remove the original files
-foreach ($file in $outputFiles) {
-    Remove-Item -Path $file -ErrorAction SilentlyContinue
-}
+Compress-SizingArchive -OutputFiles $outputFiles -ArchiveFile $archiveFile
 
 Write-Host
 Write-Host

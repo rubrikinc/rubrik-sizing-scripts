@@ -16,9 +16,9 @@ solution pricing and capacity planning.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `Get-AWSSizingInfo.ps1` | ~2,800 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, Backup, KMS, SQS, Secrets Manager |
-| `Get-AzureSizingInfo.ps1` | ~2,400 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
-| `Get-GCPSizingInfo.ps1` | ~800 | GCP sizing — GCE VMs, Disks, Cloud SQL, Spanner |
+| `Get-AWSSizingInfo.ps1` | ~3,200 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, Backup, KMS, SQS, Secrets Manager |
+| `Get-AzureSizingInfo.ps1` | ~2,600 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
+| `Get-GCPSizingInfo.ps1` | ~900 | GCP sizing — GCE VMs, Disks, Cloud SQL, Spanner |
 | `consolidate.ps1` | | Merges multi-region CSV outputs into single files |
 | `Get-AWSSizingInfo-Permissions.cft` | | CloudFormation template for cross-account IAM role |
 | `EXAMPLES/` | | Sample output CSV/JSON files |
@@ -70,23 +70,43 @@ Azure also supports skip flags: `-SkipAzureVMandManagedDisks`, `-SkipAzureSQLand
 
 ## Key Functions
 
-### AWS (`Get-AWSSizingInfo.ps1`)
+Each script has an orchestrator, workload collector functions, and shared utilities.
+
+**Workload collectors** follow a naming convention: `Get-<Provider><Service>Inventory`
+(e.g., `Get-AWSEC2Inventory`, `Get-AzureSQLInventory`, `Get-GCEInstancesAndDisks`).
+Each collector handles one service, returns its results to the orchestrator, and is
+independently testable.
+
+### Orchestrators
+
+| Script | Function | Purpose |
+|--------|----------|---------|
+| AWS | `getAWSData($cred)` | Loops regions, calls all AWS service collectors |
+| Azure | main script body | Loops subscriptions, calls all Azure service collectors |
+| GCP | main script body | Loops projects, calls all GCP service collectors |
+
+### Shared Utilities (present in all three scripts)
 
 | Function | Purpose |
 |----------|---------|
-| `getAWSData($cred)` | Main orchestration — loops regions, calls all service collectors |
-| `getEC2Inventory(...)` | EC2 instances + attached volumes with sizing calculations |
-| `Get-CWMetricStatisticsForAllVersion()` | Adapts CloudWatch API v4/v5 parameter differences at runtime |
-| `AnonymizeData($DataObject)` | Recursively redacts account IDs, ARNs, resource names, tags |
-| `addTagsToAllObjectsInList($list)` | Normalizes CSV schema (adds null columns for missing tags) |
+| `Add-TagsToAllObjectsInList($list)` | Normalizes CSV schema (adds null columns for missing tags) |
+| `ConvertTo-SizeUnits(...)` | Converts sizes between Bytes/GiB and GiB/TiB/GB/TB |
+| `Compress-SizingArchive(...)` | Creates ZIP archive and removes original files |
+| `Invoke-Anonymization($DataObject)` | Recursively redacts account IDs, ARNs, resource names, tags |
+| `Invoke-CollectionAnonymization($Collection)` | Applies anonymization across a collection |
 
-### Azure (`Get-AzureSizingInfo.ps1`)
+### AWS-specific Utilities
+
+| Function | Purpose |
+|----------|---------|
+| `Get-CWMetricStatisticsForAllVersion()` | Adapts CloudWatch API v4/v5 parameter differences at runtime |
+| `Get-AWSStorageLensConfigs(...)` | Account-level Storage Lens configuration discovery |
+
+### Azure-specific Utilities
 
 | Function | Purpose |
 |----------|---------|
 | `GenerateVMKey()` | Stable unique identifier for VM across subscriptions |
-| `Get-AzureFileSAs()` | Storage accounts and file share metadata |
-| `getAKSInventory()` | AKS clusters, node pools, resource configs |
 
 ## Output Files
 

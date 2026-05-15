@@ -51,13 +51,13 @@ This script can be run in one of two ways:
         - gcloud projects list
 
       c) Upload this script to the Google Cloud Shell by selecting the ellipses and Upload.
-      d) Run the script as described in the examples or help. 
+      d) Run the script as described in the examples or help.
           The script will run with the users credentials
           that logged into the Cloud Shell. This user must have the permissions that are
           discussed above.
 
 2)  The second method of running this script is from a local laptop or a server. This method
-    may be necessary if the Google Cloud Shell times out while running this script. To 
+    may be necessary if the Google Cloud Shell times out while running this script. To
     Run this script from a local laptop or console, do the following:
 
       a) Install Powershell 7
@@ -155,7 +155,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.1"
+$scriptVersion = "1.0.2"
 
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -166,6 +166,426 @@ $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
 # Disable gcloud interactive prompts for scripted execution
 $env:CLOUDSDK_CORE_DISABLE_PROMPTS = 1
+
+# --- Function definitions ---
+
+function Resolve-GCPProjects {
+    param(
+        [string]$Projects,
+        [string]$ProjectFile
+    )
+    $projectList = @()
+    if ($ProjectFile -ne '') {
+        $projectFileContents = Get-Content -Path $ProjectFile
+        foreach ($project in $projectFileContents) {
+            try {
+                $projectJson = gcloud projects describe $project --format=json 2>$null
+                if ($projectJson) {
+                    $projectList += ($projectJson -join '') | ConvertFrom-Json
+                } else {
+                    Write-Host "Project $project not found or not accessible" -foregroundcolor red
+                }
+            } catch {
+                Write-Host "Failed to get project $project" -foregroundcolor red
+                Write-Host "Error: $_" -foregroundcolor red
+            }
+        }
+    } elseif ($Projects -ne '') {
+        foreach ($project in $Projects.split(',')) {
+            try {
+                $projectJson = gcloud projects describe $project --format=json 2>$null
+                if ($projectJson) {
+                    $projectList += ($projectJson -join '') | ConvertFrom-Json
+                } else {
+                    Write-Host "Project $project not found or not accessible" -foregroundcolor red
+                }
+            } catch {
+                Write-Host "Failed to get project $project" -foregroundcolor red
+                Write-Host "Error: $_" -foregroundcolor red
+            }
+        }
+    } else {
+        Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
+        try {
+            $projectListJson = gcloud projects list --format=json 2>$null
+            if ($projectListJson) {
+                $projectList = ($projectListJson -join '') | ConvertFrom-Json
+            }
+        } catch {
+            Write-Host "Failed to get projects" -foregroundcolor Red
+            Write-Host "Error: $_" -foregroundcolor Red
+        }
+    }
+    return $projectList
+}
+
+function Get-GCPEnabledAPIs {
+    param(
+        [string]$ProjectId
+    )
+    $enabledApis = gcloud services list --enabled --project=$ProjectId `
+        --filter="config.name:(compute.googleapis.com OR sqladmin.googleapis.com OR spanner.googleapis.com)" `
+        --format="value(config.name)" --quiet 2>$null
+
+    return @{
+        Compute  = $enabledApis -contains 'compute.googleapis.com'
+        CloudSQL = $enabledApis -contains 'sqladmin.googleapis.com'
+        Spanner  = $enabledApis -contains 'spanner.googleapis.com'
+    }
+}
+
+function Get-GCEInstancesAndDisks {
+    param(
+        [string]$ProjectId
+    )
+    $instanceList = New-Object collections.arraylist
+    $attachedDiskList = New-Object collections.arraylist
+
+    $instanceInfo = $null
+    try {
+        $instancesJson = gcloud compute instances list --project=$ProjectId --format=json 2>$null
+        if ($instancesJson) {
+            $instanceInfo = ($instancesJson -join '') | ConvertFrom-Json
+        }
+    } catch {
+        Write-Host "Failed to get instances in project $ProjectId" -ForeGroundColor Red
+        Write-Host $_ -foregroundcolor red
+    }
+
+    $instanceCounter = 1
+    foreach ($instance in $instanceInfo) {
+        Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Status "Instance: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
+        $instanceCounter++
+
+        $diskCount = 0
+        $diskSizeGb = 0
+        $numDiskEncryption = 0
+        $sizeEncryptedDisksGb = 0
+
+        foreach($disk in $instance.disks){
+            $diskName = $disk.source.split('/')[-1]
+            $diskLocationType = $disk.source.split('/')[-4]  # 'zones' or 'regions'
+            $diskLocation = $disk.source.split('/')[-3]      # zone name or region name
+            $diskInfo = $null
+            try {
+                if ($diskLocationType -eq 'regions') {
+                    $diskInfoJson = gcloud compute disks describe $diskName --project=$ProjectId --region=$diskLocation --format=json 2>$null
+                } else {
+                    $diskInfoJson = gcloud compute disks describe $diskName --project=$ProjectId --zone=$diskLocation --format=json 2>$null
+                }
+                if ($diskInfoJson) {
+                    $diskInfo = ($diskInfoJson -join '') | ConvertFrom-Json
+                }
+            } catch {
+                Write-Host "Failed to get disk $diskName in project $ProjectId" -ForeGroundColor Red
+            }
+            if (-not $diskInfo) { continue }
+
+            $diskSizeGbCurrent = [double]$diskInfo.sizeGb
+            $diskObj = [PSCustomObject] @{
+                "Project" = $ProjectId
+                "Zone" = if ($diskInfo.zone) { $diskInfo.zone.split('/')[-1] } else { $diskInfo.region.split('/')[-1] }
+                "VMName" = $instance.name
+                "DiskName" = $diskInfo.name
+                "Id" = $diskInfo.id
+                "SizeGb" = $diskSizeGbCurrent
+                "SizeTb" = $diskSizeGbCurrent / 1000
+                "DiskEncryptionKey" = $diskInfo.diskEncryptionKey -ne $null
+                "SourceImageSource" = $null
+                "SourceImageName" = $null
+            }
+            if($diskInfo.sourceImage -ne $null){
+                $diskObj.SourceImageSource = $diskInfo.sourceImage.split('/')[-4]
+                $diskObj.SourceImageName = $diskInfo.sourceImage.split('/')[-1]
+            }
+
+            if ($diskInfo.labels) {
+                foreach ($prop in $diskInfo.labels.PSObject.Properties) {
+                    $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+                    $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+                }
+            }
+
+            $diskCount++
+            $diskSizeGb += $diskSizeGbCurrent
+            if($diskInfo.diskEncryptionKey){
+                $numDiskEncryption++
+                $sizeEncryptedDisksGb += $diskSizeGbCurrent
+            }
+
+            $attachedDiskList.Add($diskObj) | Out-Null
+        }
+
+        $instanceObj = [PSCustomObject] @{
+            "Project" = $ProjectId
+            "Zone" = $instance.zone.split('/')[-1]
+            "Name" = $instance.name
+            "TotalDiskCount" = $diskCount
+            "TotalDiskSizeGb" = $diskSizeGb
+            "TotalDiskSizeTb" = $diskSizeGb / 1000
+            "EncryptedDisksCount" = $numDiskEncryption
+            "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
+            "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
+            "Status" = $instance.status
+        }
+        if ($instance.labels) {
+            foreach ($prop in $instance.labels.PSObject.Properties) {
+                $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+                $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+            }
+        }
+
+        $instanceList.Add($instanceObj) | Out-Null
+
+    }
+    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Completed
+
+    return @{ Instances = $instanceList; AttachedDisks = $attachedDiskList }
+}
+
+function Get-GCEUnattachedDisks {
+    param(
+        [string]$ProjectId
+    )
+    $unattachedDiskList = New-Object collections.arraylist
+
+    $allDisks = $null
+    try {
+        $allDisksJson = gcloud compute disks list --project=$ProjectId --format=json 2>$null
+        if ($allDisksJson) {
+            $allDisks = ($allDisksJson -join '') | ConvertFrom-Json
+        }
+    } catch {
+        Write-Host "Failed to get disks in project $ProjectId" -foregroundcolor red
+        Write-Host $_ -foregroundcolor red
+    }
+
+    $diskCounter = 1
+    foreach($disk in $allDisks){
+        Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
+        $diskCounter++
+        if (-not $disk.users){
+            $diskSizeGbCurrent = [double]$disk.sizeGb
+            $diskObj = [PSCustomObject] @{
+                "Project" = $ProjectId
+                "Zone" = if ($disk.zone) { $disk.zone.split('/')[-1] } else { $disk.region.split('/')[-1] }
+                "DiskName" = $disk.name
+                "Id" = $disk.id
+                "SizeGb" = $diskSizeGbCurrent
+                "SizeTb" = $diskSizeGbCurrent / 1000
+                "DiskEncryptionKey" = $disk.diskEncryptionKey
+                "SourceImageSource" = $null
+                "SourceImageName" = $null
+            }
+            if($disk.sourceImage -ne $null){
+                $diskObj.SourceImageSource = $disk.sourceImage.split('/')[-4]
+                $diskObj.SourceImageName = $disk.sourceImage.split('/')[-1]
+            }
+            if ($disk.labels) {
+                foreach ($prop in $disk.labels.PSObject.Properties) {
+                    $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+                    $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+                }
+            }
+            $unattachedDiskList.Add($diskObj) | Out-Null
+        }
+    }
+    Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Completed
+
+    return , $unattachedDiskList
+}
+
+function Get-GCPCloudSQLInstances {
+    param(
+        [string]$ProjectId
+    )
+    $cloudSQLList = New-Object collections.arraylist
+
+    $cloudSQLInstances = $null
+    try {
+        $cloudSQLInstancesJson = gcloud sql instances list --project=$ProjectId --format=json 2>$null
+        if ($cloudSQLInstancesJson) {
+            $cloudSQLInstances = ($cloudSQLInstancesJson -join '') | ConvertFrom-Json
+        }
+    } catch {
+        Write-Verbose "Cloud SQL API not available in project $($ProjectId): $_"
+    }
+
+    $sqlInstanceCounter = 1
+    foreach ($sqlInstance in $cloudSQLInstances) {
+        Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Status "Instance: $($sqlInstanceCounter) of $($cloudSQLInstances.Count)"  -PercentComplete (($sqlInstanceCounter / $cloudSQLInstances.Count) * 100)
+        $sqlInstanceCounter++
+
+        # Derive DatabaseEngine from databaseVersion prefix
+        $databaseEngine = switch -Regex ($sqlInstance.databaseVersion) {
+            '^POSTGRES' { 'PostgreSQL' }
+            '^MYSQL'    { 'MySQL' }
+            '^SQLSERVER' { 'SQL Server' }
+            default     { $sqlInstance.databaseVersion }
+        }
+
+        # Define system databases per engine for filtering
+        $systemDatabases = switch ($databaseEngine) {
+            'PostgreSQL' { @('information_schema', 'postgres', 'template0', 'template1', 'cloudsqladmin') }
+            'MySQL'      { @('information_schema', 'mysql', 'performance_schema', 'sys') }
+            'SQL Server' { @('information_schema', 'master', 'tempdb', 'model', 'msdb') }
+            default      { @() }
+        }
+
+        # Count user databases (excluding system databases)
+        $numberOfDatabases = 0
+        try {
+            $databasesJson = gcloud sql databases list --instance=$($sqlInstance.name) --project=$ProjectId --format=json 2>$null
+            if ($databasesJson) {
+                $databases = ($databasesJson -join '') | ConvertFrom-Json
+                $numberOfDatabases = ($databases | Where-Object { $systemDatabases -notcontains $_.name }).Count
+            }
+        } catch {
+            Write-Host "Failed to get databases for Cloud SQL instance $($sqlInstance.name) in project $ProjectId" -ForeGroundColor Red
+            # NumberOfDatabases remains 0 on failure
+        }
+
+        # Build Cloud SQL object
+        $cloudSQLObj = [PSCustomObject] @{
+            "Project" = $ProjectId
+            "InstanceName" = $sqlInstance.name
+            "InstanceType" = $sqlInstance.instanceType
+            "DatabaseEngine" = $databaseEngine
+            "EngineVersion" = $sqlInstance.databaseVersion
+            "Region" = $sqlInstance.region
+            "Tier" = $sqlInstance.settings.tier
+            "StorageSizeGb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb } else { 0 }
+            "StorageSizeTb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb / 1000 } else { 0 }
+            "StorageType" = $sqlInstance.settings.dataDiskType
+            "State" = $sqlInstance.state
+            "NumberOfDatabases" = $numberOfDatabases
+            "BackupEnabled" = if ($null -ne $sqlInstance.settings.backupConfiguration.enabled) { $sqlInstance.settings.backupConfiguration.enabled } else { $false }
+            "BackupRetentionCount" = $sqlInstance.settings.backupConfiguration.backupRetentionSettings.retainedBackups
+            "BackupStartTime" = $sqlInstance.settings.backupConfiguration.startTime
+            "AvailabilityType" = $sqlInstance.settings.availabilityType
+        }
+
+        # Add labels as Label/Tag: columns
+        if ($sqlInstance.settings.userLabels) {
+            foreach ($prop in $sqlInstance.settings.userLabels.PSObject.Properties) {
+                $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+                $cloudSQLObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+            }
+        }
+
+        $cloudSQLList.Add($cloudSQLObj) | Out-Null
+    }
+    Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Completed
+
+    return , $cloudSQLList
+}
+
+function Get-GCPSpannerInstances {
+    param(
+        [string]$ProjectId
+    )
+    $spannerList = New-Object collections.arraylist
+
+    $spannerInstances = $null
+    try {
+        $spannerInstancesJson = gcloud spanner instances list --project=$ProjectId --format=json 2>$null
+        if ($spannerInstancesJson) {
+            $spannerInstances = ($spannerInstancesJson -join '') | ConvertFrom-Json
+        }
+    } catch {
+        Write-Verbose "Spanner API not available in project $($ProjectId): $_"
+    }
+
+    $spannerInstanceCounter = 1
+    foreach ($spannerInstance in $spannerInstances) {
+        Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Status "Instance: $($spannerInstanceCounter) of $($spannerInstances.Count)"  -PercentComplete (($spannerInstanceCounter / $spannerInstances.Count) * 100)
+        $spannerInstanceCounter++
+
+        # Extract short name from full resource path (e.g., "projects/foo/instances/bar" -> "bar")
+        $instanceName = $spannerInstance.name.split('/')[-1]
+
+        # Extract config name (last segment of config path)
+        $config = $spannerInstance.config.split('/')[-1]
+
+        # Count databases
+        $numberOfDatabases = 0
+        try {
+            $databasesJson = gcloud spanner databases list --instance=$instanceName --project=$ProjectId --format=json 2>$null
+            if ($databasesJson) {
+                $databases = ($databasesJson -join '') | ConvertFrom-Json
+                $numberOfDatabases = $databases.Count
+            }
+        } catch {
+            Write-Host "Failed to get databases for Spanner instance $instanceName in project $ProjectId" -ForeGroundColor Red
+            # NumberOfDatabases remains 0 on failure
+        }
+
+        # Build Spanner object
+        $spannerObj = [PSCustomObject] @{
+            "Project" = $ProjectId
+            "InstanceName" = $instanceName
+            "DisplayName" = $spannerInstance.displayName
+            "Config" = $config
+            "State" = $spannerInstance.state
+            "NumberOfDatabases" = $numberOfDatabases
+            "NodeCount" = if ($spannerInstance.nodeCount) { $spannerInstance.nodeCount } else { 0 }
+            "ProcessingUnits" = if ($spannerInstance.processingUnits) { $spannerInstance.processingUnits } else { 0 }
+        }
+
+        # Add labels as Label/Tag: columns
+        if ($spannerInstance.labels) {
+            foreach ($prop in $spannerInstance.labels.PSObject.Properties) {
+                $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+                $spannerObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
+            }
+        }
+
+        $spannerList.Add($spannerObj) | Out-Null
+    }
+    Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Completed
+
+    return , $spannerList
+}
+
+function Add-TagsToAllObjectsInList($list) {
+    # Determine all unique tag keys
+    $allTagKeys = @{}
+    foreach ($obj in $list) {
+        $properties = $obj.PSObject.Properties
+        foreach ($property in $properties) {
+            if (-not $allTagKeys.ContainsKey($property.Name)) {
+                $allTagKeys[$property.Name] = $true
+            }
+        }
+    }
+
+    $allTagKeys = $allTagKeys.Keys
+
+    # Ensure each object has all possible tag keys
+    foreach ($obj in $list) {
+        foreach ($key in $allTagKeys) {
+            if (-not $obj.PSObject.Properties.Name.Contains($key)) {
+                $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
+            }
+        }
+    }
+}
+
+function Compress-SizingArchive {
+    param(
+        [string[]]$OutputFiles,
+        [string]$ArchiveFile
+    )
+    $existingFiles = $OutputFiles | Where-Object { Test-Path $_ }
+    if ($existingFiles) {
+        Compress-Archive -Path $existingFiles -DestinationPath $ArchiveFile
+    }
+    foreach ($file in $OutputFiles) {
+        Remove-Item -Path $file -ErrorAction SilentlyContinue
+    }
+}
+
+# --- Main script body ---
 
 try{
 $date = Get-Date
@@ -211,55 +631,8 @@ $outputFiles = @(
 # Clear out variable in case it exists
 $projectList = ''
 
-# If a file is provided containing the list of files, then import the file
-if ($projectFile -ne '')
-{
-  $projectFileContents = Get-Content -Path $ProjectFile
-  $projectList = @()
-  foreach ($project in $projectFileContents)
-  {
-    try {
-      $projectJson = gcloud projects describe $project --format=json 2>$null
-      if ($projectJson) {
-        $projectList += ($projectJson -join '') | ConvertFrom-Json
-      } else {
-        Write-Host "Project $project not found or not accessible" -foregroundcolor red
-      }
-    } catch {
-      Write-Host "Failed to get project $project" -foregroundcolor red
-      Write-Host "Error: $_" -foregroundcolor red
-    }
-  }
-} elseif ($projects -ne '')
-{
-  # Else if a comma separated list of projects was provided on the command line, use that
-  $projectList = @()
-  foreach ($project in $projects.split(',')) {
-    try {
-      $projectJson = gcloud projects describe $project --format=json 2>$null
-      if ($projectJson) {
-        $projectList += ($projectJson -join '') | ConvertFrom-Json
-      } else {
-        Write-Host "Project $project not found or not accessible" -foregroundcolor red
-      }
-    } catch {
-      Write-Host "Failed to get project $project" -foregroundcolor red
-      Write-Host "Error: $_" -foregroundcolor red
-    }
-  }
-} else {
-  Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
-  $projectList = @()
-  try{
-    $projectListJson = gcloud projects list --format=json 2>$null
-    if ($projectListJson) {
-      $projectList = ($projectListJson -join '') | ConvertFrom-Json
-    }
-  } catch {
-    Write-Host "Failed to get projects" -foregroundcolor Red
-    Write-Host "Error: $_" -foregroundcolor Red
-  }
-}
+# Resolve the list of projects to process
+$projectList = Resolve-GCPProjects -Projects $Projects -ProjectFile $ProjectFile
 
 $instanceList = New-Object collections.arraylist
 $attachedDiskList = New-Object collections.arraylist
@@ -274,335 +647,38 @@ foreach ($project in $projectList)
   $projectCounter++
 
   # Proactive API enablement check — one call per project, filtered to the 3 APIs we need
-  $enabledApis = gcloud services list --enabled --project=$($project.projectId) `
-    --filter="config.name:(compute.googleapis.com OR sqladmin.googleapis.com OR spanner.googleapis.com)" `
-    --format="value(config.name)" --quiet 2>$null
+  $apis = Get-GCPEnabledAPIs -ProjectId $project.projectId
 
-  $hasCompute  = $enabledApis -contains 'compute.googleapis.com'
-  $hasCloudSQL = $enabledApis -contains 'sqladmin.googleapis.com'
-  $hasSpanner  = $enabledApis -contains 'spanner.googleapis.com'
-
-  if (-not $hasCompute) {
+  if (-not $apis.Compute) {
     Write-Host "WARNING: Compute Engine API is not enabled on project [$($project.projectId)]. Skipping Compute data collection." -ForegroundColor Yellow
   }
-  if (-not $hasCloudSQL) {
+  if (-not $apis.CloudSQL) {
     Write-Host "WARNING: Cloud SQL Admin API is not enabled on project [$($project.projectId)]. Skipping Cloud SQL data collection." -ForegroundColor Yellow
   }
-  if (-not $hasSpanner) {
+  if (-not $apis.Spanner) {
     Write-Host "WARNING: Cloud Spanner API is not enabled on project [$($project.projectId)]. Skipping Spanner data collection." -ForegroundColor Yellow
   }
 
-  $instanceInfo = $null
-  if ($hasCompute) {
-  try{
-    $instancesJson = gcloud compute instances list --project=$($project.projectId) --format=json 2>$null
-    if ($instancesJson) {
-      $instanceInfo = ($instancesJson -join '') | ConvertFrom-Json
-    }
-  } catch {
-    Write-Host "Failed to get instances in project $($project.projectId)" -ForeGroundColor Red
-    Write-Host $_ -foregroundcolor red
+  if ($apis.Compute) {
+    $result = Get-GCEInstancesAndDisks -ProjectId $project.projectId
+    $instanceList.AddRange($result.Instances)
+    $attachedDiskList.AddRange($result.AttachedDisks)
+
+    $unattached = Get-GCEUnattachedDisks -ProjectId $project.projectId
+    $unattachedDiskList.AddRange($unattached)
   }
 
-  $instanceCounter = 1
-  foreach ($instance in $instanceInfo) {
-    Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Status "Instance: $($instanceCounter) of $($instanceInfo.Count)"  -PercentComplete (($instanceCounter / $instanceInfo.Count) * 100)
-    $instanceCounter++
-
-    $diskCount = 0
-    $diskSizeGb = 0
-    $numDiskEncryption = 0
-    $sizeEncryptedDisksGb = 0
-
-    foreach($disk in $instance.disks){
-      $diskName = $disk.source.split('/')[-1]
-      $diskLocationType = $disk.source.split('/')[-4]  # 'zones' or 'regions'
-      $diskLocation = $disk.source.split('/')[-3]      # zone name or region name
-      $diskInfo = $null
-      try {
-        if ($diskLocationType -eq 'regions') {
-          $diskInfoJson = gcloud compute disks describe $diskName --project=$($project.projectId) --region=$diskLocation --format=json 2>$null
-        } else {
-          $diskInfoJson = gcloud compute disks describe $diskName --project=$($project.projectId) --zone=$diskLocation --format=json 2>$null
-        }
-        if ($diskInfoJson) {
-          $diskInfo = ($diskInfoJson -join '') | ConvertFrom-Json
-        }
-      } catch {
-        Write-Host "Failed to get disk $diskName in project $($project.projectId)" -ForeGroundColor Red
-      }
-      if (-not $diskInfo) { continue }
-
-      $diskSizeGbCurrent = [double]$diskInfo.sizeGb
-      $diskObj = [PSCustomObject] @{
-        "Project" = $($project.projectId)
-        "Zone" = if ($diskInfo.zone) { $diskInfo.zone.split('/')[-1] } else { $diskInfo.region.split('/')[-1] }
-        "VMName" = $instance.name
-        "DiskName" = $diskInfo.name
-        "Id" = $diskInfo.id
-        "SizeGb" = $diskSizeGbCurrent
-        "SizeTb" = $diskSizeGbCurrent / 1000
-        "DiskEncryptionKey" = $diskInfo.diskEncryptionKey -ne $null
-        "SourceImageSource" = $null
-        "SourceImageName" = $null
-      }
-      if($diskInfo.sourceImage -ne $null){
-        $diskObj.SourceImageSource = $diskInfo.sourceImage.split('/')[-4]
-        $diskObj.SourceImageName = $diskInfo.sourceImage.split('/')[-1]
-      }
-
-      if ($diskInfo.labels) {
-        foreach ($prop in $diskInfo.labels.PSObject.Properties) {
-          $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
-          $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
-        }
-      }
-
-      $diskCount++
-      $diskSizeGb += $diskSizeGbCurrent
-      if($diskInfo.diskEncryptionKey){
-        $numDiskEncryption++
-        $sizeEncryptedDisksGb += $diskSizeGbCurrent
-      }
-
-      $attachedDiskList.Add($diskObj) | Out-Null
-    }
-
-    $instanceObj = [PSCustomObject] @{
-      "Project" = $($project.projectId)
-      "Zone" = $instance.zone.split('/')[-1]
-      "Name" = $instance.name
-      "TotalDiskCount" = $diskCount
-      "TotalDiskSizeGb" = $diskSizeGb
-      "TotalDiskSizeTb" = $diskSizeGb / 1000
-      "EncryptedDisksCount" = $numDiskEncryption
-      "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
-      "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
-      "Status" = $instance.status
-    }
-    if ($instance.labels) {
-      foreach ($prop in $instance.labels.PSObject.Properties) {
-        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
-        $instanceObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
-      }
-    }
-
-    $instanceList.Add($instanceObj) | Out-Null
-
-  }
-  Write-Progress -ID 2 -Activity "Processing GCE VM Instance: $($instance.name)" -Completed
-  } # end if ($hasCompute) — instances
-
-  if ($hasCompute) {
-  $allDisks = $null
-  try{
-    $allDisksJson = gcloud compute disks list --project=$($project.projectId) --format=json 2>$null
-    if ($allDisksJson) {
-      $allDisks = ($allDisksJson -join '') | ConvertFrom-Json
-    }
-  } catch{
-    Write-Host "Failed to get disks in project $($project.projectId)" -foregroundcolor red
-    Write-Host $_ -foregroundcolor red
+  if ($apis.CloudSQL) {
+    $sql = Get-GCPCloudSQLInstances -ProjectId $project.projectId
+    $cloudSQLList.AddRange($sql)
   }
 
-  $diskCounter = 1
-  foreach($disk in $allDisks){
-    Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Status "Disk: $($diskCounter) of $($allDisks.Count)"  -PercentComplete (($diskCounter / $allDisks.Count) * 100)
-    $diskCounter++
-    if (-not $disk.users){
-      $diskSizeGbCurrent = [double]$disk.sizeGb
-      $diskObj = [PSCustomObject] @{
-        "Project" = $($project.projectId)
-        "Zone" = if ($disk.zone) { $disk.zone.split('/')[-1] } else { $disk.region.split('/')[-1] }
-        "DiskName" = $disk.name
-        "Id" = $disk.id
-        "SizeGb" = $diskSizeGbCurrent
-        "SizeTb" = $diskSizeGbCurrent / 1000
-        "DiskEncryptionKey" = $disk.diskEncryptionKey
-        "SourceImageSource" = $null
-        "SourceImageName" = $null
-      }
-      if($disk.sourceImage -ne $null){
-        $diskObj.SourceImageSource = $disk.sourceImage.split('/')[-4]
-        $diskObj.SourceImageName = $disk.sourceImage.split('/')[-1]
-      }
-      if ($disk.labels) {
-        foreach ($prop in $disk.labels.PSObject.Properties) {
-          $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
-          $diskObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
-        }
-      }
-      $unattachedDiskList.Add($diskObj) | Out-Null
-    }
+  if ($apis.Spanner) {
+    $spanner = Get-GCPSpannerInstances -ProjectId $project.projectId
+    $spannerList.AddRange($spanner)
   }
-  Write-Progress -ID 3 -Activity "Processing disk: $($disk.name)" -Completed
-  } # end if ($hasCompute) — unattached disks
-
-  # Cloud SQL collection
-  if ($hasCloudSQL) {
-  $cloudSQLInstances = $null
-  try {
-    $cloudSQLInstancesJson = gcloud sql instances list --project=$($project.projectId) --format=json 2>$null
-    if ($cloudSQLInstancesJson) {
-      $cloudSQLInstances = ($cloudSQLInstancesJson -join '') | ConvertFrom-Json
-    }
-  } catch {
-    Write-Verbose "Cloud SQL API not available in project $($project.projectId): $_"
-  }
-
-  $sqlInstanceCounter = 1
-  foreach ($sqlInstance in $cloudSQLInstances) {
-    Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Status "Instance: $($sqlInstanceCounter) of $($cloudSQLInstances.Count)"  -PercentComplete (($sqlInstanceCounter / $cloudSQLInstances.Count) * 100)
-    $sqlInstanceCounter++
-
-    # Derive DatabaseEngine from databaseVersion prefix
-    $databaseEngine = switch -Regex ($sqlInstance.databaseVersion) {
-      '^POSTGRES' { 'PostgreSQL' }
-      '^MYSQL'    { 'MySQL' }
-      '^SQLSERVER' { 'SQL Server' }
-      default     { $sqlInstance.databaseVersion }
-    }
-
-    # Define system databases per engine for filtering
-    $systemDatabases = switch ($databaseEngine) {
-      'PostgreSQL' { @('information_schema', 'postgres', 'template0', 'template1', 'cloudsqladmin') }
-      'MySQL'      { @('information_schema', 'mysql', 'performance_schema', 'sys') }
-      'SQL Server' { @('information_schema', 'master', 'tempdb', 'model', 'msdb') }
-      default      { @() }
-    }
-
-    # Count user databases (excluding system databases)
-    $numberOfDatabases = 0
-    try {
-      $databasesJson = gcloud sql databases list --instance=$($sqlInstance.name) --project=$($project.projectId) --format=json 2>$null
-      if ($databasesJson) {
-        $databases = ($databasesJson -join '') | ConvertFrom-Json
-        $numberOfDatabases = ($databases | Where-Object { $systemDatabases -notcontains $_.name }).Count
-      }
-    } catch {
-      Write-Host "Failed to get databases for Cloud SQL instance $($sqlInstance.name) in project $($project.projectId)" -ForeGroundColor Red
-      # NumberOfDatabases remains 0 on failure
-    }
-
-    # Build Cloud SQL object
-    $cloudSQLObj = [PSCustomObject] @{
-      "Project" = $($project.projectId)
-      "InstanceName" = $sqlInstance.name
-      "InstanceType" = $sqlInstance.instanceType
-      "DatabaseEngine" = $databaseEngine
-      "EngineVersion" = $sqlInstance.databaseVersion
-      "Region" = $sqlInstance.region
-      "Tier" = $sqlInstance.settings.tier
-      "StorageSizeGb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb } else { 0 }
-      "StorageSizeTb" = if ($sqlInstance.settings.dataDiskSizeGb) { [double]$sqlInstance.settings.dataDiskSizeGb / 1000 } else { 0 }
-      "StorageType" = $sqlInstance.settings.dataDiskType
-      "State" = $sqlInstance.state
-      "NumberOfDatabases" = $numberOfDatabases
-      "BackupEnabled" = if ($null -ne $sqlInstance.settings.backupConfiguration.enabled) { $sqlInstance.settings.backupConfiguration.enabled } else { $false }
-      "BackupRetentionCount" = $sqlInstance.settings.backupConfiguration.backupRetentionSettings.retainedBackups
-      "BackupStartTime" = $sqlInstance.settings.backupConfiguration.startTime
-      "AvailabilityType" = $sqlInstance.settings.availabilityType
-    }
-
-    # Add labels as Label/Tag: columns
-    if ($sqlInstance.settings.userLabels) {
-      foreach ($prop in $sqlInstance.settings.userLabels.PSObject.Properties) {
-        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
-        $cloudSQLObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
-      }
-    }
-
-    $cloudSQLList.Add($cloudSQLObj) | Out-Null
-  }
-  Write-Progress -ID 4 -Activity "Processing Cloud SQL instance: $($sqlInstance.name)" -Completed
-  } # end if ($hasCloudSQL)
-
-  # Spanner collection
-  if ($hasSpanner) {
-  $spannerInstances = $null
-  try {
-    $spannerInstancesJson = gcloud spanner instances list --project=$($project.projectId) --format=json 2>$null
-    if ($spannerInstancesJson) {
-      $spannerInstances = ($spannerInstancesJson -join '') | ConvertFrom-Json
-    }
-  } catch {
-    Write-Verbose "Spanner API not available in project $($project.projectId): $_"
-  }
-
-  $spannerInstanceCounter = 1
-  foreach ($spannerInstance in $spannerInstances) {
-    Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Status "Instance: $($spannerInstanceCounter) of $($spannerInstances.Count)"  -PercentComplete (($spannerInstanceCounter / $spannerInstances.Count) * 100)
-    $spannerInstanceCounter++
-
-    # Extract short name from full resource path (e.g., "projects/foo/instances/bar" -> "bar")
-    $instanceName = $spannerInstance.name.split('/')[-1]
-
-    # Extract config name (last segment of config path)
-    $config = $spannerInstance.config.split('/')[-1]
-
-    # Count databases
-    $numberOfDatabases = 0
-    try {
-      $databasesJson = gcloud spanner databases list --instance=$instanceName --project=$($project.projectId) --format=json 2>$null
-      if ($databasesJson) {
-        $databases = ($databasesJson -join '') | ConvertFrom-Json
-        $numberOfDatabases = $databases.Count
-      }
-    } catch {
-      Write-Host "Failed to get databases for Spanner instance $instanceName in project $($project.projectId)" -ForeGroundColor Red
-      # NumberOfDatabases remains 0 on failure
-    }
-
-    # Build Spanner object
-    $spannerObj = [PSCustomObject] @{
-      "Project" = $($project.projectId)
-      "InstanceName" = $instanceName
-      "DisplayName" = $spannerInstance.displayName
-      "Config" = $config
-      "State" = $spannerInstance.state
-      "NumberOfDatabases" = $numberOfDatabases
-      "NodeCount" = if ($spannerInstance.nodeCount) { $spannerInstance.nodeCount } else { 0 }
-      "ProcessingUnits" = if ($spannerInstance.processingUnits) { $spannerInstance.processingUnits } else { 0 }
-    }
-
-    # Add labels as Label/Tag: columns
-    if ($spannerInstance.labels) {
-      foreach ($prop in $spannerInstance.labels.PSObject.Properties) {
-        $labelKey = $prop.Name -replace '[^a-zA-Z0-9]', '_'
-        $spannerObj | Add-Member -MemberType NoteProperty -Name "Label/Tag: $labelKey" -Value $prop.Value -Force
-      }
-    }
-
-    $spannerList.Add($spannerObj) | Out-Null
-  }
-  Write-Progress -ID 5 -Activity "Processing Spanner instance: $($spannerInstance.name)" -Completed
-  } # end if ($hasSpanner)
 }
 Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Completed
-
-function addTagsToAllObjectsInList($list) {
-  # Determine all unique tag keys
-  $allTagKeys = @{}
-  foreach ($obj in $list) {
-      $properties = $obj.PSObject.Properties
-      foreach ($property in $properties) {
-          if (-not $allTagKeys.ContainsKey($property.Name)) {
-              $allTagKeys[$property.Name] = $true
-          }
-      }
-  }
-  
-  $allTagKeys = $allTagKeys.Keys
-  
-  # Ensure each object has all possible tag keys
-  foreach ($obj in $list) {
-      foreach ($key in $allTagKeys) {
-          if (-not $obj.PSObject.Properties.Name.Contains($key)) {
-              $obj | Add-Member -MemberType NoteProperty -Name $key -Value $null -Force
-          }
-      }
-  }
-}
 
 
 if ($Anonymize) {
@@ -765,23 +841,23 @@ Write-Host "Total # of Spanner instances: $($spannerList.count)" -foregroundcolo
 
 # Export to CSV
 Write-Host
-addTagsToAllObjectsInList($instanceList)
+Add-TagsToAllObjectsInList($instanceList)
 Write-Host "CSV file output to: $outputVM" -foregroundcolor green
 $instanceList | Export-CSV -path $outputVM
 Write-Host
-addTagsToAllObjectsInList($attachedDiskList)
+Add-TagsToAllObjectsInList($attachedDiskList)
 Write-Host "CSV file output to: $outputAttachedDisks" -foregroundcolor green
 $attachedDiskList | Export-CSV -path $outputAttachedDisks
 Write-Host
-addTagsToAllObjectsInList($unattachedDiskList)
+Add-TagsToAllObjectsInList($unattachedDiskList)
 Write-Host "CSV file output to: $outputUnattachedDisks" -foregroundcolor green
 $unattachedDiskList | Export-CSV -path $outputUnattachedDisks
 Write-Host
-addTagsToAllObjectsInList($cloudSQLList)
+Add-TagsToAllObjectsInList($cloudSQLList)
 Write-Host "CSV file output to: $outputCloudSQL" -foregroundcolor green
 $cloudSQLList | Export-CSV -path $outputCloudSQL
 Write-Host
-addTagsToAllObjectsInList($spannerList)
+Add-TagsToAllObjectsInList($spannerList)
 Write-Host "CSV file output to: $outputSpanner" -foregroundcolor green
 $spannerList | Export-CSV -path $outputSpanner
 
@@ -795,7 +871,7 @@ if($Anonymize){
     [PSCustomObject]@{
       AnonymizedValue = $_.Value
       ActualValue   = $_.Key
-    } 
+    }
   } | Sort-Object -Property AnonymizedValue
 
   $anonKeyValuesFileName = "gcp_anonymized_keys_to_actual_values-$date_string.csv"
@@ -816,18 +892,7 @@ if($Anonymize){
   Stop-Transcript
 }
 
-# In the case of an early exit/error, this filters only the files which exist
-$existingFiles = $outputFiles | Where-Object { Test-Path $_ }
-
-# Compress the files into a zip archive
-if ($existingFiles) {
-  Compress-Archive -Path $existingFiles -DestinationPath $archiveFile
-}
-
-# Remove the original files
-foreach ($file in $outputFiles) {
-    Remove-Item -Path $file -ErrorAction SilentlyContinue
-}
+Compress-SizingArchive -OutputFiles $outputFiles -ArchiveFile $archiveFile
 
 Write-Host
 Write-Host
