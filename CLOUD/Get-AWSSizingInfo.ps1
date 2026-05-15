@@ -1,5 +1,5 @@
 #requires -Version 7.0
-<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control
+<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.ElasticLoadBalancing, AWS.Tools.ElasticLoadBalancingV2, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.Route53, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control
 #>
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -61,16 +61,22 @@
                     "ec2:DescribeInstances",
                     "ec2:DescribeRegions",
                     "ec2:DescribeVolumes",
+                    "ec2:DescribeVpcs",
                     "eks:DescribeCluster",
                     "eks:ListClusters",
                     "eks:ListNodegroups",
+                    "elasticloadbalancing:DescribeLoadBalancers",
                     "elasticfilesystem:DescribeFileSystems",
                     "fsx:DescribeFileSystems",
                     "fsx:DescribeVolumes",
                     "iam:ListAccountAliases",
+                    "iam:ListPolicies",
+                    "iam:ListRoles",
+                    "iam:ListUsers",
                     "kms:ListKeys",
                     "organizations:ListAccounts",
                     "rds:DescribeDBInstances",
+                    "route53:ListHostedZones",
                     "s3:GetBucketLocation",
                     "s3:ListAllMyBuckets",
                     "s3:GetStorageLensConfiguration",
@@ -350,7 +356,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.2"
+$scriptVersion = "1.1.0"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
@@ -433,6 +439,10 @@ $outputEc2AttachedVolume = "aws_ec2_attached_volume_info-$date_string.csv"
 #unattached volumes are less important and we can probably ignore these. We should be tracking orphaned snapshots or those not created by AWS Backup
 $outputEc2UnattachedVolume = "aws_ec2_unattached_volume_info-$date_string.csv"
 $outputRDS = "aws_rds_info-$date_string.csv"
+$outputVPC = "aws_vpc_info-$date_string.csv"
+$outputLB = "aws_lb_info-$date_string.csv"
+$outputRoute53 = "aws_route53_info-$date_string.csv"
+$outputIAM = "aws_iam_info-$date_string.csv"
 $outputS3 = "aws_s3_info-$date_string.csv"
 $outputEFS = "aws_efs_info-$date_string.csv"
 $outputFSXfilesystems = "aws_fsx_filesystem_info-$date_string.csv"
@@ -457,6 +467,10 @@ $outputFiles = @(
     $outputEc2AttachedVolume,
     $outputEc2UnattachedVolume,
     $outputRDS,
+    $outputVPC,
+    $outputLB,
+    $outputRoute53,
+    $outputIAM,
     $outputS3,
     $outputEFS,
     $outputFSXfilesystems,
@@ -1430,6 +1444,192 @@ function Get-AWSEKSInventory {
     return @{ Clusters = $eksClusterResult; NodeGroups = $eksNodeGroupResult }
 }
 
+function Get-AWSVPCInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $vpcResult = New-Object collections.arraylist
+    try {
+        $vpcs = Get-EC2Vpc -Credential $Credential -Region $Region -ErrorAction Stop
+    } catch {
+        Write-Host "Failed to get VPC info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+        return $vpcResult
+    }
+
+    foreach ($vpc in $vpcs) {
+        $vpcObj = [PSCustomObject] @{
+            "AwsAccountId"    = $AccountInfo.Account
+            "AwsAccountAlias" = $AccountAlias
+            "Region"          = $Region
+            "VpcId"           = $vpc.VpcId
+            "OwnerId"         = $vpc.OwnerId
+            "CidrBlock"       = $vpc.CidrBlock
+            "State"           = $vpc.State
+            "IsDefault"       = $vpc.IsDefault
+        }
+        foreach ($tag in $vpc.Tags) {
+            $key = $tag.Key -replace '[^a-zA-Z0-9-]', '_'
+            # -Force is required because PSCustomObject rejects duplicate
+            # property names. True key collisions after sanitization are
+            # rare (only if a resource has tags whose names differ only
+            # in non-alphanumeric characters, e.g. "cost-center" and
+            # "cost_center").
+            $vpcObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        }
+        $vpcResult.Add($vpcObj) | Out-Null
+    }
+    return $vpcResult
+}
+
+function Get-AWSLoadBalancerInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $lbResult = New-Object collections.arraylist
+
+    try {
+        Get-ELBLoadBalancer -Credential $Credential -Region $Region -ErrorAction Stop | ForEach-Object {
+            $lbResult.Add([PSCustomObject] @{
+                "AwsAccountId"     = $AccountInfo.Account
+                "AwsAccountAlias"  = $AccountAlias
+                "Region"           = $Region
+                "LoadBalancerName" = $_.LoadBalancerName
+                "Type"             = "classic"
+                "Scheme"           = $_.Scheme
+                "VpcId"            = $_.VPCId
+                "DNSName"          = $_.DNSName
+                "Arn"              = "arn:$($partitionId):elasticloadbalancing:${Region}:$($AccountInfo.Account):loadbalancer/$($_.LoadBalancerName)"
+            }) | Out-Null
+        }
+    } catch {
+        Write-Host "Failed to get Classic LBs for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    try {
+        Get-ELB2LoadBalancer -Credential $Credential -Region $Region -ErrorAction Stop | ForEach-Object {
+            $lbResult.Add([PSCustomObject] @{
+                "AwsAccountId"     = $AccountInfo.Account
+                "AwsAccountAlias"  = $AccountAlias
+                "Region"           = $Region
+                "LoadBalancerName" = $_.LoadBalancerName
+                "Type"             = $_.Type
+                "Scheme"           = $_.Scheme
+                "VpcId"            = $_.VpcId
+                "DNSName"          = $_.DNSName
+                "Arn"              = $_.LoadBalancerArn
+            }) | Out-Null
+        }
+    } catch {
+        Write-Host "Failed to get v2 LBs for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    return $lbResult
+}
+
+function Get-AWSRoute53Inventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $r53Result = New-Object collections.arraylist
+    try {
+        $zones = Get-R53HostedZoneList -Credential $Credential -Region $Region -ErrorAction Stop
+    } catch {
+        Write-Host "Failed to get Route53 zones for account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+        return $r53Result
+    }
+
+    foreach ($zone in $zones) {
+        $r53Result.Add([PSCustomObject] @{
+            "AwsAccountId"           = $AccountInfo.Account
+            "AwsAccountAlias"        = $AccountAlias
+            "HostedZoneId"           = $zone.Id
+            "Name"                   = $zone.Name
+            "PrivateZone"            = $zone.Config.PrivateZone
+            "ResourceRecordSetCount" = $zone.ResourceRecordSetCount
+        }) | Out-Null
+    }
+    return $r53Result
+}
+
+function Get-AWSIAMInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $userCount = 0
+    $roleCount = 0
+    $policyCount = 0
+
+    # Track per-cmdlet success so we can distinguish "real empty account" (all 3
+    # succeed, return zeros) from "missing all 3 IAM permissions" (all 3 throw,
+    # return $null so the orchestrator skips the row entirely). Without this,
+    # the CSV would write Users=0/Roles=0/Policies=0 for both cases and the
+    # Incubator App could not tell them apart.
+    $userListSucceeded = $false
+    $roleListSucceeded = $false
+    $policyListSucceeded = $false
+
+    try {
+        $userCount = @(Get-IAMUserList -Credential $Credential -Region $Region -ErrorAction Stop).Count
+        $userListSucceeded = $true
+    } catch {
+        Write-Host "Failed to get IAM users for account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    try {
+        $roleCount = @(Get-IAMRoleList -Credential $Credential -Region $Region -ErrorAction Stop).Count
+        $roleListSucceeded = $true
+    } catch {
+        Write-Host "Failed to get IAM roles for account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    try {
+        $policyCount = @(Get-IAMPolicyList -Credential $Credential -Region $Region -Scope Local -ErrorAction Stop).Count
+        $policyListSucceeded = $true
+    } catch {
+        Write-Host "Failed to get IAM policies for account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+    }
+
+    if (-not $userListSucceeded -and -not $roleListSucceeded -and -not $policyListSucceeded) {
+        # All three IAM permissions missing — return $null so the orchestrator skips
+        # this account's IAM row entirely. Matches the KMS/Secrets/SQS pattern in
+        # Get-AWSSimpleServiceCounts (line 1930). Per-cmdlet failures above already
+        # surface to SEs via red Write-Host output (consistent with EC2/S3/RDS),
+        # which is the failure-visibility mechanism for the script.
+        return $null
+    }
+
+    return [PSCustomObject] @{
+        "AwsAccountId"            = $AccountInfo.Account
+        "AwsAccountAlias"         = $AccountAlias
+        "Users"                   = $userCount
+        "Roles"                   = $roleCount
+        "CustomerManagedPolicies" = $policyCount
+    }
+}
+
 function Get-AWSFSxInventory {
     param(
         $Credential,
@@ -2211,6 +2411,22 @@ function getAWSData($cred) {
     Write-Host "Found $($storageLensConfigsWithCloudWatch.Count) Storage Lens configuration(s) with CloudWatch publishing enabled." -ForegroundColor Green
   }
 
+  # Collect Route53 hosted zones ONCE per account (Route53 is a global service).
+  # This deliberately runs BEFORE the per-region loop so the API is called only once.
+  $route53Result = Get-AWSRoute53Inventory -Credential $cred -Region $queryRegion `
+      -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+  if ($null -ne $route53Result) {
+      foreach ($r53Item in $route53Result) { $route53List.Add($r53Item) | Out-Null }
+  }
+
+  # Collect IAM inventory ONCE per account (IAM is a global service).
+  # Returns a single row of counts per account, not a list — so wiring is simpler than Route53.
+  $iamResult = Get-AWSIAMInventory -Credential $cred -Region $queryRegion `
+      -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+  if ($null -ne $iamResult) {
+      $iamList.Add($iamResult) | Out-Null
+  }
+
   # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
   $awsRegionCounter = 1
   foreach ($awsRegion in $awsRegions) {
@@ -2267,6 +2483,20 @@ function getAWSData($cred) {
       foreach ($fsxVolItem in $fsxResult.Volumes) { $fsxList.Add($fsxVolItem) | Out-Null }
     }
 
+    # Collect VPC inventory for this region
+    $vpcResult = Get-AWSVPCInventory -Credential $cred -Region $awsRegion `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+    if ($null -ne $vpcResult) {
+        foreach ($vpcItem in $vpcResult) { $vpcList.Add($vpcItem) | Out-Null }
+    }
+
+    # Collect Load Balancer inventory for this region (Classic + v2 ALB/NLB/GWLB)
+    $lbResult = Get-AWSLoadBalancerInventory -Credential $cred -Region $awsRegion `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+    if ($null -ne $lbResult) {
+        foreach ($lbItem in $lbResult) { $lbList.Add($lbItem) | Out-Null }
+    }
+
     # Collect simple service counts for this region
     $simpleResult = Get-AWSSimpleServiceCounts -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias
@@ -2313,6 +2543,10 @@ $ec2List = New-Object collections.arraylist
 $ec2AttachedVolList = New-Object collections.arraylist
 $ec2UnattachedVolList = New-Object collections.arraylist
 $rdsList = New-Object collections.arraylist
+$vpcList = New-Object collections.arraylist
+$lbList = New-Object collections.arraylist
+$route53List = New-Object collections.arraylist
+$iamList = New-Object collections.arraylist
 $s3List = New-Object collections.arraylist
 $efsList = New-Object collections.arraylist
 $fsxFileSystemList = New-Object collections.arraylist
@@ -2788,11 +3022,12 @@ if ($Anonymize) {
   Write-Host "Anonymizing..." -ForegroundColor Green
 
   $global:anonymizeProperties = @("Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",
-                                  "BucketName", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn",
-                                  "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "InstanceId", "InstanceName", "Name", "NodegroupArn",
+                                  "BucketName", "CidrBlock", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn",
+                                  "DNSName", "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "HostedZoneId",
+                                  "InstanceId", "InstanceName", "LoadBalancerName", "Name", "NodegroupArn",
                                   "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources",
                                   "RoleArn", "RuleId", "RuleName", "TableArn", "TableId", "TableName", "TargetBackupVaultName",
-                                  "VersionId", "VolumeId")
+                                  "VersionId", "VolumeId", "VpcId")
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
     foreach($field in $anonFieldsList){
@@ -2961,6 +3196,10 @@ if ($Anonymize) {
   $s3ListAg = Invoke-CollectionAnonymization -Collection $s3ListAg
   $secretsList = Invoke-CollectionAnonymization -Collection $secretsList
   $sqsList = Invoke-CollectionAnonymization -Collection $sqsList
+  $vpcList = Invoke-CollectionAnonymization -Collection $vpcList
+  $lbList = Invoke-CollectionAnonymization -Collection $lbList
+  $route53List = Invoke-CollectionAnonymization -Collection $route53List
+  $iamList = Invoke-CollectionAnonymization -Collection $iamList
 }
 
 # Export to CSV
@@ -2981,6 +3220,19 @@ $ec2UnattachedVolList | Export-CSV -path $outputEc2UnattachedVolume
 Add-TagsToAllObjectsInList($rdsList)
 Write-Host "CSV file output to: $outputRDS"  -ForegroundColor Green
 $rdsList | Export-CSV -path $outputRDS
+
+Add-TagsToAllObjectsInList($vpcList)
+Write-Host "CSV file output to: $outputVPC" -ForegroundColor Green
+$vpcList | Export-CSV -path $outputVPC
+
+Write-Host "CSV file output to: $outputLB" -ForegroundColor Green
+$lbList | Export-CSV -path $outputLB
+
+Write-Host "CSV file output to: $outputRoute53" -ForegroundColor Green
+$route53List | Export-CSV -path $outputRoute53
+
+Write-Host "CSV file output to: $outputIAM" -ForegroundColor Green
+$iamList | Export-CSV -path $outputIAM
 
 Write-Host "CSV file output to: $outputS3"  -ForegroundColor Green
 $s3ListAg | Export-CSV -path $outputS3
@@ -3050,6 +3302,18 @@ Write-Host
 Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
 Write-Host "Provisioned capacity of all backed up RDS instances: $rdsTotalBackupGiB GiB or $rdsTotalBackupGB GB or $rdsTotalBackupTiB TiB or $rdsTotalBackupTB TB"  -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of VPCs: $($vpcList.count)" -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of Load Balancers: $($lbList.count)" -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of Route53 hosted zones: $($route53List.count)" -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of IAM accounts profiled: $($iamList.count)" -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of EFS file systems: $($efsList.count)"  -ForegroundColor Green
