@@ -19,6 +19,8 @@
         - **Summary**: A high-level report with aggregated counts for each domain.
 
     The script generates a CSV report that can be shared with Rubrik for licensing purposes.
+    
+    Author : Aymeric Jaouen
 
 .PARAMETER SpecificDomains
     This is an optional parameter that allows you to specify which Active Directory domains to audit. If you do not use this parameter, the script will automatically discover and audit all domains in the current AD forest.
