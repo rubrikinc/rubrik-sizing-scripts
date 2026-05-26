@@ -66,6 +66,7 @@
                     "eks:ListClusters",
                     "eks:ListNodegroups",
                     "elasticloadbalancing:DescribeLoadBalancers",
+                    "elasticloadbalancing:DescribeTags",
                     "elasticfilesystem:DescribeFileSystems",
                     "fsx:DescribeFileSystems",
                     "fsx:DescribeVolumes",
@@ -73,11 +74,15 @@
                     "iam:ListPolicies",
                     "iam:ListRoles",
                     "iam:ListUsers",
+                    "kms:DescribeKey",
+                    "kms:ListAliases",
                     "kms:ListKeys",
                     "organizations:ListAccounts",
+                    "rds:DescribeDBClusters",
                     "rds:DescribeDBInstances",
                     "route53:ListHostedZones",
                     "s3:GetBucketLocation",
+                    "s3:GetBucketTagging",
                     "s3:ListAllMyBuckets",
                     "s3:GetStorageLensConfiguration",
                     "s3:ListStorageLensConfigurations",
@@ -356,7 +361,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.1.0"
+$scriptVersion = "1.2.0"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
@@ -1181,6 +1186,7 @@ function Get-AWSRDSInventory {
         "AwsAccountAlias" = $AccountAlias
         "DBName" = $rds.DBName
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
+        "DBClusterIdentifier" = $rds.DBClusterIdentifier
         "SizeGiB" = $rdsSizes["SizeGiB"]
         "SizeTiB" = $rdsSizes["SizeTiB"]
         "SizeGB" = $rdsSizes["SizeGB"]
@@ -1195,6 +1201,8 @@ function Get-AWSRDSInventory {
         "BackupRetentionPeriod" = $rds.BackupRetentionPeriod
         "PreferredBackupWindow" = $rds.PreferredBackupWindow
         "StorageType" = $rds.StorageType
+        "EngineMode" = $null
+        "InstanceCount" = 1
       }
 
       foreach ($tag in $rds.TagList) {
@@ -1254,6 +1262,7 @@ function Get-AWSRDSInventory {
         "AwsAccountAlias" = $AccountAlias
         "DBName" = $cluster.DatabaseName
         "DBInstanceIdentifier" = $cluster.DBClusterIdentifier
+        "DBClusterIdentifier" = $cluster.DBClusterIdentifier
         "SizeGiB" = $clusterSizes["SizeGiB"]
         "SizeTiB" = $clusterSizes["SizeTiB"]
         "SizeGB" = $clusterSizes["SizeGB"]
@@ -1268,6 +1277,8 @@ function Get-AWSRDSInventory {
         "BackupRetentionPeriod" = $cluster.BackupRetentionPeriod
         "PreferredBackupWindow" = $cluster.PreferredBackupWindow
         "StorageType" = $cluster.StorageType
+        "EngineMode" = $cluster.EngineMode
+        "InstanceCount" = if ($cluster.DBClusterMembers) { $cluster.DBClusterMembers.Count } else { 0 }
       }
 
       foreach ($tag in $cluster.TagList) {
@@ -1498,17 +1509,34 @@ function Get-AWSLoadBalancerInventory {
 
     try {
         Get-ELBLoadBalancer -Credential $Credential -Region $Region -ErrorAction Stop | ForEach-Object {
-            $lbResult.Add([PSCustomObject] @{
+            $lb = $_
+            $lbObj = [PSCustomObject] @{
                 "AwsAccountId"     = $AccountInfo.Account
                 "AwsAccountAlias"  = $AccountAlias
                 "Region"           = $Region
-                "LoadBalancerName" = $_.LoadBalancerName
+                "LoadBalancerName" = $lb.LoadBalancerName
                 "Type"             = "classic"
-                "Scheme"           = $_.Scheme
-                "VpcId"            = $_.VPCId
-                "DNSName"          = $_.DNSName
-                "Arn"              = "arn:$($partitionId):elasticloadbalancing:${Region}:$($AccountInfo.Account):loadbalancer/$($_.LoadBalancerName)"
-            }) | Out-Null
+                "Scheme"           = $lb.Scheme
+                "VpcId"            = $lb.VPCId
+                "DNSName"          = $lb.DNSName
+                "Arn"              = "arn:$($partitionId):elasticloadbalancing:${Region}:$($AccountInfo.Account):loadbalancer/$($lb.LoadBalancerName)"
+            }
+            try {
+                $tagDescriptions = Get-ELBLoadBalancerTag -LoadBalancerName $lb.LoadBalancerName `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                foreach ($desc in $tagDescriptions) {
+                    foreach ($tag in $desc.Tags) {
+                        $key = $tag.Key -replace '[^a-zA-Z0-9-]', '_'
+                        if ($key -ne "Name") {
+                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+                        }
+                    }
+                }
+            } catch {
+                Write-Host "Failed to get tags for Classic LB $($lb.LoadBalancerName) in region $Region account $($AccountInfo.Account)" -ForeGroundColor Yellow
+                Write-Host "Error: $_" -ForeGroundColor Yellow
+            }
+            $lbResult.Add($lbObj) | Out-Null
         }
     } catch {
         Write-Host "Failed to get Classic LBs for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
@@ -1517,17 +1545,34 @@ function Get-AWSLoadBalancerInventory {
 
     try {
         Get-ELB2LoadBalancer -Credential $Credential -Region $Region -ErrorAction Stop | ForEach-Object {
-            $lbResult.Add([PSCustomObject] @{
+            $lb = $_
+            $lbObj = [PSCustomObject] @{
                 "AwsAccountId"     = $AccountInfo.Account
                 "AwsAccountAlias"  = $AccountAlias
                 "Region"           = $Region
-                "LoadBalancerName" = $_.LoadBalancerName
-                "Type"             = $_.Type
-                "Scheme"           = $_.Scheme
-                "VpcId"            = $_.VpcId
-                "DNSName"          = $_.DNSName
-                "Arn"              = $_.LoadBalancerArn
-            }) | Out-Null
+                "LoadBalancerName" = $lb.LoadBalancerName
+                "Type"             = $lb.Type
+                "Scheme"           = $lb.Scheme
+                "VpcId"            = $lb.VpcId
+                "DNSName"          = $lb.DNSName
+                "Arn"              = $lb.LoadBalancerArn
+            }
+            try {
+                $tagDescriptions = Get-ELB2Tag -ResourceArn $lb.LoadBalancerArn `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                foreach ($desc in $tagDescriptions) {
+                    foreach ($tag in $desc.Tags) {
+                        $key = $tag.Key -replace '[^a-zA-Z0-9-]', '_'
+                        if ($key -ne "Name") {
+                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+                        }
+                    }
+                }
+            } catch {
+                Write-Host "Failed to get tags for v2 LB $($lb.LoadBalancerArn) in region $Region account $($AccountInfo.Account)" -ForeGroundColor Yellow
+                Write-Host "Error: $_" -ForeGroundColor Yellow
+            }
+            $lbResult.Add($lbObj) | Out-Null
         }
     } catch {
         Write-Host "Failed to get v2 LBs for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
@@ -1973,23 +2018,9 @@ function Get-AWSSimpleServiceCounts {
         [string]$AccountAlias
     )
 
-    $kmsObj = $null
     $secretsObj = $null
     $sqsObj = $null
 
-#Start ingesting KMS key information
-    try{
-      $numberOfKMS = (Get-KMSKeyList -Region $Region -ErrorAction Stop).Count
-      $kmsObj = [PSCustomObject] @{
-        "AwsAccountId" = $AccountInfo.Account
-        "AwsAccountAlias" = $AccountAlias
-        "Region" = $Region
-        "Keys" = $numberOfKMS
-      }
-    } catch{
-      Write-Host "Failed to get # of KMS keys for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
 #Start ingesting SecretsManager information
     try{
       $numberOfSecrets = (Get-SECSecretList -Region $Region -ErrorAction Stop).Count
@@ -2017,7 +2048,82 @@ function Get-AWSSimpleServiceCounts {
       Write-Host "Error: $_" -ForeGroundColor Red
     }
 
-    return @{ KMS = $kmsObj; Secrets = $secretsObj; SQS = $sqsObj }
+    return @{ Secrets = $secretsObj; SQS = $sqsObj }
+}
+
+function Get-AWSKMSInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $kmsResult = New-Object collections.arraylist
+
+    $keyList = $null
+    try {
+        $keyList = Get-KMSKeyList -Credential $Credential -Region $Region -ErrorAction Stop
+    } catch {
+        Write-Host "Failed to list KMS keys for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
+        return ,$kmsResult
+    }
+
+    $counter = 1
+    $totalKeys = @($keyList).Count
+    foreach ($key in $keyList) {
+        Write-Progress -ID 8 -Activity "Processing KMS key: $($key.KeyId)" -Status "KMS key $counter of $totalKeys" -PercentComplete (($counter / [Math]::Max($totalKeys,1)) * 100)
+        $counter++
+        try {
+            $meta = Get-KMSKey -KeyId $key.KeyId -Credential $Credential -Region $Region -ErrorAction Stop
+        } catch {
+            Write-Host "Failed to describe KMS key $($key.KeyId) in region $Region account $($AccountInfo.Account)" -ForeGroundColor Yellow
+            Write-Host "Error: $_" -ForeGroundColor Yellow
+            continue
+        }
+
+        # Emit both AWS-managed and customer-managed keys. The KeyManager column
+        # ("AWS" vs "CUSTOMER") is the filter downstream consumers use to slice
+        # the inventory; we no longer drop AWS-managed defaults here.
+        # Look up the visible alias(es) attached to this key. Customer-managed
+        # keys may have user-defined aliases; AWS-managed keys have AWS-generated
+        # aliases like alias/aws/<service>. Join multiple aliases with semicolons;
+        # missing aliases stay blank.
+        $aliasName = $null
+        try {
+            $aliases = Get-KMSAliasList -KeyId $key.KeyId -Credential $Credential -Region $Region -ErrorAction Stop
+            if ($aliases) {
+                $aliasName = (@($aliases) | ForEach-Object { $_.AliasName }) -join '; '
+            }
+        } catch {
+            Write-Host "Failed to list aliases for KMS key $($key.KeyId) in region $Region account $($AccountInfo.Account)" -ForeGroundColor Yellow
+            Write-Host "Error: $_" -ForeGroundColor Yellow
+        }
+
+        # Stringify CreationDate (ISO-8601). Anonymization recurses into PSObject
+        # properties; raw [datetime] values trip on the ReadOnly DateTime member.
+        $creationDateStr = $null
+        if ($null -ne $meta.CreationDate) {
+            $creationDateStr = ([datetime]$meta.CreationDate).ToUniversalTime().ToString('o')
+        }
+
+        $kmsObj = [PSCustomObject] @{
+            "AwsAccountId"    = $AccountInfo.Account
+            "AwsAccountAlias" = $AccountAlias
+            "Region"          = $Region
+            "Alias"           = $aliasName
+            "KeyId"           = $meta.KeyId
+            "Arn"             = $meta.Arn
+            "KeyManager"      = $meta.KeyManager
+            "KeyState"        = $meta.KeyState
+            "CreationDate"    = $creationDateStr
+        }
+        $kmsResult.Add($kmsObj) | Out-Null
+    }
+    Write-Progress -ID 8 -Activity "Processing KMS keys" -Completed
+
+    return ,$kmsResult
 }
 
 function Get-AWSBackupPlanInventory {
@@ -2501,9 +2607,15 @@ function getAWSData($cred) {
     $simpleResult = Get-AWSSimpleServiceCounts -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias
     if ($null -ne $simpleResult) {
-      if ($null -ne $simpleResult.KMS) { $kmsList.Add($simpleResult.KMS) | Out-Null }
       if ($null -ne $simpleResult.Secrets) { $secretsList.Add($simpleResult.Secrets) | Out-Null }
       if ($null -ne $simpleResult.SQS) { $sqsList.Add($simpleResult.SQS) | Out-Null }
+    }
+
+    # Collect KMS customer-managed key inventory for this region
+    $kmsResult = Get-AWSKMSInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
+        -AccountAlias $awsAccountAlias
+    if ($null -ne $kmsResult) {
+      foreach ($kmsItem in $kmsResult) { $kmsList.Add($kmsItem) | Out-Null }
     }
 
     # Collect DynamoDB inventory for this region
@@ -3005,7 +3117,10 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $ddbTotalTB = ($ddbList.TableSizeTB | Measure-Object -Sum).sum
 
   $totalSecrets = ($secretsList.Secrets | Measure-Object -Sum).sum
-  $totalKeys = ($kmsList.Keys | Measure-Object -Sum).sum
+  # Get-AWSKMSInventory emits both customer-managed and AWS-managed keys; split
+  # the count by KeyManager so the summary labels match what's being reported.
+  $totalCustomerManagedKeys = (@($kmsList) | Where-Object { $_.KeyManager -eq 'CUSTOMER' }).Count
+  $totalAwsManagedKeys = (@($kmsList) | Where-Object { $_.KeyManager -eq 'AWS' }).Count
   $totalQueues = ($sqsList.Queues | Measure-Object -Sum).sum
 
   # If statement is a workaround for error when getting backup plans when payer account 
@@ -3021,10 +3136,10 @@ if ($Anonymize) {
   Write-Host
   Write-Host "Anonymizing..." -ForegroundColor Green
 
-  $global:anonymizeProperties = @("Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",
-                                  "BucketName", "CidrBlock", "ClusterName", "CreatorRequestId", "DBInstanceIdentifier", "DestinationBackupVaultArn",
+  $global:anonymizeProperties = @("Alias", "Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",
+                                  "BucketName", "CidrBlock", "ClusterName", "CreatorRequestId", "DBClusterIdentifier", "DBInstanceIdentifier", "DestinationBackupVaultArn",
                                   "DNSName", "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "HostedZoneId",
-                                  "InstanceId", "InstanceName", "LoadBalancerName", "Name", "NodegroupArn",
+                                  "InstanceId", "InstanceName", "KeyId", "LoadBalancerName", "Name", "NodegroupArn",
                                   "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources",
                                   "RoleArn", "RuleId", "RuleName", "TableArn", "TableId", "TableName", "TargetBackupVaultName",
                                   "VersionId", "VolumeId", "VpcId")
@@ -3225,6 +3340,7 @@ Add-TagsToAllObjectsInList($vpcList)
 Write-Host "CSV file output to: $outputVPC" -ForegroundColor Green
 $vpcList | Export-CSV -path $outputVPC
 
+Add-TagsToAllObjectsInList($lbList)
 Write-Host "CSV file output to: $outputLB" -ForegroundColor Green
 $lbList | Export-CSV -path $outputLB
 
@@ -3258,6 +3374,7 @@ $secretsList | Export-CSV -path $outputSecrets
 Write-Host "CSV file output to: $outputSQS"  -ForegroundColor Green
 $sqsList | Export-CSV -path $outputSQS
 
+Add-TagsToAllObjectsInList($kmsList)
 Write-Host "CSV file output to: $outputKMS"  -ForegroundColor Green
 $kmsList | Export-CSV -path $outputKMS
 
@@ -3333,7 +3450,8 @@ Write-Host "Used storage of all backed up FSx volumes: $fsxTotalBackupUsedGiB Gi
 Write-Host "Storage capacity of all backed up FSx volumes: $fsxTotalBackupCapacityGiB GiB or $fsxTotalBackupCapacityGB GB or $fsxTotalBackupCapacityTiB TiB or $fsxTotalBackupCapacityTB TB"  -ForegroundColor Green
 
 Write-Host
-Write-Host "Total # of KMS Keys: $($totalKeys)"  -ForegroundColor Green
+Write-Host "Total # of customer-managed KMS Keys: $($totalCustomerManagedKeys)"  -ForegroundColor Green
+Write-Host "Total # of AWS-managed KMS Keys: $($totalAwsManagedKeys)"  -ForegroundColor Green
 Write-Host "Total # of Secrets: $($totalSecrets)"  -ForegroundColor Green
 Write-Host "Total # of SQS Queues: $($totalQueues)"  -ForegroundColor Green
 

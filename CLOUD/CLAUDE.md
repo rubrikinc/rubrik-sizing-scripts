@@ -16,8 +16,8 @@ solution pricing and capacity planning.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `Get-AWSSizingInfo.ps1` | ~3,400 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, VPC, Load Balancers, Route53, IAM, Backup, KMS, SQS, Secrets Manager |
-| `Get-AzureSizingInfo.ps1` | ~2,600 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
+| `Get-AWSSizingInfo.ps1` | ~3,500 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, VPC, Load Balancers, Route53, IAM, Backup, KMS, SQS, Secrets Manager |
+| `Get-AzureSizingInfo.ps1` | ~2,700 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
 | `Get-GCPSizingInfo.ps1` | ~900 | GCP sizing — GCE VMs, Disks, Cloud SQL, Spanner |
 | `consolidate.ps1` | | Merges multi-region CSV outputs into single files |
 | `Get-AWSSizingInfo-Permissions.cft` | | CloudFormation template for cross-account IAM role |

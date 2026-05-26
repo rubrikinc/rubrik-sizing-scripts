@@ -70,6 +70,7 @@ To run the AWS sizing script, ensure you have the following:
                       "eks:ListClusters",
                       "eks:ListNodegroups",
                       "elasticloadbalancing:DescribeLoadBalancers",
+                      "elasticloadbalancing:DescribeTags",
                       "elasticfilesystem:DescribeFileSystems",
                       "fsx:DescribeFileSystems",
                       "fsx:DescribeVolumes",
@@ -77,6 +78,8 @@ To run the AWS sizing script, ensure you have the following:
                       "iam:ListPolicies",
                       "iam:ListRoles",
                       "iam:ListUsers",
+                      "kms:DescribeKey",
+                      "kms:ListAliases",
                       "kms:ListKeys",
                       "organizations:ListAccounts",
                       "rds:DescribeDBClusters",
@@ -133,7 +136,22 @@ In both cases run the sizing script with the appropriate options and send the da
 
 ### Aurora DB Processing
 
-Aurora databases are processed at the cluster level rather than the instance level. This is because Aurora storage is allocated at the cluster level, and Rubrik protects Aurora clusters (not individual instances). As a result, multiple Aurora instances belonging to the same cluster will appear as a single cluster entry in the output.
+Aurora clusters are emitted as one row per cluster (Aurora-engine RDS instances are skipped at the RDS instance loop
+so the cluster row is the canonical Aurora entry). Cluster-level storage is reported from the CloudWatch
+`VolumeBytesUsed` metric. Each cluster row carries:
+
+- `DBClusterIdentifier` — also populated on non-Aurora RDS instance rows for clustered engines (e.g. RDS Multi-AZ
+  clusters); blank for standalone instances.
+- `EngineMode` — populated only on Aurora cluster rows. `serverless` identifies Aurora Serverless v1;
+  `provisioned` covers both standard Aurora and Aurora Serverless v2 (the underlying API does not
+  distinguish v2 from standard Aurora at the cluster level — check the instance class / scaling
+  configuration in the AWS console if v2-vs-standard matters). Blank on standalone RDS instance rows.
+- `InstanceCount` — number of member instances in the cluster, sourced from `DBClusterMembers.Count` (0 when the
+  cluster reports no members, e.g. Aurora Serverless v1). Standalone RDS instance rows always carry
+  `InstanceCount = 1` so downstream consumers can sum this column across every RDS row to recover the total
+  per-instance count without special-casing Aurora vs non-Aurora rows.
+
+All `Tag:` columns are emitted contiguously at the end of the row (after `InstanceCount`).
 
 ### S3 Storage Lens for Current Version Storage Metrics
 
