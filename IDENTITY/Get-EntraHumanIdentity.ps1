@@ -17,8 +17,51 @@
         - **Summary**: A high-level report with aggregated counts for each domain.
 
     The script generates both CSV and HTML reports that can be shared with Rubrik for licensing purposes.
-    
-    Author : Aymeric Jaouen
+
+    ## Report Columns
+
+    ### Per-User Report (ByUser)
+    - **Directory**: The domain associated with the user (resolved from mail, identities, or UPN for guests; from on-premises domain for synced users).
+    - **User**: The user's account name (the part before @ in the UPN).
+    - **Guest**: 1 if the user is an external/guest identity (UserType = Guest), 0 otherwise.
+    - **Member**: 1 if the user is a member identity owned by this tenant (UserType = Member), 0 otherwise.
+    - **Account Enabled**: 1 if the account is enabled in Entra ID, 0 if disabled.
+    - **Account Disabled**: 1 if the account is disabled, 0 otherwise.
+    - **Active Identity**: 1 if the user has signed in within the configured inactivity period (default 180 days), 0 otherwise. Disabled accounts are never marked active.
+    - **Inactive Identity**: 1 if the user has not signed in within the inactivity period or has never signed in. Disabled accounts are never marked inactive (they are simply disabled).
+    - **Never Logged In**: 1 if no sign-in activity has ever been recorded for this account, 0 otherwise.
+    - **Service Account Pattern**: 1 if the user's UPN matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
+    - **Synch from AD**: 1 if the account is synchronized from on-premises Active Directory (OnPremisesSyncEnabled = true), 0 otherwise.
+    - **Cloud Only**: 1 if the account exists only in Entra ID (not synced from AD), 0 otherwise.
+    - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise.
+    - **Source AD**: The on-premises AD domain name for synced accounts, N/A for cloud-only accounts.
+    - **App owned by User** (only with -CheckOwnership): Number of Entra ID application registrations owned by this user.
+    - **SP owned by User** (only with -CheckOwnership): Number of service principals (enterprise apps) owned by this user.
+    - **Managed Identity** (only with -CheckOwnership): Number of managed identities owned by this user.
+
+    ### Per-Domain Report (ByDomain)
+    - **Directory**: The domain name.
+    - **Total Users**: Total number of user accounts associated with this domain.
+    - **Guest Users**: Number of guest/external accounts.
+    - **Member Users**: Number of member accounts.
+    - **Account Enabled**: Number of enabled accounts.
+    - **Account Disabled**: Number of disabled accounts.
+    - **Active Identity**: Number of users who signed in within the inactivity period.
+    - **Inactive Identity**: Number of users who have not signed in within the inactivity period.
+    - **Never Logged In Users**: Number of accounts with no recorded sign-in.
+    - **Service Account Pattern**: Number of accounts matching the service account naming patterns.
+    - **Synch from AD**: Number of accounts synchronized from on-premises AD.
+    - **Cloud Only**: Number of cloud-only accounts.
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account).
+    - **Source AD**: Number of distinct on-premises AD source domains for synced accounts.
+    - **Applications**: Number of Entra ID application registrations published under this domain.
+    - **Service Principals**: Number of service principals (enterprise apps) associated with this domain.
+    - **Managed Identities**: Number of managed identities associated with this domain.
+    - **Valid Enterprise Apps**: Reserved (currently set to 0).
+
+    ### Licensing Report
+    - **Directory**: The domain name.
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match.
 
 .PARAMETER UserServiceAccountNamesLike
     This is an optional parameter that allows you to identify service accounts based on their User Principal Name (UPN). You can provide a list of wildcard patterns, and any user account with a UPN matching one of these patterns will be flagged as a service account in the report.
@@ -32,20 +75,15 @@
 
     The default value is 'Full'.
 
-.PARAMETER DaysInactive
-    This parameter allows you to specify the number of days of inactivity after which a user is considered inactive. The default value is 180 days.
-
-    Example: -DaysInactive 90
-
 .PARAMETER CheckOwnership
     This is an optional switch parameter. If you include this parameter, the script will perform additional queries to determine the owners of applications and service principals. This provides more detailed information but can increase the script's execution time.
 
     Example: -CheckOwnership
 
 .EXAMPLE
-    Example 1: Perform a full audit with ownership checking and a 90-day inactivity period.
+    Example 1: Perform a full audit with ownership checking
 
-    .\Get-EntraHumanIdentity.ps1 -Mode Full -DaysInactive 90 -UserServiceAccountNamesLike "svc-*" -CheckOwnership
+    .\Get-EntraHumanIdentity.ps1 -Mode Full -UserServiceAccountNamesLike "svc-*" -CheckOwnership
 
     This command will:
     - Generate a detailed report for all users.
@@ -69,6 +107,10 @@
     - **Permissions**: The user running the script must have sufficient permissions in Entra ID to read user, application, and service principal information. The required permissions are 'User.Read.All', 'Directory.Read.All', 'Application.Read.All', and 'AuditLog.Read.All'. The script will prompt for login and consent to these permissions if not already granted.
     - **Execution Policy**: You may need to adjust the PowerShell execution policy to run this script. You can do this by running "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process".
     - **Culture Settings**: The script temporarily sets the culture to 'en-US' to ensure that dates and times are parsed correctly. This change is reverted at the end of the script.
+
+.AUTOR
+Aymeric Jaouen
+
 #>
 
 param (
@@ -117,9 +159,11 @@ try {
         }
         $commandString += " -$paramName $formattedValue"
     }
+    $script:commandLine = $commandString
     Write-Log "Script started with command: $commandString" "INFO" "Magenta"
 }
 catch {
+    $script:commandLine = "N/A"
     Write-Log "Could not log the command line. Error: $_" "WARNING" "Yellow"
 }
 
@@ -195,7 +239,7 @@ Connect-EntraGraph
 function Get-ReportHeaders {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('ByUser', 'ByDomain')]
+        [ValidateSet('ByUser', 'ByDomain', 'Licensing')]
         [string] $Type,
         [Parameter()]
         [switch] $CheckOwnership
@@ -225,6 +269,13 @@ function Get-ReportHeaders {
                 $baseHeaders['ManagedIdentitiesCount']  = 'Managed Identity'
             }
             return [PSCustomObject]$baseHeaders
+        }
+
+        'Licensing' {
+            return [PSCustomObject]@{
+                Domain             = 'Directory'
+                LicensedIdentities = 'Licensed Identities'
+            }
         }
 
         'ByDomain' {
@@ -438,6 +489,7 @@ function Get-ByUserData {
                 PatternMatchedUser      = [int]$patternMatched
                 SyncFromAD              = [int]$syncFromAD
                 CloudOnly               = $cloudOnly
+                LicensedIdentity        = [int]($isMember -and $isEnabled -and $isActive -and -not $patternMatched)
                 ADSourceDomain          = $adSourceDomain
                 OwnedAppsCount          = $ownedCount
                 EnterpriseAppsCount     = $enterpriseCount
@@ -539,6 +591,7 @@ function Get-ByDomainData {
           PatternMatchedUsers = ($grpUsers | Where-Object { $_.PatternMatchedUser -eq 1 }).Count
           SyncFromADCount = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
           CloudOnlyCount = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
+          LicensedIdentities = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
           ADSourceDomainCounts = @(
             $grpUsers |
             Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
@@ -579,6 +632,7 @@ function Get-ByDomainData {
       PatternMatchedUsers = 0
       SyncFromADCount = 0
       CloudOnlyCount = 0
+      LicensedIdentities = 0
       ADSourceDomainCounts = 0
       DomainApplicationsCount = $otherApps.Count
       DomainServicePrincipalCount = ($otherSPs | Where-Object ServicePrincipalType -eq 'Application').Count
@@ -659,6 +713,15 @@ function Export-HtmlReport {
 
         [Parameter(Mandatory)]
         [PSCustomObject] $Columns,
+
+        [Parameter()]
+        [string] $MiddleReportTitle,
+
+        [Parameter()]
+        [object[]] $MiddleReportData,
+
+        [Parameter()]
+        [PSCustomObject] $MiddleReportColumns,
 
         [Parameter()]
         [string] $SecondReportTitle,
@@ -860,6 +923,12 @@ function Export-HtmlReport {
         # Add the first table
         $htmlBody += New-HtmlTable -TableTitle $Title -TableData $Data -TableColumns $Columns
 
+        # If a middle report (licensing) is provided, add it
+        if ($MiddleReportData) {
+            $htmlBody += "<br>"
+            $htmlBody += New-HtmlTable -TableTitle $MiddleReportTitle -TableData $MiddleReportData -TableColumns $MiddleReportColumns
+        }
+
         # If a second report is provided, add it
         if ($SecondReportData) {
             $htmlBody += "<br>"
@@ -868,7 +937,8 @@ function Export-HtmlReport {
 
         $htmlBody += @"
         <div class="footer">
-            Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br/>
+            Command: $($script:commandLine)
         </div>
     </div>
 </body>
@@ -924,20 +994,29 @@ $byDomain = Get-ByDomainData `
   -ManagedIdentities $managedIdentities `
   -AppDomainMap      $appDomainMap
 
+#— 3b) Licensing: extract from domain data
+Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+
 #— 4) Préparation des en-têtes de rapport
-$userCols   = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership
-$domainCols = Get-ReportHeaders -Type ByDomain
+$userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership
+$domainCols    = Get-ReportHeaders -Type ByDomain
+$licensingCols = Get-ReportHeaders -Type Licensing
 
 #— 6) Export CSV & HTML en fonction du mode
 if ($Mode -eq 'Full') {
     Write-Log "Exporting Full reports in CSV and HTML format..." "INFO" "Cyan"
 
-    Export-CsvReport -FileName "Full_ByUser_$timestamp.csv"    -Data  $byUser   -Columns $userCols
-    Export-CsvReport -FileName "Full_ByDomain_$timestamp.csv"  -Data  $byDomain -Columns $domainCols
+    Export-CsvReport -FileName "Full_ByUser_$timestamp.csv"      -Data $byUser        -Columns $userCols
+    Export-CsvReport -FileName "Full_ByDomain_$timestamp.csv"    -Data $byDomain      -Columns $domainCols
+    Export-CsvReport -FileName "Full_Licensing_$timestamp.csv"   -Data $licensingData -Columns $licensingCols
     Export-HtmlReport -FileName "Full_Report_$timestamp.html" `
                    -Title 'Domain Summary' `
                    -Data  $byDomain `
                    -Columns $domainCols `
+                   -MiddleReportTitle 'Rubrik Licensing' `
+                   -MiddleReportData $licensingData `
+                   -MiddleReportColumns $licensingCols `
                    -SecondReportTitle 'User Details' `
                    -SecondReportData $byUser `
                    -SecondReportColumns $userCols `
@@ -947,9 +1026,14 @@ if ($Mode -eq 'Full') {
 else {
     Write-Log "Exporting Summary reports in CSV and HTML format..." "INFO" "Cyan"
 
-    Export-CsvReport   -FileName "Summary_ByDomain_$timestamp.csv" -Data  $byDomain -Columns $domainCols
-    Export-HtmlReport  -FileName "Summary_Report_$timestamp.html"  -Title 'EntraID Summary'    `
-                       -Data  $byDomain -Columns $domainCols
+    Export-CsvReport   -FileName "Summary_ByDomain_$timestamp.csv"    -Data $byDomain      -Columns $domainCols
+    Export-CsvReport   -FileName "Summary_Licensing_$timestamp.csv"  -Data $licensingData -Columns $licensingCols
+    Export-HtmlReport  -FileName "Summary_Report_$timestamp.html" -Title 'EntraID Summary' `
+                       -Data $byDomain -Columns $domainCols `
+                       -MiddleReportTitle 'Rubrik Licensing' `
+                       -MiddleReportData $licensingData `
+                       -MiddleReportColumns $licensingCols `
+                       -OutputPath $OutputPath
 }
 
 # Reset Culture settings back to original value
