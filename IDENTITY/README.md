@@ -48,7 +48,7 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 | Parameter                       | Description                                                                                                                         | Required | Default Value             |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------- |
 | `SpecificDomains`               | An array of fully qualified domain names to audit (e.g., `"corp.domain.local"`). If omitted, all domains in the forest are audited. | No       | All domains in the forest |
-| `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by name (e.g., `"*svc*"`, `"*_bot*"`).                                   | No       | None                      |
+| `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by name. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None                      |
 | `ExcludeOUs`                    | An array of OU distinguished names to exclude from the audit (exact match on the full DN).                                          | No       | None                      |
 | `Mode`                          | The reporting mode. `Full` for a detailed per-OU report or `Summary` for a domain-level summary.                                    | Yes      | `Full`                    |
 
@@ -105,7 +105,7 @@ This script is a Rubrik utility for counting human identities in a customer's En
 
 | Parameter                       | Description                                                                                                              | Required | Default Value |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- | ------------- |
-| `UserServiceAccountNamesLike`   | An array of patterns to identify service accounts by their UPN (e.g., `"svc-"`, `"sa-"`).                                | No       | None          |
+| `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by their UPN. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None          |
 | `Mode`                          | The reporting mode. `Full` for a detailed per-user report or `Summary` for an aggregated report.                         | Yes      | `Full`        |
 | `CheckOwnership`                | When present, enables the check for application and service principal ownership. This is time-consuming on large tenants. | No       | Not present   |
 
@@ -120,7 +120,7 @@ This script is a Rubrik utility for counting human identities in a customer's En
 **Example 2: Generate a summary report, identifying service accounts with "svc-" in their UPN.**
 
 ```powershell
-.\Get-EntraHumanIdentity.ps1 -Mode Summary -UserServiceAccountNamesLike "svc-"
+.\Get-EntraHumanIdentity.ps1 -Mode Summary -UserServiceAccountNamesLike "*svc*"
 ```
 
 ### Output
