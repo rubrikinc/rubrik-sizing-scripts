@@ -32,9 +32,9 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
     -   Accounts with the `PasswordNeverExpires` flag set.
     -   Accounts matching custom naming patterns (e.g., `*svc*`, `*_bot`).
 -   **Flexible Reporting**: Generates reports in two modes:
-    -   `UserPerOU`: A detailed breakdown of accounts per Organizational Unit (OU).
+    -   `Full`: A detailed breakdown of accounts per Organizational Unit (OU).
     -   `Summary`: A high-level summary of accounts per domain.
--   **CSV Export**: Automatically exports the audit results to a timestamped CSV file that can be shared with Rubrik.
+-   **CSV & HTML Export**: Automatically exports the audit results to timestamped CSV and HTML files that can be shared with Rubrik.
 -   **Logging**: Creates a detailed log file for each execution, capturing all actions and potential errors.
 
 ### Prerequisites
@@ -45,18 +45,19 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 
 ### Parameters
 
-| Parameter                     | Description                                                                                                                           | Required | Default Value |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------| -------- | ------------- |
-| `SpecificDomains`             | An array of fully qualified domain names to audit (e.g., `"corp.domain.local"`). If omitted, all domains in the forest are audited.   | No       | (All domains in the forest) |
-| `UserServiceAccountNamesLike` | An array of wildcard patterns to identify service accounts by name (e.g., `"*svc*"`, `"*_bot*"`).                                     | No       | (None)        |
-| `Mode`                        | The reporting mode. Can be `UserPerOU` for a detailed report or `Summary` for a domain-level summary.                                 | Yes      | `UserPerOU`   |
+| Parameter                       | Description                                                                                                                         | Required | Default Value             |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------- |
+| `SpecificDomains`               | An array of fully qualified domain names to audit (e.g., `"corp.domain.local"`). If omitted, all domains in the forest are audited. | No       | All domains in the forest |
+| `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by name. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None                      |
+| `ExcludeOUs`                    | An array of OU distinguished names to exclude from the audit (exact match on the full DN).                                          | No       | None                      |
+| `Mode`                          | The reporting mode. `Full` for a detailed per-OU report or `Summary` for a domain-level summary.                                    | Yes      | `Full`                    |
 
 ### Usage Examples
 
 **Example 1: Audit all domains in the forest with a detailed per-OU report.**
 
 ```powershell
-.\Get-AdHumanIdentity.ps1 -Mode UserPerOU
+.\Get-AdHumanIdentity.ps1 -Mode Full
 ```
 
 **Example 2: Audit a specific domain and identify service accounts by name, with a summary report.**
@@ -67,7 +68,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 
 ### Output
 
--   **CSV Report**: A CSV file named `UserAudit_<Mode>_<timestamp>.csv` is created in the `ADReports` directory.
+-   **CSV Reports**: CSV files are created in the `ADReports` directory (ByOU, ByDomain, Licensing in Full mode; ByDomain, Licensing in Summary mode).
+-   **HTML Report**: An HTML report with Rubrik branding is created in the `ADReports` directory.
 -   **Log File**: A log file named `AD_Audit_<timestamp>.log` is created in the `ADReports` directory.
 
 ---
@@ -79,7 +81,7 @@ This script is a Rubrik utility for counting human identities in a customer's En
 ### Features
 
 -   **Microsoft Graph Integration**: Connects to Microsoft Graph with the necessary permissions to read identity data.
--   **User Activity Analysis**: Identifies inactive users based on a configurable number of days of inactivity to help differentiate between active and dormant human users.
+-   **User Activity Analysis**: Identifies inactive users based on 180 days of inactivity to help differentiate between active and dormant human users.
 -   **Service Account Identification**: Flags potential service accounts based on naming patterns in their User Principal Name (UPN) to exclude them from the human identity count.
 -   **Application and Service Principal Ownership**: Optionally performs a deep scan to count the number of applications and service principals owned by each user, which helps in distinguishing human from non-human accounts.
 -   **Comprehensive Reporting**: Generates reports in two modes:
@@ -101,25 +103,24 @@ This script is a Rubrik utility for counting human identities in a customer's En
 
 ### Parameters
 
-| Parameter                     | Description                                                                                                | Required | Default Value |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------- | -------- | ------------- |
-| `UserServiceAccountNamesLike` | An array of patterns to identify service accounts by their UPN (e.g., `"svc-"`, `"sa-"`).                  | No       | (None)        |
-| `Mode`                        | The reporting mode. Can be `Full` for a detailed report or `Summary` for an aggregated report.             | Yes      | `Full`        |
-| `DaysInactive`                | The number of days of inactivity to use when flagging users as inactive.                                   | No       | `180`         |
-| `CheckOwnership`              | A switch parameter that, when present, enables the time-consuming check for application and service principal ownership. | No       | (Not present) |
+| Parameter                       | Description                                                                                                              | Required | Default Value |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- | ------------- |
+| `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by their UPN. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None          |
+| `Mode`                          | The reporting mode. `Full` for a detailed per-user report or `Summary` for an aggregated report.                         | Yes      | `Full`        |
+| `CheckOwnership`                | When present, enables the check for application and service principal ownership. This is time-consuming on large tenants. | No       | Not present   |
 
 ### Usage Examples
 
-**Example 1: Generate a full report with ownership analysis, for users inactive for 90 days.**
+**Example 1: Generate a full report with ownership analysis.**
 
 ```powershell
-.\Get-EntraHumanIdentity.ps1 -Mode Full -DaysInactive 90 -CheckOwnership
+.\Get-EntraHumanIdentity.ps1 -Mode Full -CheckOwnership
 ```
 
 **Example 2: Generate a summary report, identifying service accounts with "svc-" in their UPN.**
 
 ```powershell
-.\Get-EntraHumanIdentity.ps1 -Mode Summary -UserServiceAccountNamesLike "svc-"
+.\Get-EntraHumanIdentity.ps1 -Mode Summary -UserServiceAccountNamesLike "*svc*"
 ```
 
 ### Output
@@ -144,3 +145,7 @@ These scripts are provided by Rubrik for licensing purposes. For support, please
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
+
+## Author
+
+Aymeric Jaouen
