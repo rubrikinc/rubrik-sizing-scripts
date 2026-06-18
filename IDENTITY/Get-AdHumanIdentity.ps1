@@ -90,13 +90,12 @@
     - Save the reports in CSV and HTML format in the .\ADReports directory.
 
 .NOTES
+    Author: Aymeric Jaouen
+
     - **Prerequisites**: The computer running this script must have the Active Directory module for PowerShell installed. This is part of the Remote Server Administration Tools (RSAT).
     - **Permissions**: The user account running this script must have read permissions for user and service account objects in the target Active Directory domains.
     - **Execution Policy**: You may need to adjust the PowerShell execution policy to run this script. You can do this by running "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process".
     - **Culture Settings**: The script temporarily sets the culture to 'en-US' to ensure that dates and times are parsed correctly. This change is reverted at the end of the script.
-
-.AUTOR
-    Aymeric Jaouen
 #>
 
 
@@ -105,7 +104,8 @@ param (
     [string[]]$SpecificDomains,
     [string[]]$ExcludeOUs = @(),
     [ValidateSet("Full", "Summary")]
-    [string]$Mode = "Full"
+    [string]$Mode = "Full",
+    [int]$DaysInactive = 180
 )
 
 # === Logging Setup ===
@@ -117,11 +117,12 @@ $logPath = Join-Path $outputPath "AD_Audit_$timestamp.log"
 function Write-Log {
     param (
         [string]$Message,
-        [string]$Level = "INFO"
+        [string]$Level = "INFO",
+        [System.ConsoleColor]$Color = "White"
     )
     $formatted = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
     Add-Content -Path $logPath -Value $formatted
-    Write-Host $Message
+    Write-Host $Message -ForegroundColor $Color
 }
 
 # === Log the command that started the script ===
@@ -142,11 +143,11 @@ try {
         $commandString += " -$paramName $formattedValue"
     }
     $script:commandLine = $commandString
-    Write-Log "Script started with command: $commandString" "INFO"
+    Write-Log "Script started with command: $commandString" "INFO" "Magenta"
 }
 catch {
     $script:commandLine = "N/A"
-    Write-Log "Could not log the command line. Error: $_" "WARNING"
+    Write-Log "Could not log the command line. Error: $_" "WARNING" "Yellow"
 }
 
 function Initialize-Prerequisites {
@@ -154,18 +155,18 @@ function Initialize-Prerequisites {
     $moduleName = "ActiveDirectory"
 
     if ($PSVersionTable.PSVersion -lt $requiredPSVersion) {
-        Write-Log "PowerShell $requiredPSVersion or higher is required. Current version: $($PSVersionTable.PSVersion)"
+        Write-Log "PowerShell $requiredPSVersion or higher is required. Current version: $($PSVersionTable.PSVersion)" "ERROR" "Red"
         exit
     }
 
     try {
         if (-not (Get-Module -ListAvailable -Name $moduleName)) {
-            Write-Log "Required module '$moduleName' not found. Please install RSAT: Active Directory Tools."
+            Write-Log "Required module '$moduleName' not found. Please install RSAT: Active Directory Tools." "ERROR" "Red"
             exit
         }
         Import-Module $moduleName -ErrorAction Stop
     } catch {
-        Write-Log "Failed to import '$moduleName'. Ensure it's installed and accessible. $_"
+        Write-Log "Failed to import '$moduleName'. Ensure it's installed and accessible. $_" "ERROR" "Red"
         exit
     }
 
@@ -176,7 +177,7 @@ function Initialize-Prerequisites {
     [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'
     [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'
 
-    Write-Log "Prerequisites validated. Environment initialized."
+    Write-Log "Prerequisites validated. Environment initialized." "INFO" "Green"
 }
 
 Initialize-Prerequisites
@@ -241,26 +242,6 @@ function Get-OUFromDN {
     $parts[1..($parts.Count - 1)] -join ','
 }
 
-function Test-ManagedServiceAccount {
-    param ([string]$SamAccountName, [string[]]$MSASet)
-    return $MSASet -contains $SamAccountName
-}
-
-function Test-GroupManagedServiceAccount {
-    param ([string]$SamAccountName, [string[]]$GMSASet)
-    return $GMSASet -contains $SamAccountName
-}
-
-function Test-NonExpiringUser {
-    param ([string]$SamAccountName, [string[]]$NoExpireSet)
-    return $NoExpireSet -contains $SamAccountName
-}
-
-function Test-PatternMatchedUser {
-    param ([string]$SamAccountName, [string[]]$PatternSet)
-    return $PatternSet -contains $SamAccountName
-}
-
 function Get-UsersAsServiceAccount {
     param (
         [string[]]$NamePatterns,
@@ -273,9 +254,10 @@ function Get-UsersAsServiceAccount {
 
     $subs = @()
     foreach ($pattern in $NamePatterns) {
-        Write-Log "[$Domain] Searching for users like '$pattern'..."
+        $safePattern = $pattern.Trim().Replace("'", "''")
+        Write-Log "[$Domain] Searching for users like '$safePattern'..." "INFO" "Cyan"
         try {
-            $usersFound = Get-ADUser -Server $Domain -Filter "Name -like '$($pattern.Trim())'" `
+            $usersFound = Get-ADUser -Server $Domain -Filter "Name -like '$safePattern'" `
                 -Properties Name, SamAccountName, DistinguishedName, Enabled, LastLogonTimestamp, PasswordNeverExpires, ServicePrincipalName |
                 Select-Object Name, SamAccountName, DistinguishedName, Enabled,
                               @{Name="LastLogonDate";Expression={[DateTime]::FromFileTime($_.LastLogonTimestamp)}},
@@ -284,7 +266,7 @@ function Get-UsersAsServiceAccount {
 
             $subs += $usersFound
         } catch {
-            Write-Warning "[$Domain] Error searching pattern '$pattern': $_"
+            Write-Log "[$Domain] Error searching pattern '$safePattern': $_" "WARNING" "Yellow"
         }
     }
     return $subs
@@ -309,29 +291,31 @@ function Get-ByOUData {
         [datetime] $LogonThreshold
     )
 
-    $summary = @()
+    $summaryMap = @{}
 
     foreach ($domain in $DomainsToAudit) {
-        Write-Log "Auditing domain: $domain"
+        Write-Log "Auditing domain: $domain" "INFO" "Cyan"
 
         try {
-            $MSASet = Get-ADServiceAccount -Server $domain -Filter { ObjectClass -eq 'msDS-ManagedServiceAccount' } |
-                      Select-Object -ExpandProperty SamAccountName
-            $GMSASet = Get-ADServiceAccount -Server $domain -Filter { ObjectClass -eq 'msDS-GroupManagedServiceAccount' } |
-                       Select-Object -ExpandProperty SamAccountName
-            $NoExpireSet = Get-ADUser -Server $domain -Filter { PasswordNeverExpires -eq $true -and Enabled -eq $true } |
-                           Select-Object -ExpandProperty SamAccountName
+            $msaObjects  = @(Get-ADServiceAccount -Server $domain -Filter "ObjectClass -eq 'msDS-ManagedServiceAccount'" -Properties SamAccountName, DistinguishedName, LastLogonTimestamp)
+            $gmsaObjects = @(Get-ADServiceAccount -Server $domain -Filter "ObjectClass -eq 'msDS-GroupManagedServiceAccount'" -Properties SamAccountName, DistinguishedName, LastLogonTimestamp)
+
+            $msaNames     = @($msaObjects | Select-Object -ExpandProperty SamAccountName)
+            $gmsaNames    = @($gmsaObjects | Select-Object -ExpandProperty SamAccountName)
+            $noExpireNames = @(Get-ADUser -Server $domain -Filter "PasswordNeverExpires -eq `$true -and Enabled -eq `$true" | Select-Object -ExpandProperty SamAccountName)
+
+            $MSASet      = [System.Collections.Generic.HashSet[string]]::new([string[]]$msaNames, [System.StringComparer]::OrdinalIgnoreCase)
+            $GMSASet     = [System.Collections.Generic.HashSet[string]]::new([string[]]$gmsaNames, [System.StringComparer]::OrdinalIgnoreCase)
+            $NoExpireSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$noExpireNames, [System.StringComparer]::OrdinalIgnoreCase)
 
             $PatternMatches = Get-UsersAsServiceAccount -NamePatterns $ServicePattern -Domain $domain
-            $PatternSet = $PatternMatches.SamAccountName | Sort-Object -Unique
+            $patternNames = @($PatternMatches | Select-Object -ExpandProperty SamAccountName)
+            $PatternSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$patternNames, [System.StringComparer]::OrdinalIgnoreCase)
 
-            $userAccounts = Get-ADUser -Server $domain -Filter { Enabled -eq $true } `
+            $userAccounts = Get-ADUser -Server $domain -Filter "Enabled -eq `$true" `
                 -Properties SamAccountName, DistinguishedName, LastLogonTimestamp
 
-            $msaObjects  = @(Get-ADServiceAccount -Server $domain -Filter { ObjectClass -eq 'msDS-ManagedServiceAccount' })
-            $gmsaObjects = @(Get-ADServiceAccount -Server $domain -Filter { ObjectClass -eq 'msDS-GroupManagedServiceAccount' })
-
-            $serviceAccounts = $msaObjects + $gmsaObjects | ForEach-Object {
+            $serviceAccounts = ($msaObjects + $gmsaObjects) | ForEach-Object {
                 [PSCustomObject]@{
                     SamAccountName     = $_.SamAccountName
                     DistinguishedName  = $_.DistinguishedName
@@ -347,9 +331,9 @@ function Get-ByOUData {
 
                 if ($ExcludeOUs -contains $ou) { continue }
 
-                $entry = $summary | Where-Object { $_.Domain -eq $domain -and $_.OU -eq $ou }
-                if (-not $entry) {
-                    $entry = [PSCustomObject]@{
+                $key = "$domain|$ou"
+                if (-not $summaryMap.ContainsKey($key)) {
+                    $summaryMap[$key] = [PSCustomObject]@{
                         Domain                              = $domain
                         OU                                  = $ou
                         TotalUsers                          = 0
@@ -362,8 +346,8 @@ function Get-ByOUData {
                         ServiceAccountsPatternMatched       = 0
                         LicensedIdentities                  = 0
                     }
-                    $summary += $entry
                 }
+                $entry = $summaryMap[$key]
 
                 $entry.TotalUsers++
 
@@ -379,13 +363,13 @@ function Get-ByOUData {
                     $entry.NeverLoggedInUsers++
                 }
 
-                $isMSA     = Test-ManagedServiceAccount $sam $MSASet
-                $isGMSA    = Test-GroupManagedServiceAccount $sam $GMSASet
-                $isPattern = Test-PatternMatchedUser $sam $PatternSet
+                $isMSA     = $MSASet.Contains($sam)
+                $isGMSA    = $GMSASet.Contains($sam)
+                $isPattern = $PatternSet.Contains($sam)
 
                 if ($isMSA)      { $entry.ServiceAccountsManaged++ }
                 elseif ($isGMSA) { $entry.ServiceAccountsGroupManaged++ }
-                if (Test-NonExpiringUser $sam $NoExpireSet) { $entry.ServiceAccountsPasswordNeverExpires++ }
+                if ($NoExpireSet.Contains($sam)) { $entry.ServiceAccountsPasswordNeverExpires++ }
                 if ($isPattern)  { $entry.ServiceAccountsPatternMatched++ }
 
                 if ($isActive -and -not $isMSA -and -not $isGMSA -and -not $isPattern) {
@@ -393,11 +377,13 @@ function Get-ByOUData {
                 }
             }
 
-            Write-Log "Successfully processed domain '$domain'. Found $($users.Count) accounts."
+            Write-Log "Successfully processed domain '$domain'. Found $($users.Count) accounts." "INFO" "Green"
         } catch {
-            Write-Log "Failed processing domain $domain : $_" "ERROR"
+            Write-Log "Failed processing domain $domain : $_" "ERROR" "Red"
         }
     }
+
+    $summary = @($summaryMap.Values | Sort-Object Domain, OU)
 
     # Build a grand-total row
     $totals = [ordered]@{ Domain = 'TOTAL'; OU = '' }
@@ -405,7 +391,7 @@ function Get-ByOUData {
         $totals[$col] = ($summary | Measure-Object -Property $col -Sum).Sum
     }
 
-    Write-Log "Successfully built $($summary.Count) OU records across all domains."
+    Write-Log "Successfully built $($summary.Count) OU records across all domains." "INFO" "Green"
     return $summary + [PSCustomObject]$totals
 }
 
@@ -442,7 +428,7 @@ function Get-ByDomainData {
         $totals[$col] = ($rows | Measure-Object -Property $col -Sum).Sum
     }
 
-    Write-Log "Successfully aggregated $($rows.Count) domain(s)."
+    Write-Log "Successfully aggregated $($rows.Count) domain(s)." "INFO" "Green"
     return @($rows) + [PSCustomObject]$totals
 }
 
@@ -473,11 +459,11 @@ function Export-CsvReport {
             }
         }
 
-        $Data | Select-Object -Property $calculatedProperties | Export-Csv -Path $fullPath -NoTypeInformation -Force
-        Write-Log "Successfully exported CSV report to $fullPath"
+        $Data | Select-Object -Property $calculatedProperties | Export-Csv -Path $fullPath -NoTypeInformation -Encoding UTF8 -Force
+        Write-Log "Successfully exported CSV report to $fullPath" "INFO" "Green"
     }
     catch {
-        Write-Log "Could not export to CSV file $fullPath. Error: $_" "ERROR"
+        Write-Log "Could not export to CSV file $fullPath. Error: $_" "ERROR" "Red"
     }
 }
 
@@ -545,7 +531,8 @@ function Export-HtmlReport {
 
             $html += '<thead><tr>'
             foreach ($header in $TableColumns.PSObject.Properties.Value) {
-                $html += "<th>$header</th>"
+                $safeHeader = [System.Net.WebUtility]::HtmlEncode($header)
+                $html += "<th>$safeHeader</th>"
             }
             $html += '</tr></thead>'
             $html += '<tbody>'
@@ -560,7 +547,7 @@ function Export-HtmlReport {
                 $html += "<tr$rowClass>"
 
                 foreach ($colName in $TableColumns.PSObject.Properties.Name) {
-                    $value = $row."$colName"
+                    $value = [System.Net.WebUtility]::HtmlEncode("$($row."$colName")")
                     $html += "<td>$value</td>"
                 }
                 $html += '</tr>'
@@ -711,7 +698,7 @@ function Export-HtmlReport {
         $htmlBody += @"
         <div class="footer">
             Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br/>
-            Command: $($script:commandLine)
+            Command: $([System.Net.WebUtility]::HtmlEncode($script:commandLine))
         </div>
     </div>
 </body>
@@ -719,10 +706,10 @@ function Export-HtmlReport {
 "@
 
         $htmlBody | Out-File -FilePath $fullPath -Encoding UTF8
-        Write-Log "Successfully exported HTML report to $fullPath"
+        Write-Log "Successfully exported HTML report to $fullPath" "INFO" "Green"
     }
     catch {
-        Write-Log "Could not export to HTML file $fullPath. Error: $_" "ERROR"
+        Write-Log "Could not export to HTML file $fullPath. Error: $_" "ERROR" "Red"
     }
 }
 
@@ -730,16 +717,23 @@ function Export-HtmlReport {
 # 6. MAIN
 #==================================================================================================
 
+try {
+
 #— 1) Discover domains
-$logonThreshold = (Get-Date).AddDays(-180)
-$domainsToAudit = if ($SpecificDomains) {
-    $SpecificDomains
+$logonThreshold = (Get-Date).AddDays(-$DaysInactive)
+if ($SpecificDomains) {
+    $domainsToAudit = $SpecificDomains
 } else {
-    [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().Domains | ForEach-Object { $_.Name }
+    try {
+        $domainsToAudit = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().Domains | ForEach-Object { $_.Name }
+    } catch {
+        Write-Log "Failed to discover AD forest. Ensure this machine is domain-joined and can reach a domain controller. Error: $_" "ERROR" "Red"
+        exit 1
+    }
 }
 
 #— 2) Build per-OU dataset
-Write-Log "Building per-OU dataset..."
+Write-Log "Building per-OU dataset..." "INFO" "Cyan"
 $byOU = Get-ByOUData `
     -DomainsToAudit $domainsToAudit `
     -ServicePattern $UserServiceAccountNamesLike `
@@ -750,11 +744,11 @@ $byOU = Get-ByOUData `
 $ouDataInput = $byOU | Select-Object -SkipLast 1
 
 #— 3) Aggregate by domain
-Write-Log "Building aggregated report by Domain..."
+Write-Log "Building aggregated report by Domain..." "INFO" "Cyan"
 $byDomain = Get-ByDomainData -OUData $ouDataInput
 
 #— 3b) Licensing data
-Write-Log "Preparing Rubrik licensing data..."
+Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
 $licensingData = $byDomain | Select-Object Domain, LicensedIdentities
 
 #— 4) Report headers
@@ -764,7 +758,7 @@ $licensingCols = Get-ReportHeaders -Type Licensing
 
 #— 5) Export CSV & HTML
 if ($Mode -eq 'Full') {
-    Write-Log "Exporting Full reports in CSV and HTML format..."
+    Write-Log "Exporting Full reports in CSV and HTML format..." "INFO" "Cyan"
 
     Export-CsvReport -FileName "Full_ByOU_$timestamp.csv"      -Data $byOU          -Columns $ouCols
     Export-CsvReport -FileName "Full_ByDomain_$timestamp.csv"  -Data $byDomain      -Columns $domainCols
@@ -782,7 +776,7 @@ if ($Mode -eq 'Full') {
                    -OutputPath $OutputPath
 }
 else {
-    Write-Log "Exporting Summary reports in CSV and HTML format..."
+    Write-Log "Exporting Summary reports in CSV and HTML format..." "INFO" "Cyan"
 
     Export-CsvReport -FileName "Summary_ByDomain_$timestamp.csv"  -Data $byDomain      -Columns $domainCols
     Export-CsvReport -FileName "Summary_Licensing_$timestamp.csv" -Data $licensingData  -Columns $licensingCols
@@ -794,8 +788,9 @@ else {
                    -OutputPath $OutputPath
 }
 
-Write-Log "AD reports generation completed."
+Write-Log "AD reports generation completed." "INFO" "Green"
 
-# Reset Culture settings back to original value
-[System.Threading.Thread]::CurrentThread.CurrentCulture = $OriginalCulture
-[System.Threading.Thread]::CurrentThread.CurrentUICulture = $OriginalUICulture
+} finally {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = $script:OriginalCulture
+    [System.Threading.Thread]::CurrentThread.CurrentUICulture = $script:OriginalUICulture
+}

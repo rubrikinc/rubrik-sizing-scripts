@@ -27,7 +27,7 @@
     - **Member**: 1 if the user is a member identity owned by this tenant (UserType = Member), 0 otherwise.
     - **Account Enabled**: 1 if the account is enabled in Entra ID, 0 if disabled.
     - **Account Disabled**: 1 if the account is disabled, 0 otherwise.
-    - **Active Identity**: 1 if the user has signed in within the configured inactivity period (default 180 days), 0 otherwise. Disabled accounts are never marked active.
+    - **Active Identity**: 1 if the user has signed in within the last 180 days, 0 otherwise. Disabled accounts are never marked active.
     - **Inactive Identity**: 1 if the user has not signed in within the inactivity period or has never signed in. Disabled accounts are never marked inactive (they are simply disabled).
     - **Never Logged In**: 1 if no sign-in activity has ever been recorded for this account, 0 otherwise.
     - **Service Account Pattern**: 1 if the user's UPN matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
@@ -57,8 +57,6 @@
     - **Applications**: Number of Entra ID application registrations published under this domain.
     - **Service Principals**: Number of service principals (enterprise apps) associated with this domain.
     - **Managed Identities**: Number of managed identities associated with this domain.
-    - **Valid Enterprise Apps**: Reserved (currently set to 0).
-
     ### Licensing Report
     - **Directory**: The domain name.
     - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match.
@@ -87,7 +85,7 @@
 
     This command will:
     - Generate a detailed report for all users.
-    - Consider users inactive after 90 days of inactivity.
+    - Identify inactive users based on their last sign-in date.
     - Identify service accounts with UPNs starting with "svc-".
     - Check for application and service principal ownership.
     - Save the reports in both CSV and HTML format in the .\EntraReports directory.
@@ -99,17 +97,16 @@
 
     This command will:
     - Generate a high-level summary report by domain.
-    - Use the default 180-day inactivity period.
+    - Identify inactive users based on their last sign-in date.
     - Save the reports in both CSV and HTML format in the .\EntraReports directory.
 
 .NOTES
+    Author: Aymeric Jaouen
+
     - **Prerequisites**: This script requires PowerShell 7.0 or higher and the following Microsoft Graph modules: 'Microsoft.Graph.Users', 'Microsoft.Graph.Applications', and 'Microsoft.Graph.Identity.DirectoryManagement'. The script will attempt to install these modules if they are not found.
     - **Permissions**: The user running the script must have sufficient permissions in Entra ID to read user, application, and service principal information. The required permissions are 'User.Read.All', 'Directory.Read.All', 'Application.Read.All', and 'AuditLog.Read.All'. The script will prompt for login and consent to these permissions if not already granted.
     - **Execution Policy**: You may need to adjust the PowerShell execution policy to run this script. You can do this by running "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process".
     - **Culture Settings**: The script temporarily sets the culture to 'en-US' to ensure that dates and times are parsed correctly. This change is reverted at the end of the script.
-
-.AUTOR
-Aymeric Jaouen
 
 #>
 
@@ -260,6 +257,7 @@ function Get-ReportHeaders {
                 PatternMatchedUser      = 'Service Account Pattern'
                 SyncFromAD              = 'Synch from AD'
                 CloudOnly               = 'Cloud Only'
+                LicensedIdentity        = 'Licensed Identity'
                 ADSourceDomain          = 'Source AD'
             }
 
@@ -292,11 +290,11 @@ function Get-ReportHeaders {
                 PatternMatchedUsers           = 'Service Account Pattern'
                 SyncFromADCount               = 'Synch from AD'
                 CloudOnlyCount                = 'Cloud Only'
+                LicensedIdentities            = 'Licensed Identities'
                 ADSourceDomainCounts          = 'Source AD'
                 DomainApplicationsCount       = 'Applications'
                 DomainServicePrincipalCount   = 'Service Principals'
                 DomainManagedIdentitiesCount  = 'Managed Identities'
-                ValidEnterpriseAppsCount      = 'Valid Enterprise Apps'
             }
         }
     }
@@ -362,51 +360,54 @@ function Get-ByUserData {
         [string[]] $ServicePattern = @(),
 
         [Parameter()]
-        [switch]   $CheckOwnership
+        [switch]   $CheckOwnership,
+
+        [Parameter(Mandatory)]
+        [object[]] $Applications,
+
+        [Parameter(Mandatory)]
+        [object[]] $ServicePrincipals
     )
 
     begin {
         $cutoff = (Get-Date).AddDays(-$DaysInactive)
         Write-Verbose "Inactivity cutoff date: $cutoff"
 
-        # Initialize an array to store the output, making it accessible to all blocks
-        $script:output = @()
+        $output = [System.Collections.Generic.List[object]]::new()
     }
 
     process {
-        Write-Verbose "Retrieving users..."
-        $users = Get-MgUser -All `
+        Write-Log "Retrieving users from Entra ID..." "INFO" "Cyan"
+        $users = Get-MgUser -All -PageSize 999 `
             -Property Id,UserPrincipalName,Mail,OtherMails,Identities,UserType,AccountEnabled,SignInActivity, `
                       OnPremisesSyncEnabled,OnPremisesDomainName `
             -ErrorAction Stop
+        Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
 
-        Write-Verbose "Retrieving applications..."
-        $allApps = Get-MgApplication -All -ErrorAction Stop
-
-        Write-Verbose "Retrieving service principals..."
-        $filterSP = "servicePrincipalType eq 'Application' or servicePrincipalType eq 'ManagedIdentity'"
-        $allSPs = Get-MgServicePrincipal -All -Filter $filterSP -ErrorAction Stop
+        $allApps = $Applications
+        $allSPs  = $ServicePrincipals | Where-Object {
+            $_.ServicePrincipalType -eq 'Application' -or $_.ServicePrincipalType -eq 'ManagedIdentity'
+        }
 
         $appOwners   = @{}
         $spAppOwners = @{}
         $spMiOwners  = @{}
 
         if ($CheckOwnership) {
-            Write-Verbose "Retrieving ownership for each application (this may take a while)..."
+            Write-Log "Retrieving ownership for $($allApps.Count) applications..." "INFO" "Cyan"
             foreach ($app in $allApps) {
                 try {
                     $owners = Get-MgApplicationOwner -ApplicationId $app.Id
                     foreach ($owner in $owners) {
                         $appOwners[$owner.Id] = ($appOwners[$owner.Id] + 1)
                     }
-                }
-                catch {
-                    Write-Verbose "Could not get owners for application $($app.DisplayName). Error: $_"
-                    Write-Log "Could not get owners for application $($app.DisplayName). Error: $_" "ERROR" "RED"
+                } catch {
+                    Write-Log "Warning: could not retrieve owners for application '$($app.DisplayName)': $_" "WARNING" "Yellow"
                 }
             }
+            Write-Log "Application ownership: $($appOwners.Count) unique owner(s) found." "INFO" "Cyan"
 
-            Write-Verbose "Retrieving ownership for each service principal and managed identity (this may take a while)..."
+            Write-Log "Retrieving ownership for $($allSPs.Count) service principals..." "INFO" "Cyan"
             foreach ($sp in $allSPs) {
                 try {
                     $owners = Get-MgServicePrincipalOwner -ServicePrincipalId $sp.Id
@@ -416,12 +417,11 @@ function Get-ByUserData {
                             'ManagedIdentity' { $spMiOwners[$owner.Id]  = ($spMiOwners[$owner.Id]  + 1) }
                         }
                     }
-                }
-                catch {
-                    Write-Verbose "Could not get owners for service principal $($sp.DisplayName). Error: $_"
-                    Write-Log "Could not get owners for service principal $($sp.DisplayName). Error: $_" "ERROR" "RED"
+                } catch {
+                    Write-Log "Warning: could not retrieve owners for service principal '$($sp.DisplayName)': $_" "WARNING" "Yellow"
                 }
             }
+            Write-Log "SP ownership: $($spAppOwners.Count) app owner(s), $($spMiOwners.Count) MI owner(s) found." "INFO" "Cyan"
         }
         else {
             Write-Verbose "Skipping detailed ownership checks for applications, service principals, and managed identities."
@@ -432,6 +432,9 @@ function Get-ByUserData {
 
             $parts      = if ($u.UserPrincipalName) { $u.UserPrincipalName.Split('@') } else { @('','') }
             $user       = $parts[0]
+            if ($parts.Count -le 1) {
+                Write-Log "Warning: UPN without '@' detected: '$($u.UserPrincipalName)' (Id=$($u.Id))" "WARNING" "Yellow"
+            }
             $upnDomain  = if ($parts.Count -gt 1) { $parts[1].ToLowerInvariant() } else { '' }
             $directory  = Get-EffectiveUserDomain -User $u -UpnDomain $upnDomain
             $normalizedUserType = if ($u.UserType) { $u.UserType.Trim() } else { '' }
@@ -458,7 +461,7 @@ function Get-ByUserData {
 
             $patternMatched = $false
             foreach ($p in $ServicePattern) {
-                if ($u.UserPrincipalName -like "*$p*") {
+                if ($u.UserPrincipalName -like $p) {
                     $patternMatched = $true
                     break
                 }
@@ -476,7 +479,7 @@ function Get-ByUserData {
             $enterpriseCount = $spAppOwners[$u.Id]    ?? 0
             $miCount         = $spMiOwners[$u.Id]     ?? 0
 
-            $script:output += [PSCustomObject]@{
+            $output.Add([PSCustomObject]@{
                 Directory               = $directory
                 User                    = $user
                 GuestAccount            = [int]$isGuest
@@ -494,24 +497,24 @@ function Get-ByUserData {
                 OwnedAppsCount          = $ownedCount
                 EnterpriseAppsCount     = $enterpriseCount
                 ManagedIdentitiesCount  = $miCount
-            }
+            })
         }
     }
 
     end {
-        Write-Verbose "Built $($script:output.Count) user records. Calculating totals..."
-        Write-Log "Successfully built $($script:output.Count) user records." "INFO" "Green"
+        Write-Verbose "Built $($output.Count) user records. Calculating totals..."
+        Write-Log "Successfully built $($output.Count) user records." "INFO" "Green"
 
         # Build a grand-total row
         $totals = [ordered]@{ Directory = "TOTAL"; User = "" }
-        foreach ($col in $script:output | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -notin @('Directory','User','ADSourceDomain') }) {
-            $totals[$col] = ($script:output | Measure-Object -Property $col -Sum).Sum
+        foreach ($col in $output | Get-Member -MemberType NoteProperty | Select-Object -Expand Name | Where-Object { $_ -notin @('Directory','User','ADSourceDomain') }) {
+            $totals[$col] = ($output | Measure-Object -Property $col -Sum).Sum
         }
         $totals['ADSourceDomain'] = 'N/A'
 
         # Add the total row to the end of the data and return it
-        $script:output += [PSCustomObject]$totals
-        return $script:output
+        $output.Add([PSCustomObject]$totals)
+        return $output
   }
 }
 
@@ -538,7 +541,7 @@ function Get-ByDomainData {
   )
 
   begin {
-    $rows = @()
+    $rows = [System.Collections.Generic.List[object]]::new()
 
     # Grab your tenant GUID and all verified domains
     $org = Get-MgOrganization -ErrorAction Stop
@@ -575,10 +578,7 @@ function Get-ByDomainData {
             -not [string]::IsNullOrEmpty($_.AppId) -and ($AppDomainMap[$_.AppId] -eq $domain)
           }).Count
 
-        # ValidEnterpriseAppsCount is set to 0 to avoid slow API calls
-        $validEA = 0
-
-        $rows += [PSCustomObject]@{
+        $rows.Add([PSCustomObject]@{
           Domain = $domain
           TotalUsers = $grpUsers.Count
           GuestUsers = ($grpUsers | Where-Object { $_.GuestAccount -eq 1 }).Count
@@ -600,8 +600,7 @@ function Get-ByDomainData {
           DomainApplicationsCount = $domainAppsCount
           DomainServicePrincipalCount = $tenantAppsCount
           DomainManagedIdentitiesCount = $tenantMIsCount
-          ValidEnterpriseAppsCount = $validEA
-        }
+        })
       }
 
     # Handle the 'other' domains
@@ -617,10 +616,7 @@ function Get-ByDomainData {
       -not [string]::IsNullOrEmpty($_.AppId) -and (-not ($verifiedDomains -contains $AppDomainMap[$_.AppId]) -or [string]::IsNullOrEmpty($AppDomainMap[$_.AppId]))
     }
 
-    # ValidEnterpriseAppsCount is set to 0 to avoid slow API calls
-    $validEA = 0
-
-    $rows += [PSCustomObject]@{
+    $rows.Add([PSCustomObject]@{
       Domain = "Service Principals from other Domains"
       TotalUsers = 0
       GuestUsers = 0
@@ -638,8 +634,7 @@ function Get-ByDomainData {
       DomainApplicationsCount = $otherApps.Count
       DomainServicePrincipalCount = ($otherSPs | Where-Object ServicePrincipalType -eq 'Application').Count
       DomainManagedIdentitiesCount = $otherMIs.Count
-      ValidEnterpriseAppsCount = $validEA
-    }
+    })
   }
 
   end {
@@ -671,30 +666,20 @@ function Export-CsvReport {
 
     )
 
-    # Construct the full path
     $fullPath = Join-Path -Path $outputPath -ChildPath $FileName
-
-    # Create a new, empty array for the calculated properties
     $calculatedProperties = @()
 
     try {
-
-        # Iterate through the columns and build the array of calculated properties
-         foreach ($name in $Columns.PSObject.Properties.Name) {
-        $header = $Columns."$name" # Get the custom header text
-
-        # Add a new calculated property to the array
-        $calculatedProperties += @{
-            Name       = $header
-            Expression = [scriptblock]::Create("`$_.`"$name`"")
+        foreach ($name in $Columns.PSObject.Properties.Name) {
+            $header = $Columns."$name"
+            $calculatedProperties += @{
+                Name       = $header
+                Expression = [scriptblock]::Create("`$_.`"$name`"")
+            }
         }
-    }
 
-        # Select the properties and export to a CSV with custom headers
-        $data | Select-Object -Property $calculatedProperties | Export-Csv -Path $fullPath -NoTypeInformation -Force
-
+        $data | Select-Object -Property $calculatedProperties | Export-Csv -Path $fullPath -NoTypeInformation -Encoding UTF8 -Force
         Write-Log "Successfully exported all objects in CSV file $fullPath" "INFO" "Green"
-
     }
     catch {
         Write-Log "Could not export to CSV file $fullPath. Error: $_" "ERROR" "RED"
@@ -766,17 +751,15 @@ function Export-HtmlReport {
             $html += "</div>"
             $html += "<div class='table-scroll'><table>"
 
-            # Add headers
             $html += '<thead><tr>'
             foreach ($header in $TableColumns.PSObject.Properties.Value) {
-                $html += "<th>$header</th>"
+                $safeHeader = [System.Net.WebUtility]::HtmlEncode($header)
+                $html += "<th>$safeHeader</th>"
             }
             $html += '</tr></thead>'
             $html += '<tbody>'
 
-            # Add data rows
             foreach ($row in $TableData) {
-                # Check if this is the total row
                 $isTotalRow = ($row.Directory -eq 'TOTAL' -or $row.Domain -eq 'TOTAL')
 
                 $rowClass = ""
@@ -786,7 +769,7 @@ function Export-HtmlReport {
                 $html += "<tr$rowClass>"
 
                 foreach ($colName in $TableColumns.PSObject.Properties.Name) {
-                    $value = $row."$colName"
+                    $value = [System.Net.WebUtility]::HtmlEncode("$($row."$colName")")
                     $html += "<td>$value</td>"
                 }
                 $html += '</tr>'
@@ -939,7 +922,7 @@ function Export-HtmlReport {
         $htmlBody += @"
         <div class="footer">
             Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br/>
-            Command: $($script:commandLine)
+            Command: $([System.Net.WebUtility]::HtmlEncode($script:commandLine))
         </div>
     </div>
 </body>
@@ -958,35 +941,45 @@ function Export-HtmlReport {
 # 5. MAIN
 #==================================================================================================
 
-#— 1) Récupérations globales Microsoft Graph
+try {
+
+#— 1) Global Microsoft Graph data retrieval
 # Get applications and create a lookup table for AppId -> PublisherDomain
 Write-Log "Loading global Graph data - Fetching Applications..." "INFO" "Cyan"
-$applications = Get-MgApplication -All -Property PublisherDomain,AppId,DisplayName
+$applications = Get-MgApplication -All -PageSize 999 -Property Id,PublisherDomain,AppId,DisplayName
+Write-Log "Retrieved $($applications.Count) applications." "INFO" "Cyan"
 $appDomainMap = @{}
 foreach ($app in $applications) {
     if (-not [string]::IsNullOrEmpty($app.PublisherDomain)) {
+        if ($appDomainMap.ContainsKey($app.AppId)) {
+            Write-Log "Warning: duplicate AppId '$($app.AppId)' for app '$($app.DisplayName)'" "WARNING" "Yellow"
+        }
         $appDomainMap[$app.AppId] = $app.PublisherDomain
     }
 }
 
 # Get service principals with necessary properties
 Write-Log "Loading global Graph data - Fetching Service Principals..." "INFO" "Cyan"
-$servicePrincipals = Get-MgServicePrincipal -All -Property PublisherDomain,ServicePrincipalType,AppId,accountEnabled,passwordCredentials,keyCredentials
+$servicePrincipals = Get-MgServicePrincipal -All -PageSize 999 -Property PublisherDomain,ServicePrincipalType,AppId,accountEnabled,passwordCredentials,keyCredentials
+Write-Log "Retrieved $($servicePrincipals.Count) service principals." "INFO" "Cyan"
 
 Write-Log "Loading global Graph data - Fetching Managed Identities..." "INFO" "Cyan"
 $managedIdentities = $servicePrincipals | Where-Object servicePrincipalType -eq 'ManagedIdentity'
+Write-Log "Retrieved $($managedIdentities.Count) managed identities." "INFO" "Cyan"
 
-#— 2) Construction du rapport détaillé par utilisateur
+#— 2) Build detailed per-user report
 Write-Log "Building per-user dataset..." "INFO" "Cyan"
 $byUser = Get-ByUserData `
     -DaysInactive $DaysInactive `
     -ServicePattern $UserServiceAccountNamesLike `
-    -CheckOwnership:$CheckOwnership
+    -CheckOwnership:$CheckOwnership `
+    -Applications $applications `
+    -ServicePrincipals $servicePrincipals
 
 # Filter out the last row (the 'TOTAL' row) before passing the data to Get-ByDomainData
 $domainDataInput = $byUser | Select-Object -SkipLast 1
 
-#— 3) Agrégation par domaine
+#— 3) Aggregate by domain
 Write-Log "Building aggregated report by Domain..." "INFO" "Cyan"
 $byDomain = Get-ByDomainData `
   -UserData          $domainDataInput `
@@ -999,12 +992,12 @@ $byDomain = Get-ByDomainData `
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
 $licensingData = $byDomain | Select-Object Domain, LicensedIdentities
 
-#— 4) Préparation des en-têtes de rapport
+#— 4) Prepare report headers
 $userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership
 $domainCols    = Get-ReportHeaders -Type ByDomain
 $licensingCols = Get-ReportHeaders -Type Licensing
 
-#— 6) Export CSV & HTML en fonction du mode
+#— 5) Export CSV & HTML based on mode
 if ($Mode -eq 'Full') {
     Write-Log "Exporting Full reports in CSV and HTML format..." "INFO" "Cyan"
 
@@ -1037,8 +1030,9 @@ else {
                        -OutputPath $OutputPath
 }
 
-# Reset Culture settings back to original value
-[System.Threading.Thread]::CurrentThread.CurrentCulture = $OriginalCulture
-[System.Threading.Thread]::CurrentThread.CurrentUICulture = $OriginalUICulture
-
 Write-Log "ENTRA ID reports generation completed." "INFO" "Green"
+
+} finally {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = $script:OriginalCulture
+    [System.Threading.Thread]::CurrentThread.CurrentUICulture = $script:OriginalUICulture
+}
