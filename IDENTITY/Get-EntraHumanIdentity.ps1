@@ -384,10 +384,11 @@ function Get-ByUserData {
             -ErrorAction Stop
         Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
 
-        $allApps = $Applications
-        $allSPs  = $ServicePrincipals | Where-Object {
-            $_.ServicePrincipalType -eq 'Application' -or $_.ServicePrincipalType -eq 'ManagedIdentity'
-        }
+        $allApps = @($Applications | Where-Object { -not [string]::IsNullOrEmpty($_.Id) })
+        $allSPs  = @($ServicePrincipals | Where-Object {
+            -not [string]::IsNullOrEmpty($_.Id) -and
+            ($_.ServicePrincipalType -eq 'Application' -or $_.ServicePrincipalType -eq 'ManagedIdentity')
+        })
 
         $appOwners   = @{}
         $spAppOwners = @{}
@@ -960,7 +961,7 @@ foreach ($app in $applications) {
 
 # Get service principals with necessary properties
 Write-Log "Loading global Graph data - Fetching Service Principals..." "INFO" "Cyan"
-$servicePrincipals = Get-MgServicePrincipal -All -PageSize 999 -Property PublisherDomain,ServicePrincipalType,AppId,accountEnabled,passwordCredentials,keyCredentials
+$servicePrincipals = Get-MgServicePrincipal -All -PageSize 999 -Property Id,DisplayName,PublisherDomain,ServicePrincipalType,AppId,accountEnabled,passwordCredentials,keyCredentials
 Write-Log "Retrieved $($servicePrincipals.Count) service principals." "INFO" "Cyan"
 
 Write-Log "Loading global Graph data - Fetching Managed Identities..." "INFO" "Cyan"
