@@ -3,6 +3,9 @@
 # Users listed here will be automatically requested for review when a PR modifies files in their owned paths.
 # More info: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
+# Overall maintainers — any one can approve a PR
+* @mtellin @stevenctong
+
 # CLOUD folder ownership
 /CLOUD/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
 
