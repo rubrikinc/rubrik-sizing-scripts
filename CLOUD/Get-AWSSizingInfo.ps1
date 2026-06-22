@@ -2172,31 +2172,42 @@ $protectedBAKobjs = @();
       Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
       $counter++
       #Traverse Backup Vaults for protected items
-      $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId -Credential $Credential -region $Region ).BackupPlan.Rules;
-      foreach($rule in $backupPlanRules) {
-        $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
-        $protectedResourceList = Get-BAKProtectedResourceList -Credential $Credential -region $Region  | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
-        #add resource to array .resourceName, .resourcetype
-        foreach($resource in $protectedResourceList) {
-          $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
-          $protectedBAKobjs += [PSCustomObject]@{
-            "AWSAccountId" = $AccountInfo.Account
-            "AWSAccountAlias" = $AccountAlias
-            "ResourceName" = $resource.ResourceName
-            "Resource" = $resource.resourceArn
-            "ResourceType" = $resource.ResourceType
-            "Region" = $Region
-            "RuleName" = $rule.RuleName
-            "BackupPlans" = $plan.BackupPlanName
-            "BackupVault" = $rule.TargetBackupVaultName
-            "BackupSchedule" = $rule.ScheduleExpression
-            "LifecycleDelete" = $rule.Lifecycle.DeleteAfterDays
-            "LifecycleToColdStorageAfterDays" = $rule.Lifecycle.MoveToColdStorageAfterDays
-            "BackupSizeInGiB" = [math]::round($($recoveryPointInfo.BackupSizeInBytes / 1073741824), 4)
+      try {
+        $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId -Credential $Credential -region $Region -ErrorAction Stop).BackupPlan.Rules;
+        foreach($rule in $backupPlanRules) {
+          $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region -ErrorAction Stop;
+          $protectedResourceList = Get-BAKProtectedResourceList -Credential $Credential -region $Region -ErrorAction Stop | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
+          foreach($resource in $protectedResourceList) {
+            try {
+              $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region -ErrorAction Stop;
+              $protectedBAKobjs += [PSCustomObject]@{
+                "AWSAccountId" = $AccountInfo.Account
+                "AWSAccountAlias" = $AccountAlias
+                "ResourceName" = $resource.ResourceName
+                "Resource" = $resource.resourceArn
+                "ResourceType" = $resource.ResourceType
+                "Region" = $Region
+                "RuleName" = $rule.RuleName
+                "BackupPlans" = $plan.BackupPlanName
+                "BackupVault" = $rule.TargetBackupVaultName
+                "BackupSchedule" = $rule.ScheduleExpression
+                "LifecycleDelete" = $rule.Lifecycle.DeleteAfterDays
+                "LifecycleToColdStorageAfterDays" = $rule.Lifecycle.MoveToColdStorageAfterDays
+                "BackupSizeInGiB" = [math]::round($($recoveryPointInfo.BackupSizeInBytes / 1073741824), 4)
+              }
+            } catch {
+              Write-Host "Failed to get recovery point $($resource.LastRecoveryPointArn) in region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+              Write-Host "Error: $_" -ForeGroundColor Red
             }
+          }
         }
+        if ($protectedBAKobjs.Count -gt 0) {
+          $protectedBAKobjs | export-csv -path ./protected_objects.csv;
+        }
+      } catch {
+        Write-Host "Failed to get Backup Plan details for $($plan.BackupPlanId) in region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
+        Write-Host "Error: $_" -ForeGroundColor Red
       }
-      $protectedBAKobjs | export-csv -path ./protected_objects.csv;
       #instance ID from ProtectedObjects List
       #Get-EC2instances will only provide the instance ID
 
