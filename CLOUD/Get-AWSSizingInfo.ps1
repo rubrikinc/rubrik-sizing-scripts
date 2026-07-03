@@ -1,5 +1,5 @@
 #requires -Version 7.0
-<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.ElasticLoadBalancing, AWS.Tools.ElasticLoadBalancingV2, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.Route53, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control
+<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.ElasticLoadBalancing, AWS.Tools.ElasticLoadBalancingV2, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.Route53, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control, AWS.Tools.Redshift
 #>
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -49,17 +49,24 @@
                 "Sid": "VisualEditor0",
                 "Effect": "Allow",
                 "Action": [
-                    "backup:ListBackupPlans",
-                    "backup:ListBackupSelections",
                     "backup:GetBackupPlan",
                     "backup:GetBackupSelection",
+                    "backup:ListBackupPlans",
+                    "backup:ListBackupSelections",
+                    "backup:ListBackupVaults",
+                    "backup:ListRecoveryPointsByBackupVault",
                     "ce:GetCostAndUsage",
+                    "ce:GetDimensionValues",
                     "cloudwatch:GetMetricStatistics",
                     "cloudwatch:ListMetrics",
-                    "dynamodb:ListTables",
+                    "dynamodb:DescribeContinuousBackups",
                     "dynamodb:DescribeTable",
+                    "dynamodb:ListBackups",
+                    "dynamodb:ListTables",
+                    "ec2:DescribeImages",
                     "ec2:DescribeInstances",
                     "ec2:DescribeRegions",
+                    "ec2:DescribeSnapshots",
                     "ec2:DescribeVolumes",
                     "ec2:DescribeVpcs",
                     "eks:DescribeCluster",
@@ -68,6 +75,7 @@
                     "elasticloadbalancing:DescribeLoadBalancers",
                     "elasticloadbalancing:DescribeTags",
                     "elasticfilesystem:DescribeFileSystems",
+                    "fsx:DescribeBackups",
                     "fsx:DescribeFileSystems",
                     "fsx:DescribeVolumes",
                     "iam:ListAccountAliases",
@@ -78,8 +86,12 @@
                     "kms:ListAliases",
                     "kms:ListKeys",
                     "organizations:ListAccounts",
+                    "rds:DescribeDBClusterSnapshots",
                     "rds:DescribeDBClusters",
                     "rds:DescribeDBInstances",
+                    "rds:DescribeDBSnapshots",
+                    "redshift:DescribeClusters",
+                    "redshift:DescribeClusterSnapshots",
                     "route53:ListHostedZones",
                     "s3:GetBucketLocation",
                     "s3:GetBucketTagging",
@@ -357,7 +369,21 @@ param (
   # Grab output for debugging Bucket Tags.
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [switch]$DebugBucketTags
+  [switch]$DebugBucketTags,
+  # Per-region time budget (minutes) for AWS Backup recovery-point enumeration.
+  # On expiry the region's RP capacity numbers become lower bounds and affected
+  # workload rows are flagged BackupEnumerationTruncated.
+  [Parameter(Mandatory=$false)]
+  [int]$BackupRecoveryPointTimeoutMinutes = 60,
+  # Skip the entire AWS Backup recovery-point enumeration + every native-snapshot collector.
+  # New per-row backup columns are still emitted (defaults), so column order is
+  # stable for downstream consumers.
+  [Parameter(Mandatory=$false)]
+  [switch]$SkipBackupCapacity,
+  # Skip both Cost Explorer cost cmdlets. Capacity outputs unchanged; the cost
+  # CSVs are written header-only so the canonical filenames still exist.
+  [Parameter(Mandatory=$false)]
+  [switch]$SkipBackupCosts
 )
 
 # Script version — update this with every PR that modifies this script.
@@ -463,6 +489,18 @@ $outputEKSClusters = "aws_eks_clusters_info-$date_string.csv"
 $outputEKSNodegroups = "aws_eks_nodegroups_info-$date_string.csv"
 #AWS Backup will require much additional processing
 $outputBackupCosts = "aws_backup_costs-$date_string.csv"
+# Canonical per-RP CSV. Registered in $outputFiles below; emitted by the
+# recovery-point cmdlet via the streaming merge.
+$outputBackupRecoveryPoints = "aws_backup_recovery_points-$date_string.csv"
+# Native (non-AWS-Backup) snapshot detail CSVs for the two high-volume sources.
+$outputEBSAndAMI = "aws_ebs_and_ami_info-$date_string.csv"
+$outputRDSSnapshots = "aws_rds_snapshot_info-$date_string.csv"
+# Redshift cluster workload inventory (new CSV; clusters were never enumerated).
+$outputRedshiftClusters = "aws_redshift_info-$date_string.csv"
+# Snapshot-storage USAGE_TYPE cost CSV. Captures EBS/EC2/RDS/Aurora/DocDB/Neptune/
+# FSx-non-OpenZFS/StorageGateway/Redshift/DDB-standard-PITR -- the resources that
+# bill snapshot storage to the source service rather than the AWS Backup service.
+$outputSnapshotStorageCosts = "aws_snapshot_storage_costs-$date_string.csv"
 $outputBackupPlansJSON = "aws-backup-plans-info-$date_string.json"
 $archiveFile = "aws_sizing_results_$date_string.zip"
 
@@ -487,6 +525,11 @@ $outputFiles = @(
     $outputEKSClusters,
     $outputEKSNodegroups,
     $outputBackupCosts,
+    $outputBackupRecoveryPoints,
+    $outputEBSAndAMI,
+    $outputRDSSnapshots,
+    $outputRedshiftClusters,
+    $outputSnapshotStorageCosts,
     $outputBackupPlansJSON,
     $output_log
 )
@@ -546,6 +589,69 @@ function Get-CWMetricStatisticsForAllVersion {
     return & Get-CWMetricStatistics @invocationArgs -StartTime $StartTime -EndTime $EndTime
   }
 }
+
+function Invoke-AWSWithRetry {
+    param(
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
+        [int]$MaxAttempts     = 5,
+        [string]$Context      = '',       # used in warning text only
+        [int]$InitialDelayMs  = 1000      # exposed so tests can shorten the backoff
+    )
+    $attempt = 0; $delayMs = $InitialDelayMs
+    while ($true) {
+        $attempt++
+        try { return & $ScriptBlock }
+        catch {
+            # AWS Tools for PowerShell wraps the underlying AmazonServiceException
+            # inside a RuntimeException, so ErrorCode / StatusCode may live on an
+            # InnerException rather than the outer wrapper. Walk the chain and
+            # check all three throttle surfaces (type name, ErrorCode, HTTP status)
+            # at every level so retries fire whichever wrapping layer bubbled up.
+            $throttle = $false
+            $ex = $_.Exception
+            while ($null -ne $ex) {
+                $byType   = $ex.GetType().Name -match 'Throttl|RequestLimit|TooManyRequests|SlowDown'
+                $byCode   = ($ex.PSObject.Properties['ErrorCode']  -and $ex.ErrorCode  -match 'Throttl|RequestLimit|TooManyRequests|SlowDown')
+                $byStatus = ($ex.PSObject.Properties['StatusCode'] -and ($ex.StatusCode -in 429, 503))
+                if ($byType -or $byCode -or $byStatus) { $throttle = $true; break }
+                $ex = $ex.InnerException
+            }
+            if (-not $throttle -or $attempt -ge $MaxAttempts) { throw }
+            $jitter = Get-Random -Minimum 0 -Maximum ([int]($delayMs * 0.3))
+            Start-Sleep -Milliseconds ($delayMs + $jitter)
+            $delayMs = [int]($delayMs * 2)
+        }
+    }
+}
+
+# AWS.Tools v4/v5 compatibility verification for the backup-sizing cmdlets.
+#
+# Verified against AWS.Tools v5.0.106 (signatures inspected via Get-Command on the
+# installed modules). The pagination-token and page-size parameter NAMES differ
+# from the generic "-MaxResults / -NextToken" assumption, so callers in later
+# sections MUST use the exact names listed here rather than copying the canonical
+# pagination snippet verbatim:
+#
+#   Get-BAKBackupVaultList                  -> page with -NextToken,  size -MaxResult (singular)
+#   Get-BAKRecoveryPointsByBackupVaultList  -> page with -NextToken,  size -MaxResult (singular)
+#       NOTE: the v5 cmdlet is "...ByBackupVaultList" (List suffix), NOT the
+#       "Get-BAKRecoveryPointsByBackupVault" name used in some AWS API docs.
+#   Get-CEDimensionValue                    -> size -MaxResult (CE auto-pages by default)
+#   Get-FSXBackup                           -> page with -NextToken,  size -MaxResult (singular)
+#   Get-RDSDBSnapshot / Get-RDSDBClusterSnapshot -> page with -Marker, size -MaxRecord
+#       (RDS uses the Marker/MaxRecord idiom, not NextToken/MaxResult)
+#   Get-DDBBackupList / Get-DDBContinuousBackup / Get-DDBTable -> no explicit page
+#       params surfaced by the cmdlet; rely on the cmdlet's built-in auto-paging.
+#   Get-RSCluster / Get-RSClusterSnapshot   -> AWS.Tools.Redshift (newly added module;
+#       not installable in this sandbox). Redshift cmdlets historically use
+#       -Marker; verify -Marker vs -NextToken at implementation time in Task 9.
+#
+# All inspected read cmdlets keep stable parameter names across v4 and v5 (only the
+# CloudWatch time-parameter rename required the existing Get-CWMetricStatisticsForAllVersion
+# shim). Since no cmdlet difference was found that needs runtime adaptation for the
+# parameters used by this script, no additional "*ForAllVersion" wrappers are added in
+# this task. If a future AWS.Tools major release renames any page-size parameter, add a
+# wrapper following the Get-CWMetricStatisticsForAllVersion pattern above.
 
 function Add-TagsToAllObjectsInList($list) {
     # Determine all unique tag keys
@@ -904,10 +1010,12 @@ function Get-AWSS3Inventory {
         "AwsAccountId" = $AccountInfo.Account
         "AwsAccountAlias" = $AccountAlias
         "BucketName" = $s3Bucket
+        "ResourceArn" = "arn:$($partitionId):s3:::$($s3Bucket)"
         "Region" = $Region
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $s3obj -ResourceArn "arn:$($partitionId):s3:::$($s3Bucket)"
       # S3 size conversions have swapped GB/GiB labels (existing behavior preserved as-is)
       foreach ($bytesStorage in $bytesStorages.GetEnumerator()) {
         if ($null -eq $($bytesStorage.Value)) {
@@ -1035,6 +1143,7 @@ function Get-AWSEC2Inventory {
             "AwsAccountId" = $AccountInfo.Account
             "AwsAccountAlias" = $AccountAlias
             "VolumeId" = $volumeDetails.VolumeId
+            "ResourceArn" = "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($volumeDetails.VolumeId)"
             "InstanceId" = $ec2.InstanceId
             "InstanceName" = $ec2InstanceName
             "Name" = $volumeDetails.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
@@ -1053,6 +1162,8 @@ function Get-AWSEC2Inventory {
             "BackupPlans" = ""
             "InBackupPlan" = $false
           }
+          Add-BackupColumnsToRow -Row $attachedVolObj `
+            -ResourceArn "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($volumeDetails.VolumeId)"
 
           # Add volume-level tags
           foreach ($tag in $volumeDetails.Tags) {
@@ -1074,6 +1185,7 @@ function Get-AWSEC2Inventory {
         "AwsAccountId" = $AccountInfo.Account
         "AwsAccountAlias" = $AccountAlias
         "InstanceId" = $ec2.InstanceId
+        "ResourceArn" = "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):instance/$($ec2.InstanceId)"
         "Name" = $ec2InstanceName
         "Volumes" = $volumes.count
         "SizeGiB" = $instSizes["SizeGiB"]
@@ -1087,6 +1199,8 @@ function Get-AWSEC2Inventory {
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $ec2obj `
+        -ResourceArn "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):instance/$($ec2.InstanceId)"
 
       foreach ($tag in $ec2.Tags) {
         # Powershell objects have restrictions on key names,
@@ -1122,6 +1236,7 @@ function Get-AWSEC2Inventory {
         "AwsAccountId" = $AccountInfo.Account
         "AwsAccountAlias" = $AccountAlias
         "VolumeId" = $ec2UnattachedVolume.VolumeId
+        "ResourceArn" = "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($ec2UnattachedVolume.VolumeId)"
         "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
         "SizeGiB" = $unVolSizes["SizeGiB"]
         "SizeTiB" = $unVolSizes["SizeTiB"]
@@ -1132,6 +1247,8 @@ function Get-AWSEC2Inventory {
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $ec2UnVolObj `
+        -ResourceArn "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($ec2UnattachedVolume.VolumeId)"
 
       foreach ($tag in $ec2UnattachedVolume.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
@@ -1187,6 +1304,7 @@ function Get-AWSRDSInventory {
         "DBName" = $rds.DBName
         "DBInstanceIdentifier" = $rds.DBInstanceIdentifier
         "DBClusterIdentifier" = $rds.DBClusterIdentifier
+        "ResourceArn" = "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):db:$($rds.DBInstanceIdentifier)"
         "SizeGiB" = $rdsSizes["SizeGiB"]
         "SizeTiB" = $rdsSizes["SizeTiB"]
         "SizeGB" = $rdsSizes["SizeGB"]
@@ -1204,6 +1322,8 @@ function Get-AWSRDSInventory {
         "EngineMode" = $null
         "InstanceCount" = 1
       }
+      Add-BackupColumnsToRow -Row $rdsObj `
+        -ResourceArn "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):db:$($rds.DBInstanceIdentifier)"
 
       foreach ($tag in $rds.TagList) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
@@ -1263,6 +1383,7 @@ function Get-AWSRDSInventory {
         "DBName" = $cluster.DatabaseName
         "DBInstanceIdentifier" = $cluster.DBClusterIdentifier
         "DBClusterIdentifier" = $cluster.DBClusterIdentifier
+        "ResourceArn" = "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):cluster:$($cluster.DBClusterIdentifier)"
         "SizeGiB" = $clusterSizes["SizeGiB"]
         "SizeTiB" = $clusterSizes["SizeTiB"]
         "SizeGB" = $clusterSizes["SizeGB"]
@@ -1280,6 +1401,8 @@ function Get-AWSRDSInventory {
         "EngineMode" = $cluster.EngineMode
         "InstanceCount" = if ($cluster.DBClusterMembers) { $cluster.DBClusterMembers.Count } else { 0 }
       }
+      Add-BackupColumnsToRow -Row $clusterObj `
+        -ResourceArn "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):cluster:$($cluster.DBClusterIdentifier)"
 
       foreach ($tag in $cluster.TagList) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
@@ -1323,6 +1446,7 @@ function Get-AWSEFSInventory {
         "AwsAccountId" = $AccountInfo.Account
         "AwsAccountAlias" = $AccountAlias
         "FileSystemId" = $efs.FileSystemId
+        "ResourceArn" = "arn:$($partitionId):elasticfilesystem:$($Region):$($AccountInfo.Account):file-system/$($efs.FileSystemId)"
         "FileSystemProtection" = $efs.FileSystemProtection.ReplicationOverwriteProtection.Value
         "Name" = $efs.Name
         "SizeInBytes" = $efs.SizeInBytes.Value
@@ -1340,6 +1464,8 @@ function Get-AWSEFSInventory {
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $efsObj `
+        -ResourceArn "arn:$($partitionId):elasticfilesystem:$($Region):$($AccountInfo.Account):file-system/$($efs.FileSystemId)"
 
       foreach ($tag in $efs.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
@@ -1707,6 +1833,7 @@ function Get-AWSFSxInventory {
         "AwsAccountAlias" = $AccountAlias
         "Region" = $Region
         "FileSystemId" = $filesystem.FileSystemId
+        "ResourceArn" = "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):file-system/$($filesystem.FileSystemId)"
         "FileSystemDNSName" = $filesystem.DNSName
         "FileSystemType" = $filesystem.FileSystemType.Value
         "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
@@ -1722,7 +1849,11 @@ function Get-AWSFSxInventory {
         "StorageCapacityTiB" = $fsxCapSizes["StorageCapacityTiB"]
         "StorageCapacityGB" = $fsxCapSizes["StorageCapacityGB"]
         "StorageCapacityTB" = $fsxCapSizes["StorageCapacityTB"]
+        "BackupPlans" = ""
+        "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $fsxObj `
+        -ResourceArn "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):file-system/$($filesystem.FileSystemId)"
       $namespace = "AWS/FSx"
       $dimensions = @(
         @{
@@ -1920,6 +2051,7 @@ function Get-AWSFSxInventory {
         "FileSystemStorageType" = $filesystem.StorageType
         "Name" = $fsx.Name
         "VolumeId" = $fsx.VolumeId
+        "ResourceArn" = "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):volume/$($fsx.VolumeId)"
         "VolumeType" = $fsx.VolumeType
         "LifeCycle" = $fsx.LifeCycle
         "StorageUsedBytes" = $maxStorageUsed
@@ -1935,6 +2067,8 @@ function Get-AWSFSxInventory {
         "BackupPlans" = ""
         "InBackupPlan" = $false
       }
+      Add-BackupColumnsToRow -Row $fsxObj `
+        -ResourceArn "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):volume/$($fsx.VolumeId)"
 
       foreach ($tag in $fsx.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
@@ -1986,6 +2120,7 @@ function Get-AWSDynamoDBInventory {
         "TableName" = $ddbItem.TableName
         "TableId" = $ddbItem.TableId
         "TableArn" = $ddbItem.TableArn
+        "ResourceArn" = $ddbItem.TableArn
         "TableSizeBytes" = $ddbItem.TableSizeBytes
         "TableStatus" = $ddbItem.TableStatus.Value
         "TableSizeGiB" = $ddbSizes["TableSizeGiB"]
@@ -2002,7 +2137,9 @@ function Get-AWSDynamoDBInventory {
         "ProvisionedThroughputWriteCapacityUnits" = $ddbItem.ProvisionedThroughput.WriteCapacityUnits
         "BackupPlans" = ""
         "InBackupPlan" = $false
+        "PITREnabled" = $false
       }
+      Add-BackupColumnsToRow -Row $ddbObj -ResourceArn $ddbItem.TableArn
       $ddbResult.add($ddbObj) | Out-Null
 
     }
@@ -2126,6 +2263,66 @@ function Get-AWSKMSInventory {
     return ,$kmsResult
 }
 
+# Resolve an AWS Backup `aws:ResourceTag/<key>` condition against a workload row.
+# Rows expose flattened tags as direct NoteProperties with sanitized keys
+# (the existing per-collector tag wire-up replaces non-alphanumeric chars with `_`),
+# so we sanitize the condition's tag-key the same way before looking it up.
+# Op = Equals -> exact string compare; Op = Like -> PowerShell -like (supports `*`).
+function Test-RowTagConditionMatch {
+    param($Row, $Cond)
+    # AWS Backup selection conditions arrive in two formats:
+    #   - BackupSelection.ListOfTags entries carry a BARE tag name as ConditionKey
+    #     (e.g. "backup"). This is the format AWS Organizations backup policies
+    #     materialize into, used by ~all of the org-managed plans we see in the
+    #     field.
+    #   - BackupSelection.Conditions.StringEquals/etc. entries carry the IAM-style
+    #     fully-qualified key "aws:ResourceTag/<name>" (e.g. "aws:ResourceTag/backup").
+    # Normalize both to the bare tag name before lookup.
+    $rawKey = "$($Cond.Key)"
+    if ($rawKey -match '^aws:ResourceTag/(.+)$') {
+        $tagKey = $matches[1]
+    } else {
+        $tagKey = $rawKey
+    }
+    $sanitizedKey = $tagKey -replace '[^a-zA-Z0-9]', '_'
+    $prop = $Row.PSObject.Properties[$sanitizedKey]
+    if ($null -eq $prop) { return $false }
+    $rowValue = $prop.Value
+    if ($null -eq $rowValue) { return $false }
+    switch ($Cond.Op) {
+        'Equals' { return ("$rowValue" -eq "$($Cond.Value)") }
+        'Like'   { return ("$rowValue" -like "$($Cond.Value)") }
+    }
+    return $false
+}
+
+# Evaluate a workload row against an AWS Backup selection's tag-based criteria.
+# Semantics per AWS docs:
+#   - ListOfTags: OR across entries (any one match qualifies).
+#   - Conditions.StringEquals / StringLike: AND across entries.
+#   - Conditions.StringNotEquals / StringNotLike: negation, any match disqualifies.
+# An empty criteria set returns $false so the caller can keep ARN-based matching
+# as the only path when no tag/condition selection is present.
+function Test-RowMatchesSelection {
+    param($Row, $OrTags, $AndConds, $NotConds)
+    $anyCriteria = ($OrTags.Count + $AndConds.Count + $NotConds.Count) -gt 0
+    if (-not $anyCriteria) { return $false }
+    if ($OrTags.Count -gt 0) {
+        $matched = $false
+        foreach ($t in $OrTags) {
+            if (Test-RowTagConditionMatch -Row $Row -Cond $t) { $matched = $true; break }
+        }
+        if (-not $matched) { return $false }
+    }
+    foreach ($c in $AndConds) {
+        if (-not (Test-RowTagConditionMatch -Row $Row -Cond $c)) { return $false }
+    }
+    foreach ($c in $NotConds) {
+        if (Test-RowTagConditionMatch -Row $Row -Cond $c) { return $false }
+    }
+    return $true
+}
+
 function Get-AWSBackupPlanInventory {
     param(
         $Credential,
@@ -2138,71 +2335,44 @@ function Get-AWSBackupPlanInventory {
         $RDSList,
         $EFSList,
         $FSxList,
+        $FSxFileSystemList,
         $S3List,
         $DDBList
     )
 
     $backupPlanResult = New-Object collections.arraylist
 
-#Ingest AWS Backup Plans and evaluate protected resources
-    $BackupPlans = $null
-    try{
-      $BackupPlans = Get-BAKBackupPlanList -Credential $Credential -region $Region -ErrorAction Stop;
-
+# Ingest AWS Backup Plans with explicit NextToken pagination. Without this,
+# customers with >100 plans had silent truncation. Get-BAKProtectedResourceList
+# is no longer called: the per-resource backup attribution path is now the
+# recovery-point enumeration in Get-AWSBackupRecoveryPointInventory, which is a
+# strict superset; deleting it also drops the protected_objects.csv leak that
+# was never registered in $outputFiles.
+    $BackupPlans = New-Object collections.arraylist
+    try {
+      $bpToken = $null
+      do {
+        # Page-size parameter omitted: AWS.Tools v4/v5 disagree on -MaxResult vs
+        # -MaxResults for the BAK cmdlets, so rely on the cmdlet's default page
+        # size (typically 100 or 1000) and use NextToken for termination.
+        $bpParams = @{ Credential = $Credential; Region = $Region }
+        if ($bpToken) { $bpParams.NextToken = $bpToken }
+        $bpPage = Invoke-AWSWithRetry -Context "Get-BAKBackupPlanList-$Region" -ScriptBlock {
+          Get-BAKBackupPlanList @bpParams -ErrorAction Stop
+        }
+        if ($bpPage) { [void]$BackupPlans.AddRange(@($bpPage)) }
+        $bpToken = $AWSHistory.LastServiceResponse.NextToken
+      } while ($bpToken)
     } catch {
       Write-Host "Failed to get Backup Plans Info for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
       Write-Host "Error: $_" -ForeGroundColor Red
     }
-#Custom Object for Protected Backup Objects
-<# $protectedBAKobjs = [PSCustomObject] @{
-  "AwsAccountId" = $AccountInfo.Account
-  "AwsAccountAlias" = $AccountAlias
-  "ResourceName" = $s3Bucket
-  "Resource" = "undefined"
-  "ResourceType" = "undefined"
-  "Region" = $Region
-  "RuleName" = "undefined"
-  "BackupPlans" = ""
-  "BackupVault" = "Default"
-  "InBackupPlan" = $false
-} #>try {
-$protectedBAKobjs = @();
+    try {
     $counter = 1
     foreach ($plan in $BackupPlans) {
       Write-Progress -ID 11 -Activity "Processing Backup Plan: $($plan.BackupPlanId)" -Status "Plan $($counter) of $($BackupPlans.Count)" -PercentComplete (($counter / $BackupPlans.Count) * 100)
       $counter++
-      #Traverse Backup Vaults for protected items
-      $backupPlanRules = (Get-BAKBackupPlan -BackupPlanId $plan.BackupPlanId -Credential $Credential -region $Region ).BackupPlan.Rules;
-      foreach($rule in $backupPlanRules) {
-        $vault = Get-BAKBackupVault -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
-        $protectedResourceList = Get-BAKProtectedResourceList -Credential $Credential -region $Region  | Where-Object {$_.LastBackupVaultArn -eq $vault.BackupVaultArn }
-        #add resource to array .resourceName, .resourcetype
-        foreach($resource in $protectedResourceList) {
-          $recoveryPointInfo = Get-BAKRecoveryPoint -RecoveryPointArn $resource.LastRecoveryPointArn -BackupVaultName $rule.TargetBackupVaultName -Credential $Credential -region $Region ;
-          $protectedBAKobjs += [PSCustomObject]@{
-            "AWSAccountId" = $AccountInfo.Account
-            "AWSAccountAlias" = $AccountAlias
-            "ResourceName" = $resource.ResourceName
-            "Resource" = $resource.resourceArn
-            "ResourceType" = $resource.ResourceType
-            "Region" = $Region
-            "RuleName" = $rule.RuleName
-            "BackupPlans" = $plan.BackupPlanName
-            "BackupVault" = $rule.TargetBackupVaultName
-            "BackupSchedule" = $rule.ScheduleExpression
-            "LifecycleDelete" = $rule.Lifecycle.DeleteAfterDays
-            "LifecycleToColdStorageAfterDays" = $rule.Lifecycle.MoveToColdStorageAfterDays
-            "BackupSizeInGiB" = [math]::round($($recoveryPointInfo.BackupSizeInBytes / 1073741824), 4)
-            }
-        }
-      }
-      $protectedBAKobjs | export-csv -path ./protected_objects.csv;
-      #instance ID from ProtectedObjects List
-      #Get-EC2instances will only provide the instance ID
 
-
-
-      #Continue remaineder of primary script
       try{
         $BackupPlanObject = (Get-BAKBackupPlan -Credential $Credential -region $Region -BackupPlanId $plan.BackupPlanId) | ConvertTo-Json -Depth 10 | ConvertFrom-Json
       } catch {
@@ -2210,9 +2380,18 @@ $protectedBAKobjs = @();
         Write-Host "Error: $_" -ForeGroundColor Red
       }
       $BackupPlanObject | Add-Member -MemberType NoteProperty -Name "Resources" -Value @()
-      $selections = $null
-      try{
-        $selections = Get-BAKBackupSelectionList -Credential $Credential -region $Region -BackupPlanId $plan.BackupPlanId -ErrorAction Stop
+      $selections = New-Object collections.arraylist
+      try {
+        $selToken = $null
+        do {
+          $selParams = @{ Credential = $Credential; Region = $Region; BackupPlanId = $plan.BackupPlanId }
+          if ($selToken) { $selParams.NextToken = $selToken }
+          $selPage = Invoke-AWSWithRetry -Context "Get-BAKBackupSelectionList-$($plan.BackupPlanId)" -ScriptBlock {
+            Get-BAKBackupSelectionList @selParams -ErrorAction Stop
+          }
+          if ($selPage) { [void]$selections.AddRange(@($selPage)) }
+          $selToken = $AWSHistory.LastServiceResponse.NextToken
+        } while ($selToken)
       } catch {
         Write-Host "Failed to get Backup Selections for Plan $($plan.BackupPlanId) for region $Region in account $($AccountInfo.Account)" -ForeGroundColor Red
         Write-Host "Error: $_" -ForeGroundColor Red
@@ -2398,6 +2577,82 @@ $protectedBAKobjs = @();
             }
           }
         }
+
+        # Tag-based selection: parse ListOfTags (OR) and Conditions (AND/negation),
+        # then iterate every workload row in scope to set BackupPlans / InBackupPlan.
+        # Tag-matched ARNs are NOT pushed into BackupPlanObject.Resources -- the
+        # aws-backup-plans-info-*.json `Resources` array must remain ARN-only
+        # (byte-identical for plans whose Resources is empty today).
+        $orTags = @()
+        if ($foundSelection.BackupSelection.ListOfTags) {
+          foreach ($t in $foundSelection.BackupSelection.ListOfTags) {
+            if ("$($t.ConditionType)".ToUpperInvariant() -eq 'STRINGEQUALS') {
+              $orTags += @{ Op = 'Equals'; Key = $t.ConditionKey; Value = $t.ConditionValue }
+            }
+          }
+        }
+        $andConds = @()
+        $notConds = @()
+        if ($foundSelection.BackupSelection.Conditions) {
+          foreach ($c in @($foundSelection.BackupSelection.Conditions.StringEquals)) {
+            if ($null -ne $c) { $andConds += @{ Op = 'Equals'; Key = $c.ConditionKey; Value = $c.ConditionValue } }
+          }
+          foreach ($c in @($foundSelection.BackupSelection.Conditions.StringLike)) {
+            if ($null -ne $c) { $andConds += @{ Op = 'Like'; Key = $c.ConditionKey; Value = $c.ConditionValue } }
+          }
+          foreach ($c in @($foundSelection.BackupSelection.Conditions.StringNotEquals)) {
+            if ($null -ne $c) { $notConds += @{ Op = 'Equals'; Key = $c.ConditionKey; Value = $c.ConditionValue } }
+          }
+          foreach ($c in @($foundSelection.BackupSelection.Conditions.StringNotLike)) {
+            if ($null -ne $c) { $notConds += @{ Op = 'Like'; Key = $c.ConditionKey; Value = $c.ConditionValue } }
+          }
+        }
+
+        $allWorkloadLists = @(
+          $EC2List, $EC2UnattachedVolumesRaw, $EC2AttachedVolList, $RDSList,
+          $EFSList, $FSxList, $FSxFileSystemList, $S3List, $DDBList
+        )
+
+        if ($orTags.Count -gt 0 -or $andConds.Count -gt 0 -or $notConds.Count -gt 0) {
+          foreach ($list in $allWorkloadLists) {
+            if ($null -eq $list) { continue }
+            foreach ($row in $list) {
+              if ($null -eq $row) { continue }
+              if ("$Region" -ne "$($row.Region)") { continue }
+              if ("$($AccountInfo.Account)" -ne "$($row.AwsAccountId)") { continue }
+              if (-not (Test-RowMatchesSelection -Row $row -OrTags $orTags -AndConds $andConds -NotConds $notConds)) { continue }
+              if ("" -eq $row.BackupPlans) {
+                $row.BackupPlans = "$($plan.BackupPlanName)"
+              } else {
+                $existing = @($row.BackupPlans -split ',\s*' | Where-Object { $_ })
+                if ($existing -notcontains $plan.BackupPlanName) {
+                  $row.BackupPlans += ", $($plan.BackupPlanName)"
+                }
+              }
+              $row.InBackupPlan = $true
+            }
+          }
+        }
+
+        # NotResources exclusion: applied AFTER all resource/tag/condition rules above
+        # have set InBackupPlan=$true. Any row whose ResourceArn matches an excluded ARN
+        # for this plan is reverted -- this plan is removed from BackupPlans, and
+        # InBackupPlan flips back to $false if no other plan still names the row.
+        if ($foundSelection.BackupSelection.NotResources) {
+          $excluded = @{}
+          foreach ($e in $foundSelection.BackupSelection.NotResources) { $excluded["$e"] = $true }
+          foreach ($list in $allWorkloadLists) {
+            if ($null -eq $list) { continue }
+            foreach ($row in $list) {
+              if ($null -eq $row) { continue }
+              if ($null -eq $row.PSObject.Properties['ResourceArn']) { continue }
+              if (-not $excluded.ContainsKey("$($row.ResourceArn)")) { continue }
+              $remaining = @($row.BackupPlans -split ',\s*' | Where-Object { $_ -and $_ -ne $plan.BackupPlanName })
+              $row.BackupPlans = $remaining -join ', '
+              if ($remaining.Count -eq 0) { $row.InBackupPlan = $false }
+            }
+          }
+        }
       }
       Write-Progress -ID 12 -Activity "Processing Backup Plan/Selection: $($selection.SelectionId)" -Completed
       $backupPlanResult.Add($BackupPlanObject) | Out-Null
@@ -2410,6 +2665,1109 @@ $protectedBAKobjs = @();
   return , $backupPlanResult
 }
 
+function Get-AWSBackupRecoveryPointInventory {
+    # Params are non-mandatory to match the surrounding collectors: getAWSData calls
+    # them with whatever account/credential context it resolved, which may be null
+    # in degraded runs. The cmdlet returns an empty result rather than hard-failing
+    # the whole region loop in that case.
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        [int]$TimeoutMinutes = 60,
+        $PlanNameById = $null
+    )
+
+    # Enumerates every recovery point in every backup vault in $Region (paged with
+    # explicit NextToken loops), streams the per-RP rows to a per-region scratch CSV,
+    # and returns a per-(account, region, ResourceArn) aggregate held in memory.
+    #
+    # Returns PSCustomObject:
+    #   .RecoveryPoints      -- arraylist of per-RP rows (also streamed to the tmp CSV)
+    #   .ResourceAggregates  -- arraylist of per-(account, region, ARN) aggregate rows
+    #   .Truncated           -- bool, true if the region's time budget was hit
+    #   .VaultsAccessDenied  -- int, count of vaults where ListRPs threw AccessDenied
+
+    $recoveryPoints   = New-Object collections.arraylist
+    $resourceAgg      = @{}   # ResourceArn -> aggregate hashtable
+    $truncated        = $false
+    $vaultsAccessDenied = 0
+
+    # Degraded-run guard: getAWSData may pass null AccountInfo if STSCallerIdentity
+    # failed earlier. Without this, the tmp-filename build + per-row Account field
+    # would NRE rather than gracefully degrade.
+    if ($null -eq $AccountInfo) {
+        return [PSCustomObject]@{
+            RecoveryPoints     = $recoveryPoints
+            ResourceAggregates = New-Object collections.arraylist
+            Truncated          = $false
+            VaultsAccessDenied = 0
+        }
+    }
+
+    # Per-region scratch file. The '.tmp.csv' suffix keeps it distinct from the
+    # canonical 'aws_backup_recovery_points-{date}.csv' output; the date string ties
+    # orphan globs to a single run. The account id keeps org-run regions from
+    # colliding across accounts. (A leading-dot name was avoided because Linux
+    # PowerShell hides dotfiles from Get-ChildItem/Remove-Item without -Force,
+    # which silently breaks the merge and orphan-cleanup globs.)
+    $tmpFile = "aws_backup_recovery_points-$($AccountInfo.Account)-$Region-$date_string.tmp.csv"
+
+    # Buffer of rows pending the next streaming flush (batches of ~1000).
+    $flushBuffer = New-Object collections.arraylist
+    $flushBatchSize = 1000
+
+    # Streams the pending buffer to the per-region tmp file via Export-Csv -Append.
+    $flushBuffered = {
+        if ($flushBuffer.Count -gt 0) {
+            $flushBuffer | Export-Csv -Path $tmpFile -Append -NoTypeInformation
+            $flushBuffer.Clear()
+        }
+    }
+
+    try {
+        # NOTE: orphan tmp-file cleanup (from a prior crashed run) is done ONCE by the
+        # caller (getAWSData) before the per-region loop -- NOT here. Globbing at
+        # per-region entry would delete sibling regions' freshly-written tmp files
+        # in the current run, leaving the post-loop merge with nothing for them.
+
+        try {
+            # Enumerate vaults (paged). Missing backup:ListBackupVaults surfaces as
+            # AccessDenied here skips the whole region's RP enumeration and emits a single yellow line.
+            $vaults = New-Object collections.arraylist
+            try {
+                $vaultToken = $null
+                do {
+                    $vaultParams = @{ Credential = $Credential; Region = $Region }
+                    if ($vaultToken) { $vaultParams.NextToken = $vaultToken }
+                    $vaultPage = Invoke-AWSWithRetry -Context "BAK-vault-list-$Region" -ScriptBlock {
+                        Get-BAKBackupVaultList @vaultParams -ErrorAction Stop
+                    }
+                    if ($vaultPage) { [void]$vaults.AddRange(@($vaultPage)) }
+                    $vaultToken = $AWSHistory.LastServiceResponse.NextToken
+                } while ($vaultToken)
+            } catch {
+                if (Test-IsAccessDenied $_) {
+                    Write-Host "Access denied listing backup vaults for region $Region in account $($AccountInfo.Account); skipping RP enumeration for this region." -ForegroundColor Yellow
+                    return [PSCustomObject]@{
+                        RecoveryPoints     = $recoveryPoints
+                        ResourceAggregates = New-Object collections.arraylist
+                        Truncated          = $false
+                        VaultsAccessDenied = 0
+                    }
+                }
+                throw
+            }
+
+            # Per-region time budget. Once exceeded we flush partial results and stop.
+            $regionDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+            $vaultAccessDeniedWarned = $false
+
+            foreach ($vault in $vaults) {
+                if ((Get-Date) -gt $regionDeadline) {
+                    $truncated = $true
+                    break
+                }
+                $vaultName = $vault.BackupVaultName
+
+                try {
+                    $rpToken = $null
+                    do {
+                        if ((Get-Date) -gt $regionDeadline) {
+                            $truncated = $true
+                            break
+                        }
+                        $rpParams = @{ Credential = $Credential; Region = $Region }
+                        if ($rpToken) { $rpParams.NextToken = $rpToken }
+                        $rpPage = Invoke-AWSWithRetry -Context "BAK-rp-list-$vaultName" -ScriptBlock {
+                            Get-BAKRecoveryPointsByBackupVaultList @rpParams -BackupVaultName $vaultName -ErrorAction Stop
+                        }
+                        # Empty vault returns null per AWS Tools convention; coerce to empty array.
+                        foreach ($rp in @($rpPage)) {
+                            if ($null -eq $rp) { continue }
+                            $row = New-AWSRecoveryPointRow -RecoveryPoint $rp -Region $Region `
+                                -AccountInfo $AccountInfo -AccountAlias $AccountAlias `
+                                -PlanNameById $PlanNameById
+                            [void]$recoveryPoints.Add($row)
+                            [void]$flushBuffer.Add($row)
+                            if ($flushBuffer.Count -ge $flushBatchSize) { & $flushBuffered }
+
+                            $sizeWasNull = ($null -eq $rp.BackupSizeInBytes)
+                            Add-RecoveryPointToAggregate -Aggregate $resourceAgg -Row $row -SizeWasNull $sizeWasNull
+                        }
+                        $rpToken = $AWSHistory.LastServiceResponse.NextToken
+                    } while ($rpToken)
+                } catch {
+                    if (Test-IsAccessDenied $_) {
+                        $vaultsAccessDenied++
+                        if (-not $vaultAccessDeniedWarned) {
+                            Write-Host "Access denied listing recovery points for one or more vaults in region $Region in account $($AccountInfo.Account); those vaults are skipped." -ForegroundColor Yellow
+                            $vaultAccessDeniedWarned = $true
+                        }
+                        continue
+                    }
+                    throw
+                }
+            }
+
+            if ($truncated) {
+                Write-Host "RP enumeration truncated after $TimeoutMinutes min for region $Region; capacity numbers are lower bounds for that region" -ForegroundColor Yellow
+            }
+        } finally {
+            # Always flush whatever is buffered so partial results survive a timeout
+            # or a mid-enumeration throw.
+            & $flushBuffered
+        }
+    } catch {
+        # On any unexpected failure, drop the region's partial tmp file so a later
+        # merge can't pick up a half-written page.
+        Remove-Item $tmpFile -ErrorAction SilentlyContinue
+        throw
+    }
+
+    # Materialize the in-memory aggregate into output rows.
+    $resourceAggregates = New-Object collections.arraylist
+    foreach ($entry in $resourceAgg.Values) {
+        [void]$resourceAggregates.Add((New-AWSRecoveryPointAggregateRow -State $entry))
+    }
+
+    return [PSCustomObject]@{
+        RecoveryPoints     = $recoveryPoints
+        ResourceAggregates = $resourceAggregates
+        Truncated          = $truncated
+        VaultsAccessDenied = $vaultsAccessDenied
+    }
+}
+
+# Builds the flat per-RP record (the row schema for aws_backup_recovery_points-*.csv).
+function New-AWSRecoveryPointRow {
+    param(
+        [Parameter(Mandatory)] $RecoveryPoint,
+        [Parameter(Mandatory)] [string]$Region,
+        [Parameter(Mandatory)] $AccountInfo,
+        [string]$AccountAlias,
+        $PlanNameById = $null
+    )
+    $rp = $RecoveryPoint
+
+    $sizeBytes = if ($null -eq $rp.BackupSizeInBytes) { [long]0 } else { [long]$rp.BackupSizeInBytes }
+    $sizes = ConvertTo-SizeUnits -Value $sizeBytes -Prefix "BackupSize" -InputUnit Bytes
+
+    # CreatedBy is null on on-demand RPs created via start-backup-job.
+    $backupPlanId   = if ($rp.CreatedBy) { $rp.CreatedBy.BackupPlanId } else { "" }
+    $backupPlanName = if ($rp.CreatedBy) { $rp.CreatedBy.BackupPlanName } else { "" }
+    if ($null -eq $backupPlanId)   { $backupPlanId = "" }
+    if ($null -eq $backupPlanName) { $backupPlanName = "" }
+    # AWS's ListRecoveryPointsByBackupVault response never populates
+    # CreatedBy.BackupPlanName (per the RecoveryPointCreator API schema), so
+    # without a side-channel lookup every RP row would read "". Fall back to a
+    # caller-provided BackupPlanId -> BackupPlanName map (built from the local
+    # Get-BAKBackupPlanList output, which includes org-managed plans).
+    if ([string]::IsNullOrEmpty($backupPlanName) -and $backupPlanId -and
+        $null -ne $PlanNameById -and $PlanNameById.ContainsKey($backupPlanId)) {
+        $backupPlanName = "$($PlanNameById[$backupPlanId])"
+    }
+
+    [PSCustomObject]@{
+        "AwsAccountId"           = $AccountInfo.Account
+        "AwsAccountAlias"        = $AccountAlias
+        "Region"                 = $Region
+        "BackupVaultName"        = $rp.BackupVaultName
+        "BackupVaultArn"         = $rp.BackupVaultArn
+        "RecoveryPointArn"       = $rp.RecoveryPointArn
+        "ResourceArn"            = $rp.ResourceArn
+        "ResourceId"             = Get-ResourceIdFromArn $rp.ResourceArn
+        "ResourceName"           = $rp.ResourceName
+        "ResourceType"           = $rp.ResourceType
+        "BackupSizeBytes"        = $sizeBytes
+        "BackupSizeGiB"          = $sizes["BackupSizeGiB"]
+        "BackupSizeTiB"          = $sizes["BackupSizeTiB"]
+        "CreationDate"           = $rp.CreationDate
+        "BackupPlanId"           = $backupPlanId
+        "BackupPlanName"         = $backupPlanName
+        "Status"                 = $rp.Status
+        "IsParent"               = [bool]$rp.IsParent
+        "ParentRecoveryPointArn" = $rp.ParentRecoveryPointArn
+        "Source"                 = "AWSBackup"
+    }
+}
+
+# Parses the resource identifier (i-0123, vol-0123, bucket name, ...) out of a
+# resource ARN. Returns "" when the ARN is null/empty or has no recognizable id.
+function Get-ResourceIdFromArn {
+    param([string]$Arn)
+    if ([string]::IsNullOrEmpty($Arn)) { return "" }
+    # ARN form: arn:partition:service:region:account:resourceType/resourceId
+    #        or arn:partition:service:region:account:resourceType:resourceId
+    #        or arn:partition:s3:::bucket
+    $resourcePart = ($Arn -split ':', 6)[-1]
+    if ($resourcePart -match '[/:]') {
+        return ($resourcePart -split '[/:]')[-1]
+    }
+    return $resourcePart
+}
+
+# Folds a single per-RP row into the per-(ResourceArn) aggregate state hashtable.
+# IsParent rows are excluded from size/count; null sizes (coerced to 0 on the row)
+# are tracked via NullSizeRecoveryPointCount.
+function Add-RecoveryPointToAggregate {
+    param(
+        [Parameter(Mandatory)] [hashtable]$Aggregate,
+        [Parameter(Mandatory)] $Row,
+        [bool]$SizeWasNull = $false
+    )
+
+    # Composite parents double-count children's bytes; exclude them entirely.
+    if ($Row.IsParent) { return }
+
+    $arn = $Row.ResourceArn
+    if ([string]::IsNullOrEmpty($arn)) { return }
+
+    if (-not $Aggregate.ContainsKey($arn)) {
+        $Aggregate[$arn] = @{
+            AwsAccountId               = $Row.AwsAccountId
+            Region                     = $Row.Region
+            ResourceArn                = $arn
+            ResourceType               = $Row.ResourceType
+            ResourceName               = $Row.ResourceName
+            RecoveryPointCount         = 0
+            NullSizeRecoveryPointCount = 0
+            LatestRecoveryPointArn     = $null
+            LatestRecoveryPointDate    = $null
+            LatestRecoveryPointSizeBytes = [long]0
+            BackupPlanNames            = New-Object collections.arraylist
+            BackupVaultNames           = New-Object collections.arraylist
+        }
+    }
+    $state = $Aggregate[$arn]
+    $state.RecoveryPointCount++
+
+    if ($SizeWasNull) { $state.NullSizeRecoveryPointCount++ }
+
+    if (-not [string]::IsNullOrEmpty($Row.BackupPlanName) -and
+        -not $state.BackupPlanNames.Contains($Row.BackupPlanName)) {
+        [void]$state.BackupPlanNames.Add($Row.BackupPlanName)
+    }
+    if (-not [string]::IsNullOrEmpty($Row.BackupVaultName) -and
+        -not $state.BackupVaultNames.Contains($Row.BackupVaultName)) {
+        [void]$state.BackupVaultNames.Add($Row.BackupVaultName)
+    }
+
+    if ($null -eq $state.LatestRecoveryPointDate -or
+        ($null -ne $Row.CreationDate -and $Row.CreationDate -gt $state.LatestRecoveryPointDate)) {
+        $state.LatestRecoveryPointDate      = $Row.CreationDate
+        $state.LatestRecoveryPointArn       = $Row.RecoveryPointArn
+        $state.LatestRecoveryPointSizeBytes = $Row.BackupSizeBytes
+    }
+}
+
+# Converts an aggregate-state hashtable into the per-resource output row.
+function New-AWSRecoveryPointAggregateRow {
+    param([Parameter(Mandatory)] [hashtable]$State)
+    [PSCustomObject]@{
+        "AwsAccountId"                 = $State.AwsAccountId
+        "Region"                       = $State.Region
+        "ResourceArn"                  = $State.ResourceArn
+        "ResourceType"                 = $State.ResourceType
+        "ResourceName"                 = $State.ResourceName
+        "RecoveryPointCount"           = $State.RecoveryPointCount
+        "NullSizeRecoveryPointCount"   = $State.NullSizeRecoveryPointCount
+        "LatestRecoveryPointArn"       = $State.LatestRecoveryPointArn
+        "LatestRecoveryPointDate"      = $State.LatestRecoveryPointDate
+        "LatestRecoveryPointSizeBytes" = $State.LatestRecoveryPointSizeBytes
+        "BackupPlanNames"              = ($State.BackupPlanNames -join ", ")
+        "BackupVaultNames"            = ($State.BackupVaultNames -join ", ")
+    }
+}
+
+# Classifies an ErrorRecord as an AWS AccessDenied failure. Only this family is a
+# graceful (yellow) degradation; everything else stays a hard (red) error.
+function Test-IsAccessDenied {
+    param([Parameter(Mandatory)] $ErrorRecord)
+    # IAM denials surface under different names depending on the AWS service:
+    #   - Most services: AccessDenied / AccessDeniedException
+    #   - EC2 / EBS / AMI APIs: UnauthorizedOperation (and AuthFailure for
+    #     pre-signed-request style failures)
+    # All three are operator-actionable in the same way (the SE asks the
+    # customer's admin to grant the missing permission), so they should
+    # consistently route to the yellow degrade path.
+    $denyPattern = 'AccessDenied|UnauthorizedOperation|AuthFailure'
+    $ex = $ErrorRecord.Exception
+    if ($null -eq $ex) { return $false }
+    if ($ex.GetType().Name -match $denyPattern) { return $true }
+    if ($ex.PSObject.Properties['ErrorCode'] -and $ex.ErrorCode -match $denyPattern) { return $true }
+    return $false
+}
+
+# Header row mirroring the per-RP CSV schema. Used for the header-only canonical
+# file and to seed the merged output. Hand-written as a literal so the quoting
+# matches Export-Csv -Append below (ConvertTo-Csv quoting differs subtly between
+# PS 5.1 and 7.x and would produce header/body quote mismatches).
+function Get-AWSRecoveryPointCsvHeader {
+    '"AwsAccountId","AwsAccountAlias","Region","BackupVaultName","BackupVaultArn","RecoveryPointArn","ResourceArn","ResourceId","ResourceName","ResourceType","BackupSizeBytes","BackupSizeGiB","BackupSizeTiB","CreationDate","BackupPlanId","BackupPlanName","Status","IsParent","ParentRecoveryPointArn","Source"'
+}
+
+# Tracks which canonical files this run has already created, so org runs accumulate
+# RP rows across accounts (each per-account merge appends) rather than the second
+# account's merge clobbering the first account's rows.
+$script:RecoveryPointCanonicalSeeded = @{}
+
+# Merges per-region recovery-point tmp files into the single canonical CSV and
+# removes the tmp files. On the first call for a canonical path within a run, an
+# existing file (e.g. an orphan from a prior crashed run) is removed first;
+# subsequent per-account calls append. A merge failure cleans up the tmp files;
+# the canonical file is left in whatever consistent state precedes the failing write.
+function Merge-AWSRecoveryPointTmpFiles {
+    param([Parameter(Mandatory)] [string]$CanonicalPath)
+
+    $tmpGlob = "aws_backup_recovery_points-*-$date_string.tmp.csv"
+    $tmpFiles = @(Get-ChildItem -Path $tmpGlob -ErrorAction SilentlyContinue)
+
+    if ($null -eq $script:RecoveryPointCanonicalSeeded) {
+        $script:RecoveryPointCanonicalSeeded = @{}
+    }
+    $firstSeedForRun = -not $script:RecoveryPointCanonicalSeeded.ContainsKey($CanonicalPath)
+
+    try {
+        # -Width guards against Out-File wrapping long CSV lines (default width is the
+        # host buffer width, which is small/zero under non-interactive hosts).
+        if ($firstSeedForRun) {
+            if (Test-Path $CanonicalPath) { Remove-Item $CanonicalPath -ErrorAction Stop }
+            # Seed the header so even a no-RP account produces a header-only file.
+            Get-AWSRecoveryPointCsvHeader | Out-File -FilePath $CanonicalPath -Width 999999
+            $script:RecoveryPointCanonicalSeeded[$CanonicalPath] = $true
+        }
+
+        foreach ($file in $tmpFiles) {
+            $lines = Get-Content -Path $file.FullName
+            # Append data rows only; the canonical header was written at seed time.
+            if ($lines.Count -gt 1) {
+                $lines[1..($lines.Count - 1)] | Out-File -FilePath $CanonicalPath -Append -Width 999999
+            }
+        }
+    } catch {
+        Remove-Item $CanonicalPath -ErrorAction SilentlyContinue
+        Write-Host "Failed to merge recovery-point tmp files into $CanonicalPath : $_" -ForegroundColor Red
+        throw
+    } finally {
+        Remove-Item $tmpGlob -ErrorAction SilentlyContinue
+    }
+}
+
+# Native EBS snapshot + AMI enumeration. Two phases inside one cmdlet:
+#   1) Get-EC2Image -Owner self -> AMI rows attributed to the instance that owns
+#      the AMI's source volume(s); build a HashSet of every snapshot referenced
+#      by an AMI so phase 2 can dedup.
+#   2) Get-EC2Snapshot -OwnerId self -> EBS native snapshots. Skip any snapshot
+#      whose ID was covered by phase 1, and skip any snapshot tagged with
+#      `aws:backup:source-resource` or whose ARN appears in the RP list (those
+#      are already counted by the AWS Backup recovery-point path).
+# Returns @{ Backups = [arraylist of backup objects]; DetailRows = [arraylist
+# of per-snapshot detail rows for streaming to aws_ebs_and_ami_info-*.csv] }.
+function Get-AWSEBSAndAMIInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $RecoveryPointArns   # hashtable: ARN -> $true, from the RP enumeration cmdlet
+    )
+
+    $backups    = [System.Collections.ArrayList]::new()
+    $detailRows = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return [PSCustomObject]@{ Backups = $backups; DetailRows = $detailRows } }
+    if ($null -eq $RecoveryPointArns) { $RecoveryPointArns = @{} }
+
+    # Phase 1: AMIs. DescribeImages auto-pages internally on Get-EC2Image, but
+    # we still wrap in Invoke-AWSWithRetry for throttle handling.
+    $images = New-Object collections.arraylist
+    try {
+        $page = Invoke-AWSWithRetry -Context "Get-EC2Image-$Region" -ScriptBlock {
+            Get-EC2Image -Owner self -Credential $Credential -Region $Region -ErrorAction Stop
+        }
+        if ($page) { [void]$images.AddRange(@($page)) }
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping AMI enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate AMIs in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+
+    # Buffer AMI metadata + referenced-snapshot IDs; defer emit until Phase 3
+    # (after snapshot descriptions tell us the source instance).
+    $amiSnapshotIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    $amiBuffer = New-Object collections.arraylist
+    foreach ($image in $images) {
+        if ($null -eq $image) { continue }
+        $imageSize = 0L
+        $imageSnapshotIds = New-Object collections.arraylist
+        foreach ($bdm in @($image.BlockDeviceMappings)) {
+            if ($null -ne $bdm.Ebs -and $bdm.Ebs.SnapshotId) {
+                [void]$amiSnapshotIds.Add("$($bdm.Ebs.SnapshotId)")
+                [void]$imageSnapshotIds.Add("$($bdm.Ebs.SnapshotId)")
+                if ($null -ne $bdm.Ebs.VolumeSize) { $imageSize += [long]$bdm.Ebs.VolumeSize * 1GB }
+            }
+        }
+        [void]$amiBuffer.Add([PSCustomObject]@{
+            Image       = $image
+            Size        = $imageSize
+            SnapshotIds = $imageSnapshotIds
+        })
+    }
+
+    # Phase 2: EBS snapshots. Explicit NextToken loop -- accounts
+    # with tens of thousands of snapshots would otherwise stall the auto-page path.
+    $snapshots = New-Object collections.arraylist
+    try {
+        $snapToken = $null
+        do {
+            $snapParams = @{ OwnerId = 'self'; Credential = $Credential; Region = $Region }
+            if ($snapToken) { $snapParams.NextToken = $snapToken }
+            $page = Invoke-AWSWithRetry -Context "Get-EC2Snapshot-$Region" -ScriptBlock {
+                Get-EC2Snapshot @snapParams -ErrorAction Stop
+            }
+            if ($page) { [void]$snapshots.AddRange(@($page)) }
+            $snapToken = $AWSHistory.LastServiceResponse.NextToken
+        } while ($snapToken)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping EBS snapshot enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate EBS snapshots in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+
+    # Build snapshotId -> sourceInstanceId map from snapshot descriptions.
+    # AWS auto-writes "Created by CreateImage(i-XXX) for ami-YYY" into the
+    # description of every EBS snapshot that backs an AMI, so this is the
+    # most reliable per-account signal for AMI source attribution.
+    $snapToInstance = @{}
+    foreach ($snap in $snapshots) {
+        if ($null -eq $snap) { continue }
+        if ("$($snap.Description)" -match 'CreateImage\((i-[0-9a-f]+)\)') {
+            $snapToInstance["$($snap.SnapshotId)"] = $matches[1]
+        }
+    }
+
+    # Phase 3: emit AMI rows. Attribute to source EC2 instance via snapshot
+    # descriptions; fall back to ec2:source-instance-id tag (rarely set by
+    # customers); fall back to AMI's own ARN.
+    foreach ($entry in $amiBuffer) {
+        $image = $entry.Image
+        $sourceInstance = $null
+        foreach ($snapId in $entry.SnapshotIds) {
+            if ($snapToInstance.ContainsKey("$snapId")) {
+                $sourceInstance = $snapToInstance["$snapId"]
+                break
+            }
+        }
+        if (-not $sourceInstance) {
+            foreach ($tag in @($image.Tags)) {
+                if ($tag -and $tag.Key -eq 'ec2:source-instance-id' -and
+                    $tag.Value -match '^i-[0-9a-f]+$') {
+                    $sourceInstance = $tag.Value
+                    break
+                }
+            }
+        }
+        $sourceArn = if ($sourceInstance) {
+            "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):instance/$($sourceInstance)"
+        } else {
+            "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):image/$($image.ImageId)"
+        }
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $sourceArn
+            Source        = "AMI"
+            SizeBytes     = $entry.Size
+            CreationDate  = $image.CreationDate
+        })
+        [void]$detailRows.Add([PSCustomObject]@{
+            AwsAccountId    = $AccountInfo.Account
+            AwsAccountAlias = $AccountAlias
+            Region          = $Region
+            Source          = "AMI"
+            ImageId         = $image.ImageId
+            SnapshotId      = ""
+            ResourceArn     = $sourceArn
+            SizeBytes       = $entry.Size
+            SizeGiB         = [math]::Round($entry.Size / 1GB, 4)
+            CreationDate    = $image.CreationDate
+            Name            = $image.Name
+            Description     = $image.Description
+            State           = $image.State
+        })
+    }
+
+    foreach ($snap in $snapshots) {
+        if ($null -eq $snap) { continue }
+        if ($amiSnapshotIds.Contains("$($snap.SnapshotId)")) { continue }
+
+        # AWS Backup dedup: filter snapshots that AWS Backup created. AWS Backup
+        # tags every snapshot it creates with `aws:backup:source-resource`. There
+        # is no public API that maps an AWS Backup recovery-point ARN back to the
+        # underlying EBS snapshot ID, so the tag is the only reliable per-snapshot
+        # signal -- the RP-ARN set keyed on SOURCE ResourceArn cannot match a
+        # snapshot ARN.
+        $isAwsBackup = $false
+        foreach ($tag in @($snap.Tags)) {
+            if ($tag -and $tag.Key -eq 'aws:backup:source-resource') { $isAwsBackup = $true; break }
+        }
+        if ($isAwsBackup) { continue }
+        $snapArn = "arn:$($partitionId):ec2:$($Region)::snapshot/$($snap.SnapshotId)"
+
+        $sizeBytes = 0L
+        if ($null -ne $snap.VolumeSize) { $sizeBytes = [long]$snap.VolumeSize * 1GB }
+        $volArn = if ($snap.VolumeId) {
+            "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($snap.VolumeId)"
+        } else { $snapArn }
+
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $volArn
+            Source        = "EBSNative"
+            SizeBytes     = $sizeBytes
+            CreationDate  = $snap.StartTime
+        })
+        [void]$detailRows.Add([PSCustomObject]@{
+            AwsAccountId    = $AccountInfo.Account
+            AwsAccountAlias = $AccountAlias
+            Region          = $Region
+            Source          = "EBSNative"
+            ImageId         = ""
+            SnapshotId      = $snap.SnapshotId
+            ResourceArn     = $volArn
+            SizeBytes       = $sizeBytes
+            SizeGiB         = [math]::Round($sizeBytes / 1GB, 4)
+            CreationDate    = $snap.StartTime
+            Name            = ""
+            Description     = $snap.Description
+            State           = $snap.State
+        })
+    }
+
+    return [PSCustomObject]@{
+        Backups    = $backups
+        DetailRows = $detailRows
+    }
+}
+
+# Native RDS DB + cluster snapshot enumeration. Filters out AWS-Backup-created
+# snapshots (identifier prefix `awsbackup:job-` OR ARN in the RP list -- Section
+# 2d rule 3) and shared-from-other-account snapshots (SnapshotOwner != this
+# account.
+function Get-AWSRDSSnapshotInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $RecoveryPointArns
+    )
+
+    $backups    = [System.Collections.ArrayList]::new()
+    $detailRows = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return [PSCustomObject]@{ Backups = $backups; DetailRows = $detailRows } }
+    if ($null -eq $RecoveryPointArns) { $RecoveryPointArns = @{} }
+
+    $isAwsBackupName = { param($n) "$n" -match '^awsbackup:job-' }
+
+    # DB instance snapshots. RDS uses Marker/MaxRecord pagination, not NextToken.
+    $dbSnaps = New-Object collections.arraylist
+    try {
+        $dbMarker = $null
+        do {
+            $dbParams = @{ Credential = $Credential; Region = $Region; MaxRecord = 100 }
+            if ($dbMarker) { $dbParams.Marker = $dbMarker }
+            $page = Invoke-AWSWithRetry -Context "Get-RDSDBSnapshot-$Region" -ScriptBlock {
+                Get-RDSDBSnapshot @dbParams -ErrorAction Stop
+            }
+            if ($page) { [void]$dbSnaps.AddRange(@($page)) }
+            $dbMarker = $AWSHistory.LastServiceResponse.Marker
+        } while ($dbMarker)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping RDS DB snapshot enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate RDS DB snapshots in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($s in $dbSnaps) {
+        if ($null -eq $s) { continue }
+        # Cross-account shared snapshots are NOT returned by Get-RDSDBSnapshot
+        # unless -IncludeShared $true is passed (default false). We omit the
+        # parameter to keep the default. The SnapshotOwner property is not
+        # exposed on AWS.Tools v4/v5 snapshot objects, so an explicit filter
+        # here would be a no-op.
+        $name = "$($s.DBSnapshotIdentifier)"
+        $arn  = "$($s.DBSnapshotArn)"
+        # AWS Backup tags its RDS snapshots with an `awsbackup:job-*` identifier
+        # prefix; that is the only reliable signal (snapshot ARN does not appear
+        # in the RP API which keys on source DB ARN).
+        if (& $isAwsBackupName $name) { continue }
+
+        $sizeBytes = 0L
+        if ($null -ne $s.AllocatedStorage) { $sizeBytes = [long]$s.AllocatedStorage * 1GB }
+        $dbArn = "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):db:$($s.DBInstanceIdentifier)"
+        $source = if ("$($s.SnapshotType)" -eq 'automated') { 'RDSAutomated' } else { 'RDSManual' }
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $dbArn
+            Source        = $source
+            SizeBytes     = $sizeBytes
+            CreationDate  = $s.SnapshotCreateTime
+        })
+        [void]$detailRows.Add([PSCustomObject]@{
+            AwsAccountId       = $AccountInfo.Account
+            AwsAccountAlias    = $AccountAlias
+            Region             = $Region
+            Source             = $source
+            Engine             = $s.Engine
+            SnapshotIdentifier = $s.DBSnapshotIdentifier
+            ResourceArn        = $dbArn
+            SnapshotArn        = $arn
+            SizeBytes          = $sizeBytes
+            SizeGiB            = [math]::Round($sizeBytes / 1GB, 4)
+            CreationDate       = $s.SnapshotCreateTime
+            SnapshotType       = $s.SnapshotType
+            Status             = $s.Status
+            ClusterIdentifier  = ""
+        })
+    }
+
+    # Cluster (Aurora) snapshots. Same Marker/MaxRecord pagination as DB snapshots.
+    $clSnaps = New-Object collections.arraylist
+    try {
+        $clMarker = $null
+        do {
+            $clParams = @{ Credential = $Credential; Region = $Region; MaxRecord = 100 }
+            if ($clMarker) { $clParams.Marker = $clMarker }
+            $page = Invoke-AWSWithRetry -Context "Get-RDSDBClusterSnapshot-$Region" -ScriptBlock {
+                Get-RDSDBClusterSnapshot @clParams -ErrorAction Stop
+            }
+            if ($page) { [void]$clSnaps.AddRange(@($page)) }
+            $clMarker = $AWSHistory.LastServiceResponse.Marker
+        } while ($clMarker)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping RDS cluster snapshot enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate RDS cluster snapshots in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($s in $clSnaps) {
+        if ($null -eq $s) { continue }
+        # Same as DB snapshots: -IncludeShared default false keeps cross-account
+        # snapshots out without us needing to filter.
+        $name = "$($s.DBClusterSnapshotIdentifier)"
+        $arn  = "$($s.DBClusterSnapshotArn)"
+        if (& $isAwsBackupName $name) { continue }
+
+        # Aurora is auto-managed storage: AllocatedStorage on cluster snapshots is
+        # always 1 GiB, which would systematically under-report Aurora capacity.
+        # Leave size at 0 -- the workload's source-cluster row already carries
+        # the real provisioned size, and the RP path (when AWS Backup covers the
+        # cluster) reports the accurate logical size.
+        $sizeBytes = 0L
+        $clArn = "arn:$($partitionId):rds:$($Region):$($AccountInfo.Account):cluster:$($s.DBClusterIdentifier)"
+        $source = if ("$($s.SnapshotType)" -eq 'automated') { 'RDSAutomated' } else { 'RDSManual' }
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $clArn
+            Source        = $source
+            SizeBytes     = $sizeBytes
+            CreationDate  = $s.SnapshotCreateTime
+        })
+        [void]$detailRows.Add([PSCustomObject]@{
+            AwsAccountId       = $AccountInfo.Account
+            AwsAccountAlias    = $AccountAlias
+            Region             = $Region
+            Source             = $source
+            Engine             = $s.Engine
+            SnapshotIdentifier = $s.DBClusterSnapshotIdentifier
+            ResourceArn        = $clArn
+            SnapshotArn        = $arn
+            SizeBytes          = $sizeBytes
+            SizeGiB            = [math]::Round($sizeBytes / 1GB, 4)
+            CreationDate       = $s.SnapshotCreateTime
+            SnapshotType       = $s.SnapshotType
+            Status             = $s.Status
+            ClusterIdentifier  = $s.DBClusterIdentifier
+        })
+    }
+
+    return [PSCustomObject]@{
+        Backups    = $backups
+        DetailRows = $detailRows
+    }
+}
+
+# Native FSx backup enumeration (in-memory only, no detail CSV). Filters out
+# AWS-Backup-created backups (Type = AWS_BACKUP), already counted via RP path.
+function Get-AWSFSxBackupInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+    $backups = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return $backups }
+    $fsxBackups = New-Object collections.arraylist
+    try {
+        $fsxToken = $null
+        do {
+            $fsxParams = @{ Credential = $Credential; Region = $Region }
+            if ($fsxToken) { $fsxParams.NextToken = $fsxToken }
+            $page = Invoke-AWSWithRetry -Context "Get-FSXBackup-$Region" -ScriptBlock {
+                Get-FSXBackup @fsxParams -ErrorAction Stop
+            }
+            if ($page) { [void]$fsxBackups.AddRange(@($page)) }
+            $fsxToken = $AWSHistory.LastServiceResponse.NextToken
+        } while ($fsxToken)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping FSx backup enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate FSx backups in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($b in $fsxBackups) {
+        if ($null -eq $b) { continue }
+        $type = "$($b.Type)"
+        if ($type -eq 'AWS_BACKUP') { continue }
+        $source = switch ($type) {
+            'AUTOMATIC'      { 'FSxAutomatic' }
+            'USER_INITIATED' { 'FSxUserInitiated' }
+            default          { 'FSxUserInitiated' }
+        }
+        $sizeBytes = 0L
+        if ($b.PSObject.Properties['Lifecycle'] -and $b.Lifecycle.PSObject.Properties['StorageCapacity']) {
+            $sizeBytes = [long]$b.Lifecycle.StorageCapacity * 1GB
+        } elseif ($b.PSObject.Properties['FileSystem'] -and $b.FileSystem.PSObject.Properties['StorageCapacity']) {
+            $sizeBytes = [long]$b.FileSystem.StorageCapacity * 1GB
+        }
+        $arn = if ($b.PSObject.Properties['FileSystem'] -and $b.FileSystem.PSObject.Properties['FileSystemId']) {
+            "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):file-system/$($b.FileSystem.FileSystemId)"
+        } else { "$($b.ResourceARN)" }
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $arn
+            Source        = $source
+            SizeBytes     = $sizeBytes
+            CreationDate  = $b.CreationTime
+        })
+    }
+    return $backups
+}
+
+# Native DynamoDB backup enumeration: on-demand backups (Get-DDBBackupList) plus
+# per-table PITR upper bound (current TableSizeBytes) when continuous backups
+# are enabled. In-memory only, no detail CSV (low-volume source).
+function Get-AWSDDBBackupInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $DDBList
+    )
+    $backups = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return $backups }
+
+    # On-demand backups. DDB uses ExclusiveStartBackupArn / LastEvaluatedBackupArn
+    # for pagination on Get-DDBBackupList. AWS Tools auto-pages, so wrap once.
+    $onDemand = New-Object collections.arraylist
+    try {
+        $page = Invoke-AWSWithRetry -Context "Get-DDBBackupList-$Region" -ScriptBlock {
+            Get-DDBBackupList -Credential $Credential -Region $Region -ErrorAction Stop
+        }
+        if ($page) { [void]$onDemand.AddRange(@($page)) }
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping DDB on-demand backup enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate DDB backups in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($b in $onDemand) {
+        if ($null -eq $b) { continue }
+        $sizeBytes = 0L
+        if ($null -ne $b.BackupSizeBytes) { $sizeBytes = [long]$b.BackupSizeBytes }
+        $arn = "$($b.TableArn)"
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $arn
+            Source        = 'DDBOnDemand'
+            SizeBytes     = $sizeBytes
+            CreationDate  = $b.BackupCreationDateTime
+        })
+    }
+
+    # PITR upper bound
+    foreach ($ddb in @($DDBList)) {
+        if ($null -eq $ddb) { continue }
+        if ("$($ddb.Region)" -ne "$Region") { continue }
+        if ("$($ddb.AwsAccountId)" -ne "$($AccountInfo.Account)") { continue }
+        $tableName = "$($ddb.TableName)"
+        if ([string]::IsNullOrEmpty($tableName)) { continue }
+        $pitrEnabled = $false
+        try {
+            $cb = Invoke-AWSWithRetry -Context "Get-DDBContinuousBackup-$tableName" -ScriptBlock {
+                Get-DDBContinuousBackup -TableName $tableName -Credential $Credential -Region $Region -ErrorAction Stop
+            }
+            if ($null -ne $cb -and $cb.PSObject.Properties['PointInTimeRecoveryDescription']) {
+                $status = "$($cb.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)"
+                if ($status -eq 'ENABLED') { $pitrEnabled = $true }
+            }
+        } catch {
+            # Distinguish IAM gap from "PITR was never enabled on this table"; the
+            # former is operator-actionable so it deserves a yellow line (deduped
+            # per account by the existing $script:CEFailureNotedForAccount style:
+            # we only print once per account-region pair here).
+            if (Test-IsAccessDenied $_) {
+                $key = "DDB-PITR-$($AccountInfo.Account)-$Region"
+                if (-not $script:DDBContinuousBackupDeniedNoted[$key]) {
+                    Write-Host "Access denied calling dynamodb:DescribeContinuousBackups in $Region for account $($AccountInfo.Account); PITR state will read as disabled for all tables in this region." -ForegroundColor Yellow
+                    $script:DDBContinuousBackupDeniedNoted[$key] = $true
+                }
+            }
+            $pitrEnabled = $false
+        }
+        if (-not $pitrEnabled) { continue }
+
+        $tableSize = 0L
+        try {
+            $tbl = Invoke-AWSWithRetry -Context "Get-DDBTable-$tableName" -ScriptBlock {
+                Get-DDBTable -TableName $tableName -Credential $Credential -Region $Region -ErrorAction Stop
+            }
+            if ($null -ne $tbl -and $null -ne $tbl.TableSizeBytes) { $tableSize = [long]$tbl.TableSizeBytes }
+        } catch { $tableSize = 0L }
+
+        # Set PITREnabled on the workload row directly so the flag is visible
+        # without going through the merged-aggregate path.
+        if ($ddb.PSObject.Properties['PITREnabled']) { $ddb.PITREnabled = $true }
+
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = "$($ddb.TableArn)"
+            Source        = 'DDBPITR'
+            SizeBytes     = $tableSize
+            CreationDate  = $null
+        })
+    }
+    return $backups
+}
+
+# Native Redshift snapshot enumeration. Filters out shared-from-other-account
+# snapshots. No AWS-Backup dedup needed -- AWS Backup does not currently support
+# Redshift, so every Redshift snapshot is native.
+function Get-AWSRedshiftSnapshotInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+    $backups = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return $backups }
+    # Redshift uses Marker/MaxRecord (RDS-style) pagination.
+    $snaps = New-Object collections.arraylist
+    try {
+        $rsMarker = $null
+        do {
+            $rsParams = @{ Credential = $Credential; Region = $Region; MaxRecord = 100 }
+            if ($rsMarker) { $rsParams.Marker = $rsMarker }
+            $page = Invoke-AWSWithRetry -Context "Get-RSClusterSnapshot-$Region" -ScriptBlock {
+                Get-RSClusterSnapshot @rsParams -ErrorAction Stop
+            }
+            if ($page) { [void]$snaps.AddRange(@($page)) }
+            $rsMarker = $AWSHistory.LastServiceResponse.Marker
+        } while ($rsMarker)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping Redshift snapshot enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate Redshift snapshots in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($s in $snaps) {
+        if ($null -eq $s) { continue }
+        if ($s.PSObject.Properties['OwnerAccount'] -and $s.OwnerAccount -and "$($s.OwnerAccount)" -ne "$($AccountInfo.Account)") { continue }
+        $sizeBytes = 0L
+        # Redshift API returns MB as decimal megabytes (10^6), not MiB. PowerShell's
+        # `1MB` constant is 1048576 (binary) and would over-report by ~4.86%.
+        if ($null -ne $s.TotalBackupSizeInMegaBytes) { $sizeBytes = [long]([double]$s.TotalBackupSizeInMegaBytes * 1000000) }
+        $arn = "arn:$($partitionId):redshift:$($Region):$($AccountInfo.Account):cluster:$($s.ClusterIdentifier)"
+        $source = if ("$($s.SnapshotType)" -eq 'automated') { 'RedshiftAutomated' } else { 'RedshiftManual' }
+        [void]$backups.Add([PSCustomObject]@{
+            AwsAccountId  = $AccountInfo.Account
+            Region        = $Region
+            ResourceArn   = $arn
+            Source        = $source
+            SizeBytes     = $sizeBytes
+            CreationDate  = $s.SnapshotCreateTime
+        })
+    }
+    return $backups
+}
+
+# Minimal Redshift cluster inventory. Adds the 10 source-agnostic backup columns
+# at row construction time (Task 3 contract).
+function Get-AWSRedshiftInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+    $result = [System.Collections.ArrayList]::new()
+    if ($null -eq $AccountInfo) { return , $result }
+    # Redshift cluster listing is also Marker/MaxRecord paginated.
+    $clusters = New-Object collections.arraylist
+    try {
+        $clToken = $null
+        do {
+            $clParams = @{ Credential = $Credential; Region = $Region; MaxRecord = 100 }
+            if ($clToken) { $clParams.Marker = $clToken }
+            $page = Invoke-AWSWithRetry -Context "Get-RSCluster-$Region" -ScriptBlock {
+                Get-RSCluster @clParams -ErrorAction Stop
+            }
+            if ($page) { [void]$clusters.AddRange(@($page)) }
+            $clToken = $AWSHistory.LastServiceResponse.Marker
+        } while ($clToken)
+    } catch {
+        if (Test-IsAccessDenied -ErrorRecord $_) {
+            Write-Host "Skipping Redshift cluster enumeration in $Region for account $($AccountInfo.Account): access denied." -ForegroundColor Yellow
+        } else {
+            Write-Host "Failed to enumerate Redshift clusters in $Region for account $($AccountInfo.Account): $_" -ForegroundColor Red
+        }
+    }
+    foreach ($c in $clusters) {
+        if ($null -eq $c) { continue }
+        $arn = "arn:$($partitionId):redshift:$($Region):$($AccountInfo.Account):cluster:$($c.ClusterIdentifier)"
+        $row = [PSCustomObject]@{
+            AwsAccountId                     = $AccountInfo.Account
+            AwsAccountAlias                  = $AccountAlias
+            Region                           = $Region
+            ClusterIdentifier                = $c.ClusterIdentifier
+            ResourceArn                      = $arn
+            NodeType                         = $c.NodeType
+            NumberOfNodes                    = $c.NumberOfNodes
+            ClusterStatus                    = $c.ClusterStatus
+            MasterUsername                   = $c.MasterUsername
+            DBName                           = $c.DBName
+            ClusterCreateTime                = $c.ClusterCreateTime
+            AutomatedSnapshotRetentionPeriod = $c.AutomatedSnapshotRetentionPeriod
+            ManualSnapshotRetentionPeriod    = $c.ManualSnapshotRetentionPeriod
+        }
+        Add-BackupColumnsToRow -Row $row -ResourceArn $arn
+        [void]$result.Add($row)
+    }
+    return , $result
+}
+
+# Per-account dedup hash for the inline CE failure warning. Stores the
+# first-observed Reason so a second cmdlet hitting the same account stays silent.
+$script:CEFailureNotedForAccount = @{}
+
+# Per-(account, region) dedup hash for the DDB DescribeContinuousBackups
+# AccessDenied warning so we don't print one line per table when IAM is missing.
+$script:DDBContinuousBackupDeniedNoted = @{}
+
+function Write-CEFailureWarningOnce {
+    param(
+        [Parameter(Mandatory)] $AccountInfo,
+        [Parameter(Mandatory)] [ValidateSet('CostExplorerNotEnabled','AccessDenied')] [string]$Reason
+    )
+    $acct = "$($AccountInfo.Account)"
+    if ($script:CEFailureNotedForAccount.ContainsKey($acct)) { return }
+    $script:CEFailureNotedForAccount[$acct] = $Reason
+    switch ($Reason) {
+        'CostExplorerNotEnabled' {
+            Write-Host "Cost Explorer is not enabled for account $acct." -ForegroundColor Yellow
+            Write-Host "Capacity figures (the primary sizing input) are complete and accurate; dollar figures are unavailable for this account." -ForegroundColor Yellow
+            Write-Host "To enable: Billing console -> Cost Explorer -> Launch. Allow ~24h for backfill." -ForegroundColor Yellow
+        }
+        'AccessDenied' {
+            Write-Host "CE access denied for account $acct despite IAM grant." -ForegroundColor Yellow
+            Write-Host "Likely cause for org runs: linked-account billing access is disabled at the management account (Billing -> Billing preferences -> 'Linked account access to billing data')." -ForegroundColor Yellow
+        }
+    }
+}
+
+# Inline CE call wrapper. Returns the call's result, or $null if the call hit
+# a CE-specific failure mode (DataUnavailable / AccessDenied) -- callers then
+# write a header-only CSV. Any other exception still propagates red.
+function Invoke-CECall {
+    param(
+        [Parameter(Mandatory)] [string]$Context,
+        [Parameter(Mandatory)] $AccountInfo,
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock
+    )
+    try {
+        return Invoke-AWSWithRetry -Context $Context -ScriptBlock $ScriptBlock
+    } catch {
+        $name = $_.Exception.GetType().Name
+        $code = $null
+        if ($_.Exception.PSObject.Properties['ErrorCode']) { $code = "$($_.Exception.ErrorCode)" }
+        if ($name -eq 'DataUnavailableException' -or "$($_.Exception.Message)" -match 'DataUnavailable') {
+            Write-CEFailureWarningOnce -AccountInfo $AccountInfo -Reason 'CostExplorerNotEnabled'
+            return $null
+        }
+        if ($name -eq 'AccessDeniedException' -or $code -eq 'AccessDenied' -or "$($_.Exception.Message)" -match 'AccessDenied|not authorized') {
+            Write-CEFailureWarningOnce -AccountInfo $AccountInfo -Reason 'AccessDenied'
+            return $null
+        }
+        throw
+    }
+}
+
+# Shared time window helper -- past 12 months + MTD.
+function Get-CEDefaultTimeWindow {
+    @{
+        Start = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
+        End   = (Get-Date).ToString("yyyy-MM-dd")
+    }
+}
+
+# Snapshot/backup USAGE_TYPE keyword constants -- substring match against the
+# region-prefix-stripped USAGE_TYPE string. Managed exclusions remove the
+# overlap with the SERVICE = "AWS Backup" query so the two cost cmdlets stay
+# disjoint from the SERVICE="AWS Backup" query (see README "Cost reporting").
+$script:SNAPSHOT_KEYWORDS = @(
+    'Snapshot','BackupUsage','BackupStorage','ChargedBackup','BackupArchive',
+    'Backup-Usage','Backup-Storage','ContinuousBackup'
+)
+$script:MANAGED_EXCLUSIONS = @(
+    '*EFS-Backup*','*FSx-OpenZFS*','*S3-Backup*','*DynamoDB-Backup-Advanced*',
+    '*EKS-Backup*','*Timestream-Backup*',
+    # AWSBackup-* USAGE_TYPEs are already counted via the SERVICE="AWS Backup"
+    # query; excluding here prevents the BackupUsage / BackupStorage substring
+    # match from double-counting them.
+    '*AWSBackup-*'
+)
+
+function Test-IsSnapshotUsageType {
+    param([string]$UsageType)
+    foreach ($pat in $script:MANAGED_EXCLUSIONS) {
+        if ($UsageType -like $pat) { return $false }
+    }
+    foreach ($kw in $script:SNAPSHOT_KEYWORDS) {
+        if ($UsageType -match [regex]::Escape($kw)) { return $true }
+    }
+    return $false
+}
+
 function Get-AWSBackupCosts {
     param(
         $Credential,
@@ -2419,6 +3777,7 @@ function Get-AWSBackupCosts {
     )
 
     $backupCostsResult = New-Object collections.arraylist
+    if ($null -eq $AccountInfo) { return , $backupCostsResult }
 
     $filter = @{
       Dimensions = @{
@@ -2427,26 +3786,40 @@ function Get-AWSBackupCosts {
       }
     }
 
-    $startDate = (Get-Date).AddMonths(-12).ToString("yyyy-MM-01")
-    $endDate = (Get-Date).ToString("yyyy-MM-dd")
-    $timePeriod = @{
-        Start = $startDate
-        End = $endDate
-    }
-
+    $timePeriod = Get-CEDefaultTimeWindow
     $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
 
-    $result = @{ResultsByTime = @()}
-    try{
-      $result = Get-CECostAndUsage `
-        -TimePeriod $timePeriod `
-        -Granularity MONTHLY `
-        -Metrics $metrics `
-        -Filter $filter -Credential $Credential -Region $Region -ErrorAction Stop
-    } catch {
-      Write-Host "Failed to get Backup cost info for account $($AccountInfo.Account)" -ForeGroundColor Red
-      Write-Host "Error: $_" -ForeGroundColor Red
-    }
+    # CE GetCostAndUsage paginates on group cardinality. 13 months x N usage types
+    # can exceed the 1000-row default page; without a NextPageToken loop the tail
+    # months silently truncate. AWS Tools auto-pagination is inconsistent across
+    # v4/v5 for CE, so loop explicitly.
+    $result = $null
+    $ceNextToken = $null
+    do {
+        $page = Invoke-CECall -Context "Get-AWSBackupCosts" -AccountInfo $AccountInfo -ScriptBlock {
+            $ceParams = @{
+                TimePeriod  = $timePeriod
+                Granularity = 'MONTHLY'
+                Metrics     = $metrics
+                Filter      = $filter
+                Credential  = $Credential
+                Region      = $Region
+                ErrorAction = 'Stop'
+            }
+            if ($ceNextToken) { $ceParams.NextPageToken = $ceNextToken }
+            Get-CECostAndUsage @ceParams
+        }
+        if ($null -eq $page) {
+            if ($null -eq $result) { return , $backupCostsResult }
+            break
+        }
+        if ($null -eq $result) {
+            $result = $page
+        } else {
+            foreach ($t in @($page.ResultsByTime)) { $result.ResultsByTime += $t }
+        }
+        $ceNextToken = $page.NextPageToken
+    } while ($ceNextToken)
 
     $counter = 1
     foreach ($resultItem in $result.ResultsByTime) {
@@ -2471,6 +3844,341 @@ function Get-AWSBackupCosts {
     Write-Progress -ID 13 -Activity "Processing Cost and Usage of Backup for Month: $($resultItem.TimePeriod.Start)" -Completed
 
     return , $backupCostsResult
+}
+
+# Per-USAGE_TYPE snapshot/backup cost query. Discovers concrete
+# region-prefixed USAGE_TYPE values via Get-CEDimensionValue, substring-filters
+# against $SNAPSHOT_KEYWORDS with managed-overlap exclusions, then chunks the
+# matched list (200 per call, fallback to 100 on ValidationException) and
+# issues one Get-CECostAndUsage per chunk grouped by [SERVICE, USAGE_TYPE].
+# Returns per-(month, service, usagetype, unit) rows.
+function Get-AWSSnapshotStorageCosts {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias,
+        $TimePeriod
+    )
+    $rows = New-Object collections.arraylist
+    if ($null -eq $AccountInfo) { return , $rows }
+    if ($null -eq $TimePeriod) { $TimePeriod = Get-CEDefaultTimeWindow }
+
+    # Get-CEDimensionValue paginates at 1000 entries per page per the CE API. Loop
+    # explicitly -- AWS Tools auto-pagination is inconsistent for CE across v4/v5,
+    # and large accounts can easily exceed 1000 distinct USAGE_TYPEs in a 12-month
+    # window across many regions/services.
+    $allUsageTypes = @()
+    $dimNextToken  = $null
+    do {
+        $dimPage = Invoke-CECall -Context "Get-AWSSnapshotStorageCosts-Dims" -AccountInfo $AccountInfo -ScriptBlock {
+            $dimParams = @{
+                TimePeriod  = $TimePeriod
+                Dimension   = 'USAGE_TYPE'
+                Credential  = $Credential
+                Region      = $Region
+                ErrorAction = 'Stop'
+            }
+            if ($dimNextToken) { $dimParams.NextPageToken = $dimNextToken }
+            Get-CEDimensionValue @dimParams
+        }
+        if ($null -eq $dimPage) { return , $rows }
+        foreach ($d in @($dimPage.DimensionValues)) {
+            if ($d -and $d.Value) { $allUsageTypes += "$($d.Value)" }
+        }
+        $dimNextToken = $dimPage.NextPageToken
+    } while ($dimNextToken)
+
+    $matched     = New-Object collections.arraylist
+    $unclassified = 0
+    foreach ($ut in $allUsageTypes) {
+        # Strip the region prefix (e.g. "USE1-") before classification, but pass
+        # the full region-prefixed string to the CE Filter query.
+        $bare = $ut -replace '^[A-Z0-9]+-', ''
+        if (Test-IsSnapshotUsageType -UsageType $bare) {
+            [void]$matched.Add($ut)
+        } elseif ($bare -match 'Backup|Snapshot') {
+            # Caught by the "literal Backup/Snapshot" runtime detection
+            # but excluded from the matched set (conservative: under-report rather
+            # than over-report).
+            $unclassified++
+        }
+    }
+    if ($unclassified -gt 0) {
+        Write-Host "Note: $unclassified USAGE_TYPE line item(s) were not recognized and excluded from the snapshot cost totals. This may indicate an AWS service added since the last sizing-script release." -ForegroundColor Yellow
+    }
+    if ($matched.Count -eq 0) { return , $rows }
+
+    $metrics = @("AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity")
+
+    # Inline per-slice loop: on a ValidationException we drop the chunk size for the
+    # CURRENT slice only and retry it, then continue with the smaller size for
+    # subsequent slices. Earlier successfully-aggregated months stay put -- no
+    # restart from chunk 0 (which would have produced duplicate ResultsByTime rows).
+    $aggregated = @{ ResultsByTime = @() }
+    $chunkSize  = 200
+    $idx        = 0
+    while ($idx -lt $matched.Count) {
+        $end   = [math]::Min($idx + $chunkSize - 1, $matched.Count - 1)
+        $slice = @($matched[$idx..$end])
+        $filter = @{
+            Dimensions = @{
+                Key    = "USAGE_TYPE"
+                Values = $slice
+            }
+        }
+        # Per-slice NextPageToken loop. GroupBy = (SERVICE, USAGE_TYPE) over 13 months
+        # can exceed CE's 1000-group page size at high cardinality; without this loop
+        # the tail months would silently truncate.
+        $thisCall    = $null
+        $costToken   = $null
+        $sliceFailed = $false
+        try {
+            do {
+                $page = Invoke-CECall -Context "Get-AWSSnapshotStorageCosts-Cost" -AccountInfo $AccountInfo -ScriptBlock {
+                    $costParams = @{
+                        TimePeriod  = $TimePeriod
+                        Granularity = 'MONTHLY'
+                        Metrics     = $metrics
+                        GroupBy     = @(
+                            @{ Type = 'DIMENSION'; Key = 'SERVICE' },
+                            @{ Type = 'DIMENSION'; Key = 'USAGE_TYPE' }
+                        )
+                        Filter      = $filter
+                        Credential  = $Credential
+                        Region      = $Region
+                        ErrorAction = 'Stop'
+                    }
+                    if ($costToken) { $costParams.NextPageToken = $costToken }
+                    Get-CECostAndUsage @costParams
+                }
+                if ($null -eq $page) {
+                    if ($null -eq $thisCall) { $sliceFailed = $true }
+                    break
+                }
+                if ($null -eq $thisCall) {
+                    $thisCall = $page
+                } else {
+                    foreach ($t in @($page.ResultsByTime)) { $thisCall.ResultsByTime += $t }
+                }
+                $costToken = $page.NextPageToken
+            } while ($costToken)
+        } catch {
+            # ValidationException can surface either as the outer exception's type
+            # name or buried in an InnerException after AWS Tools wraps it. Walk
+            # the chain so the fallback fires reliably.
+            $isValidation = $false
+            $exChk = $_.Exception
+            while ($null -ne $exChk) {
+                if ($exChk.GetType().Name -eq 'ValidationException' -or "$($exChk.Message)" -match 'ValidationException') {
+                    $isValidation = $true; break
+                }
+                $exChk = $exChk.InnerException
+            }
+            if ($chunkSize -gt 100 -and $isValidation) {
+                $chunkSize = 100
+                continue   # retry the same slice with a smaller window
+            }
+            throw
+        }
+        if ($sliceFailed) { return , $rows }   # CE failure already warned inline
+        if ($null -eq $thisCall) { $idx = $end + 1; continue }
+        foreach ($t in @($thisCall.ResultsByTime)) { $aggregated.ResultsByTime += $t }
+        $idx = $end + 1
+    }
+    $costResult = $aggregated
+
+    foreach ($rt in @($costResult.ResultsByTime)) {
+        foreach ($g in @($rt.Groups)) {
+            $service   = "$($g.Keys[0])"
+            $usageType = "$($g.Keys[1])"
+            $row = [PSCustomObject]@{
+                AwsAccountId          = $AccountInfo.Account
+                AwsAccountAlias       = $AccountAlias
+                'Time-Period-Start'   = $rt.TimePeriod.Start
+                'Time-Period-End'     = $rt.TimePeriod.End
+                Service               = $service
+                UsageType             = $usageType
+                UsageQuantity         = if ($g.Metrics['UsageQuantity']) { [math]::Round($g.Metrics['UsageQuantity'].Amount, 4) } else { 0 }
+                UsageUnit             = if ($g.Metrics['UsageQuantity']) { "$($g.Metrics['UsageQuantity'].Unit)" } else { '' }
+                AmortizedCost         = if ($g.Metrics['AmortizedCost'])     { '$' + [math]::Round($g.Metrics['AmortizedCost'].Amount, 2) }     else { '$0' }
+                BlendedCost           = if ($g.Metrics['BlendedCost'])       { '$' + [math]::Round($g.Metrics['BlendedCost'].Amount, 2) }       else { '$0' }
+                NetAmortizedCost      = if ($g.Metrics['NetAmortizedCost'])  { '$' + [math]::Round($g.Metrics['NetAmortizedCost'].Amount, 2) }  else { '$0' }
+                NetUnblendedCost      = if ($g.Metrics['NetUnblendedCost'])  { '$' + [math]::Round($g.Metrics['NetUnblendedCost'].Amount, 2) }  else { '$0' }
+                UnblendedCost         = if ($g.Metrics['UnblendedCost'])     { '$' + [math]::Round($g.Metrics['UnblendedCost'].Amount, 2) }     else { '$0' }
+                NormalizedUsageAmount = if ($g.Metrics['NormalizedUsageAmount']) { [math]::Round($g.Metrics['NormalizedUsageAmount'].Amount, 3) } else { 0 }
+            }
+            [void]$rows.Add($row)
+        }
+    }
+    return , $rows
+}
+
+# The source-agnostic backup columns added to every workload row. Initialized to
+# defaults at row construction time so the column order is identical for rows with
+# and without backups (a backup that exists merely overwrites the defaults later,
+# in place, via the wire-up step). Keeping these defaults in one ordered hashtable
+# is what guarantees the column-position-stability invariant the tests assert.
+function Add-BackupColumnsToRow {
+    param(
+        [Parameter(Mandatory)] $Row,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$ResourceArn
+    )
+    # ResourceArn is declared inside each row's constructor hashtable so it lands
+    # next to other identifier columns. If the property is already present we
+    # only overwrite the value, preserving its position; if it's missing we add
+    # it here as a fall-back. The other backup columns are pure additions, so
+    # -Force is harmless and keeps this helper idempotent if a caller invokes
+    # it twice.
+    if ($Row.PSObject.Properties['ResourceArn']) {
+        $Row.ResourceArn = $ResourceArn
+    } else {
+        $Row | Add-Member -MemberType NoteProperty -Name "ResourceArn" -Value $ResourceArn
+    }
+    $Row | Add-Member -MemberType NoteProperty -Name "HasBackups" -Value $false -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "HasRecoveryPoints" -Value $false -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "BackupCount" -Value 0 -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "BackupSources" -Value "" -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "LatestBackupDate" -Value $null -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "LatestBackupSizeGiB" -Value 0 -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "LatestBackupSizeTiB" -Value 0 -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "LatestBackupSizeGB" -Value 0 -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "LatestBackupSizeTB" -Value 0 -Force
+    $Row | Add-Member -MemberType NoteProperty -Name "BackupEnumerationTruncated" -Value $false -Force
+}
+
+# Merges per-source backup aggregates (the RP path plus the native-snapshot
+# collectors below) into a single per-(account, region, ResourceArn) hashtable.
+# Each input descriptor is:
+#   @{ Source = '<label>'; Entries = <list of per-resource rows> }
+# where each entry exposes AwsAccountId, Region, ResourceArn, plus a count, a latest
+# date, and a latest size in bytes. The accessor scriptblocks let each source map its
+# own column names (RP uses RecoveryPointCount / LatestRecoveryPointDate / ...).
+# Native collectors append a descriptor without any refactor here.
+function Merge-BackupAggregates {
+    param(
+        [Parameter(Mandatory)] $SourceAggregates,
+        $NativeBackupLists       # arraylist of native backup objects:
+                                 # @(AwsAccountId, Region, ResourceArn, Source, SizeBytes,
+                                 # CreationDate). Latest per (account,region,ARN,Source) is
+                                 # used; BackupCount sums across all native entries.
+    )
+
+    $merged = @{}
+    $ensure = {
+        param($acct, $reg, $arn)
+        $k = "$acct|$reg|$arn"
+        if (-not $merged.ContainsKey($k)) {
+            $merged[$k] = @{
+                AwsAccountId          = $acct
+                Region                = $reg
+                ResourceArn           = $arn
+                HasBackups            = $false
+                BackupCount           = 0
+                BackupSources         = (New-Object 'System.Collections.Generic.HashSet[string]')
+                LatestBackupDate      = $null
+                LatestBackupSizeBytes = 0
+            }
+        }
+        return $k
+    }
+
+    foreach ($descriptor in $SourceAggregates) {
+        $source     = $descriptor.Source
+        $getCount   = $descriptor.GetCount
+        $getDate    = $descriptor.GetLatestDate
+        $getSize    = $descriptor.GetLatestSizeBytes
+        foreach ($entry in @($descriptor.Entries)) {
+            if ($null -eq $entry) { continue }
+            $arn = $entry.ResourceArn
+            if ([string]::IsNullOrEmpty($arn)) { continue }
+            $key = & $ensure $entry.AwsAccountId $entry.Region $arn
+
+            $count = [int](& $getCount $entry)
+            $date  = & $getDate $entry
+            $size  = [long](& $getSize $entry)
+
+            $state = $merged[$key]
+            $state.HasBackups   = $true
+            $state.BackupCount += $count
+            [void]$state.BackupSources.Add($source)
+            if ($null -ne $date -and ($null -eq $state.LatestBackupDate -or $date -gt $state.LatestBackupDate)) {
+                $state.LatestBackupDate      = $date
+                $state.LatestBackupSizeBytes = $size
+            }
+        }
+    }
+
+    foreach ($entry in @($NativeBackupLists)) {
+        if ($null -eq $entry) { continue }
+        $arn = $entry.ResourceArn
+        if ([string]::IsNullOrEmpty($arn)) { continue }
+        $key = & $ensure $entry.AwsAccountId $entry.Region $arn
+
+        $state = $merged[$key]
+        $state.HasBackups   = $true
+        $state.BackupCount += 1
+        [void]$state.BackupSources.Add("$($entry.Source)")
+        $date = $entry.CreationDate
+        $size = if ($null -ne $entry.SizeBytes) { [long]$entry.SizeBytes } else { 0L }
+        if ($null -ne $date -and ($null -eq $state.LatestBackupDate -or $date -gt $state.LatestBackupDate)) {
+            $state.LatestBackupDate      = $date
+            $state.LatestBackupSizeBytes = $size
+        } elseif ($null -eq $date -and $size -gt $state.LatestBackupSizeBytes) {
+            # Sources without CreationDate (e.g. DDBPITR upper-bound) still need to
+            # contribute size. Take the max regardless of whether state already has
+            # a dated entry -- a PITR upper bound that arrives after a smaller
+            # on-demand backup must not be silently dropped, because PITR is the
+            # only signal we have for the table's continuous-backup capacity.
+            $state.LatestBackupSizeBytes = $size
+        }
+    }
+
+    # Collapse the controlled-vocabulary source set into a sorted, comma-separated string.
+    foreach ($state in $merged.Values) {
+        $state.BackupSources = (($state.BackupSources | Sort-Object) -join ", ")
+    }
+    return $merged
+}
+
+# Wires the merged backup aggregate onto each row of a workload list. Rows already
+# carry the default backup columns (Add-BackupColumnsToRow), so a missing aggregate
+# leaves the defaults untouched; a present one overwrites them in place, preserving
+# column order. FSx filesystem and volume rows share an ARN service ("fsx") but differ
+# by ResourceType path segment, so the merged hash keys on the full ARN and no extra
+# disambiguation is needed here -- each row's own ResourceArn is the lookup key.
+function Set-WorkloadBackupColumns {
+    param(
+        [Parameter(Mandatory)] $WorkloadList,
+        [Parameter(Mandatory)] [hashtable]$MergedAggregate,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$AccountId,
+        [hashtable]$RecoveryPointArns,
+        [string[]]$TruncatedRegions
+    )
+    foreach ($row in $WorkloadList) {
+        if ("$($row.AwsAccountId)" -ne $AccountId) { continue }
+        if ([string]::IsNullOrEmpty($row.ResourceArn)) { continue }
+        $key = "$($row.AwsAccountId)|$($row.Region)|$($row.ResourceArn)"
+
+        if ($null -ne $RecoveryPointArns -and $RecoveryPointArns.ContainsKey($key)) {
+            $row.HasRecoveryPoints = $true
+        }
+        if ($null -ne $TruncatedRegions -and $TruncatedRegions -contains $row.Region) {
+            $row.BackupEnumerationTruncated = $true
+        }
+        if (-not $MergedAggregate.ContainsKey($key)) { continue }
+
+        $state = $MergedAggregate[$key]
+        $row.HasBackups    = $state.HasBackups
+        $row.BackupCount   = $state.BackupCount
+        $row.BackupSources = $state.BackupSources
+        $row.LatestBackupDate = $state.LatestBackupDate
+        $sizes = ConvertTo-SizeUnits -Value $state.LatestBackupSizeBytes -Prefix "LatestBackupSize" -InputUnit Bytes
+        $row.LatestBackupSizeGiB = $sizes["LatestBackupSizeGiB"]
+        $row.LatestBackupSizeTiB = $sizes["LatestBackupSizeTiB"]
+        $row.LatestBackupSizeGB  = $sizes["LatestBackupSizeGB"]
+        $row.LatestBackupSizeTB  = $sizes["LatestBackupSizeTB"]
+    }
 }
 
 # Orchestrator function
@@ -2532,6 +4240,20 @@ function getAWSData($cred) {
   if ($null -ne $iamResult) {
       $iamList.Add($iamResult) | Out-Null
   }
+
+  # Per-account accumulator for regions whose RP enumeration hit the time budget.
+  $truncatedBackupRegions = New-Object collections.arraylist
+
+  # Per-account accumulator for vaults skipped due to AccessDenied on
+  # backup:ListRecoveryPointsByBackupVault, summed across every region. The
+  # per-region cmdlet returns its own count; we accumulate to avoid the
+  # summary line only reflecting the LAST region's value.
+  $totalVaultsDenied = 0
+
+  # Remove orphan recovery-point tmp files left by a prior crashed run for this
+  # run's date. Done ONCE here (not inside the per-region cmdlet, which would clobber
+  # sibling regions' in-progress files for the current run).
+  Remove-Item "aws_backup_recovery_points-*-$date_string.tmp.csv" -ErrorAction SilentlyContinue
 
   # For all specified regions get the S3 bucket, EC2 instance, EC2 Unattached disk and RDS info
   $awsRegionCounter = 1
@@ -2629,21 +4351,187 @@ function getAWSData($cred) {
     $backupPlanResult = Get-AWSBackupPlanInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias -EC2List $ec2List -EC2UnattachedVolumesRaw $ec2UnattachedVolumesRaw `
         -EC2AttachedVolList $ec2AttachedVolList -RDSList $rdsList -EFSList $efsList -FSxList $fsxList `
-        -S3List $s3List -DDBList $ddbList
+        -FSxFileSystemList $fsxFileSystemList -S3List $s3List -DDBList $ddbList
     if ($null -ne $backupPlanResult) {
       foreach ($bpItem in $backupPlanResult) { $backupPlanList.Add($bpItem) | Out-Null }
+    }
+
+    # Build BackupPlanId -> BackupPlanName lookup from the just-collected plans.
+    # The AWS ListRecoveryPointsByBackupVault API's CreatedBy payload omits
+    # BackupPlanName entirely, so the RP cmdlet has no way to populate the name
+    # without this side-channel. The map is rebuilt per region (cheap) so org-
+    # managed plans with stable BackupPlanIds across regions remain resolvable.
+    $planNameById = @{}
+    if ($null -ne $backupPlanResult) {
+      foreach ($bpItem in $backupPlanResult) {
+        if ($null -eq $bpItem) { continue }
+        $bpId   = "$($bpItem.BackupPlanId)"
+        $bpName = if ($bpItem.PSObject.Properties['BackupPlan'] -and $bpItem.BackupPlan) {
+          "$($bpItem.BackupPlan.BackupPlanName)"
+        } else { "" }
+        if ($bpId -and $bpName) { $planNameById[$bpId] = $bpName }
+      }
+    }
+
+    # Collect AWS Backup recovery-point inventory for this region. The cmdlet streams
+    # per-RP rows to a per-region tmp file; we accumulate the in-memory aggregate so a
+    # later task can attribute backups onto the workload rows.
+    #
+    # The cmdlet re-throws non-throttle / non-AccessDenied errors (e.g. transient
+    # network failures, region SCP blocks, malformed AWS responses). Without this
+    # try/catch, such an exception would propagate up to the per-region loop and
+    # abort EVERY subsequent collector (native, Redshift, costs, merge) for the
+    # current account. Wrap, log red, and continue so one bad region doesn't
+    # nuke the rest of the run.
+    $rpResult = $null
+    if (-not $SkipBackupCapacity) {
+      try {
+        $rpResult = Get-AWSBackupRecoveryPointInventory -Credential $cred -Region $awsRegion `
+            -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias `
+            -TimeoutMinutes $BackupRecoveryPointTimeoutMinutes -PlanNameById $planNameById
+      } catch {
+        Write-Host "RP enumeration failed for region $awsRegion in account $($awsAccountInfo.Account): $_" -ForegroundColor Red
+        $rpResult = $null
+      }
+      if ($null -ne $rpResult) {
+        foreach ($rpItem in $rpResult.RecoveryPoints) { $recoveryPointList.Add($rpItem) | Out-Null }
+        foreach ($aggItem in $rpResult.ResourceAggregates) { $backupResourceAggregateList.Add($aggItem) | Out-Null }
+        if ($rpResult.Truncated) { $truncatedBackupRegions.Add($awsRegion) | Out-Null }
+        # Accumulate the per-vault AccessDenied count across regions. $rpResult
+        # is reassigned each iteration, so reading the field after the loop
+        # would surface only the last region's value.
+        $totalVaultsDenied += [int]$rpResult.VaultsAccessDenied
+      }
+    }
+
+    # Collect Redshift cluster inventory for this region (workload row source for
+    # the Redshift snapshot collector below).
+    $redshiftResult = Get-AWSRedshiftInventory -Credential $cred -Region $awsRegion `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+    if ($null -ne $redshiftResult) {
+      foreach ($rsItem in $redshiftResult) { $redshiftClusterList.Add($rsItem) | Out-Null }
+    }
+
+    # Native (non-AWS-Backup) snapshot enumeration for this region. Each collector
+    # dedups against AWS Backup via tag/identifier match (e.g. snapshot's
+    # `aws:backup:source-resource` tag, RDS `awsbackup:job-*` identifier prefix,
+    # FSx `Type = AWS_BACKUP`). Pass the set of SOURCE ResourceArns from the
+    # RP enumeration so collectors can flag any source resource that AWS Backup
+    # is already protecting -- useful diagnostics, not used for dedup.
+    $regionRPArnSet = @{}
+    if ($null -ne $rpResult) {
+      foreach ($rpItem in @($rpResult.RecoveryPoints)) {
+        if ($rpItem -and $rpItem.ResourceArn) { $regionRPArnSet["$($rpItem.ResourceArn)"] = $true }
+      }
+    }
+
+    if (-not $SkipBackupCapacity) {
+      $ebsAmiResult = Get-AWSEBSAndAMIInventory -Credential $cred -Region $awsRegion `
+          -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias `
+          -RecoveryPointArns $regionRPArnSet
+      if ($null -ne $ebsAmiResult) {
+        foreach ($b in $ebsAmiResult.Backups)    { $nativeBackupList.Add($b)  | Out-Null }
+        foreach ($d in $ebsAmiResult.DetailRows) { $ebsAndAmiList.Add($d)     | Out-Null }
+      }
+
+      $rdsSnapResult = Get-AWSRDSSnapshotInventory -Credential $cred -Region $awsRegion `
+          -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias `
+          -RecoveryPointArns $regionRPArnSet
+      if ($null -ne $rdsSnapResult) {
+        foreach ($b in $rdsSnapResult.Backups)    { $nativeBackupList.Add($b)   | Out-Null }
+        foreach ($d in $rdsSnapResult.DetailRows) { $rdsSnapshotList.Add($d)    | Out-Null }
+      }
+
+      $fsxBackupResult = Get-AWSFSxBackupInventory -Credential $cred -Region $awsRegion `
+          -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+      if ($null -ne $fsxBackupResult) {
+        foreach ($b in $fsxBackupResult) { $nativeBackupList.Add($b) | Out-Null }
+      }
+
+      $ddbBackupResult = Get-AWSDDBBackupInventory -Credential $cred -Region $awsRegion `
+          -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias -DDBList $ddbList
+      if ($null -ne $ddbBackupResult) {
+        foreach ($b in $ddbBackupResult) { $nativeBackupList.Add($b) | Out-Null }
+      }
+
+      $rsSnapResult = Get-AWSRedshiftSnapshotInventory -Credential $cred -Region $awsRegion `
+          -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+      if ($null -ne $rsSnapResult) {
+        foreach ($b in $rsSnapResult) { $nativeBackupList.Add($b) | Out-Null }
+      }
     }
   }
   Write-Progress -ID 2 -Activity "Processing region: $($awsRegion)" -Completed
 
+  # Merge the per-region recovery-point tmp files into the single canonical CSV once
+  # all regions for this account have been enumerated.
+  Merge-AWSRecoveryPointTmpFiles -CanonicalPath $outputBackupRecoveryPoints
+
+  # Once per account, summarize any regions whose RP enumeration was time-budget truncated.
+  if ($truncatedBackupRegions.Count -gt 0) {
+    Write-Host "RP enumeration truncated for region(s): $($truncatedBackupRegions -join ', ') in account $($awsAccountInfo.Account); capacity numbers are lower bounds for those regions." -ForegroundColor Yellow
+  }
+  # Surface the per-vault AccessDenied count: a partially-failed scan would
+  # otherwise read as fully healthy on the canonical output. $totalVaultsDenied
+  # was accumulated inside the per-region loop above (reading $rpResult here
+  # would only reflect the last region's value).
+  if ($totalVaultsDenied -gt 0) {
+    Write-Host "AWS Backup vault enumeration: $totalVaultsDenied vault(s) skipped due to AccessDenied on backup:ListRecoveryPointsByBackupVault for account $($awsAccountInfo.Account); capacity is a lower bound." -ForegroundColor Yellow
+  }
+
+  # Wire backup aggregates onto this account's workload rows. Done once per account,
+  # after all regions (and thus all per-source aggregates) for the account are in hand,
+  # and BEFORE the body-level Add-TagsToAllObjectsInList calls so Tag:* still sorts last.
+  # Only the RP aggregate (Source = AWSBackup) is folded in here; native collectors
+  # (Tasks 5-9) append their own descriptors to $backupSourceAggregates without changing
+  # this call site.
+  $accountId = "$($awsAccountInfo.Account)"
+  $accountRPAggregates = @($backupResourceAggregateList | Where-Object { "$($_.AwsAccountId)" -eq $accountId })
+
+  # Set of account|region|ARN keys that have at least one recovery point -> HasRecoveryPoints.
+  $recoveryPointArns = @{}
+  foreach ($agg in $accountRPAggregates) {
+    $recoveryPointArns["$($agg.AwsAccountId)|$($agg.Region)|$($agg.ResourceArn)"] = $true
+  }
+
+  $backupSourceAggregates = @(
+    @{
+      Source            = "AWSBackup"
+      Entries           = $accountRPAggregates
+      GetCount          = { param($e) $e.RecoveryPointCount }
+      GetLatestDate     = { param($e) $e.LatestRecoveryPointDate }
+      GetLatestSizeBytes = { param($e) $e.LatestRecoveryPointSizeBytes }
+    }
+  )
+  # Filter native backups to this account before folding into the merged aggregate.
+  $accountNativeBackups = @($nativeBackupList | Where-Object { "$($_.AwsAccountId)" -eq $accountId })
+  $mergedBackupAggregate = Merge-BackupAggregates -SourceAggregates $backupSourceAggregates `
+    -NativeBackupLists $accountNativeBackups
+
+  $workloadLists = @(
+    $ec2List, $ec2AttachedVolList, $ec2UnattachedVolList, $rdsList, $efsList,
+    $fsxFileSystemList, $fsxList, $s3List, $ddbList, $redshiftClusterList
+  )
+  foreach ($wl in $workloadLists) {
+    Set-WorkloadBackupColumns -WorkloadList $wl -MergedAggregate $mergedBackupAggregate `
+      -AccountId $accountId -RecoveryPointArns $recoveryPointArns `
+      -TruncatedRegions @($truncatedBackupRegions)
+  }
+
   # Collect backup costs once per account (Cost Explorer API returns account-level data).
-  # Skip when region discovery yielded nothing — matches master's per-region loop, which
+  # Skip when region discovery yielded nothing -- matches master's per-region loop, which
   # would have iterated 0 times in this scenario and never made the call.
-  if ($awsRegions.Count -gt 0) {
+  if ($awsRegions.Count -gt 0 -and -not $SkipBackupCosts) {
+    $sharedTimePeriod = Get-CEDefaultTimeWindow
     $backupCostsResult = Get-AWSBackupCosts -Credential $cred -Region $awsRegions[0] -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias
     if ($null -ne $backupCostsResult) {
       foreach ($bcItem in $backupCostsResult) { $backupCostsList.Add($bcItem) | Out-Null }
+    }
+    $snapStorageResult = Get-AWSSnapshotStorageCosts -Credential $cred -Region $awsRegions[0] `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias -TimePeriod $sharedTimePeriod
+    if ($null -ne $snapStorageResult) {
+      foreach ($sItem in $snapStorageResult) { $snapshotStorageCostsList.Add($sItem) | Out-Null }
     }
   }
 }
@@ -2668,7 +4556,14 @@ $secretsList = New-Object collections.arraylist
 $kmsList = New-Object collections.arraylist
 $sqsList = New-Object collections.arraylist
 $backupCostsList = New-Object collections.arraylist
+$snapshotStorageCostsList = New-Object collections.arraylist
 $backupPlanList = New-Object collections.arraylist
+$recoveryPointList = New-Object collections.arraylist
+$backupResourceAggregateList = New-Object collections.arraylist
+$nativeBackupList = New-Object collections.arraylist
+$ebsAndAmiList = New-Object collections.arraylist
+$rdsSnapshotList = New-Object collections.arraylist
+$redshiftClusterList = New-Object collections.arraylist
 $eksNodeGroupList = New-Object collections.arraylist
 $eksList = New-Object collections.arraylist
 
@@ -3137,11 +5032,15 @@ if ($Anonymize) {
   Write-Host "Anonymizing..." -ForegroundColor Green
 
   $global:anonymizeProperties = @("Alias", "Arn", "AwsAccountAlias", "AwsAccountId", "BackupPlanArn", "BackupPlanId", "BackupPlanName",
-                                  "BucketName", "CidrBlock", "ClusterName", "CreatorRequestId", "DBClusterIdentifier", "DBInstanceIdentifier", "DestinationBackupVaultArn",
+                                  "BackupVaultArn", "BackupVaultName", "BucketName", "CidrBlock", "ClusterIdentifier", "ClusterName", "CreatorRequestId",
+                                  "DBClusterIdentifier", "DBInstanceIdentifier", "DBName", "Description", "DestinationBackupVaultArn",
                                   "DNSName", "FileSystemDNSName", "FileSystemId", "FileSystemOwnerId", "HostedZoneId",
-                                  "InstanceId", "InstanceName", "KeyId", "LoadBalancerName", "Name", "NodegroupArn",
-                                  "NodegroupName", "NodeRole", "OwnerId", "Project", "RDSInstance", "RequestId", "Resources",
-                                  "RoleArn", "RuleId", "RuleName", "TableArn", "TableId", "TableName", "TargetBackupVaultName",
+                                  "ImageId", "InstanceId", "InstanceName", "KeyId", "LoadBalancerName",
+                                  "MasterUsername", "Name", "NodegroupArn",
+                                  "NodegroupName", "NodeRole", "OwnerId", "ParentRecoveryPointArn", "Project", "RDSInstance",
+                                  "RecoveryPointArn", "RequestId", "ResourceArn", "ResourceId", "ResourceName", "Resources",
+                                  "RoleArn", "RuleId", "RuleName", "SnapshotArn", "SnapshotId", "SnapshotIdentifier",
+                                  "TableArn", "TableId", "TableName", "TargetBackupVaultName",
                                   "VersionId", "VolumeId", "VpcId")
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
@@ -3296,6 +5195,11 @@ if ($Anonymize) {
   # Anonymize each list
   $backupPlanList = Invoke-CollectionAnonymization -Collection $backupPlanList
   $backupCostsList = Invoke-CollectionAnonymization -Collection $backupCostsList
+  $recoveryPointList = Invoke-CollectionAnonymization -Collection $recoveryPointList
+  $ebsAndAmiList = Invoke-CollectionAnonymization -Collection $ebsAndAmiList
+  $rdsSnapshotList = Invoke-CollectionAnonymization -Collection $rdsSnapshotList
+  $redshiftClusterList = Invoke-CollectionAnonymization -Collection $redshiftClusterList
+  $snapshotStorageCostsList = Invoke-CollectionAnonymization -Collection $snapshotStorageCostsList
   $ddbList = Invoke-CollectionAnonymization -Collection $ddbList
   $ec2List = Invoke-CollectionAnonymization -Collection $ec2List
   $ec2AttachedVolList = Invoke-CollectionAnonymization -Collection $ec2AttachedVolList
@@ -3378,13 +5282,24 @@ Add-TagsToAllObjectsInList($kmsList)
 Write-Host "CSV file output to: $outputKMS"  -ForegroundColor Green
 $kmsList | Export-CSV -path $outputKMS
 
-# If statement is a workaround for error when getting backup plans when payer account
-# does not allow access for linked accounts
-if ($null -eq $backupCostsList.AWSBackupNetUnblendedCost) {
-  Write-Error "AWS Cost data file not saved."
-} else {
-  Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
+# Write the AWS Backup cost CSV. -NoTypeInformation is intentionally omitted so the
+# emitted file matches the pre-PR byte-format (with the leading `#TYPE` line);
+# downstream Apps Script consumers depend on the row offset that produces. When CE
+# was unavailable we write a header-only row so the canonical filename exists.
+Write-Host "CSV file output to: $outputBackupCosts"  -ForegroundColor Green
+if ($backupCostsList.Count -gt 0) {
   $backupCostsList | Export-CSV -path $outputBackupCosts
+} else {
+  "#TYPE System.Management.Automation.PSCustomObject" | Out-File -FilePath $outputBackupCosts -Encoding utf8
+  '"AwsAccountId","AwsAccountAlias","Time-Period-Start","Time-Period-End","AWSBackupAmortizedCost","AWSBackupBlendedCost","AWSBackupNetAmortizedCost","AWSBackupNetUnblendedCost","AWSBackupNormalizedUsageAmount","AWSBackupUnblendedCost","AWSBackupUsageQuantity"' | Out-File -FilePath $outputBackupCosts -Encoding utf8 -Append
+}
+
+# Snapshot-storage USAGE_TYPE cost CSV. Same header-only fallback as above.
+Write-Host "CSV file output to: $outputSnapshotStorageCosts"  -ForegroundColor Green
+if ($snapshotStorageCostsList.Count -gt 0) {
+  $snapshotStorageCostsList | Export-CSV -path $outputSnapshotStorageCosts -NoTypeInformation
+} else {
+  "AwsAccountId,AwsAccountAlias,Time-Period-Start,Time-Period-End,Service,UsageType,UsageQuantity,UsageUnit,AmortizedCost,BlendedCost,NetAmortizedCost,NetUnblendedCost,UnblendedCost,NormalizedUsageAmount" | Out-File -FilePath $outputSnapshotStorageCosts -Encoding utf8
 }
 
 Write-Host "CSV file output to: $outputEKSClusters"  -ForegroundColor Green
@@ -3393,32 +5308,88 @@ $eksList | Export-CSV -path $outputEKSClusters
 Write-Host "CSV file output to: $outputEKSNodegroups"  -ForegroundColor Green
 $eksNodeGroupList | Export-CSV -path $outputEKSNodegroups
 
+# Native (non-AWS-Backup) snapshot detail CSVs. Header-only if no rows so the
+# canonical filename always exists for downstream tooling.
+Write-Host "CSV file output to: $outputEBSAndAMI"  -ForegroundColor Green
+if ($ebsAndAmiList.Count -gt 0) {
+  $ebsAndAmiList | Export-CSV -path $outputEBSAndAMI -NoTypeInformation
+} else {
+  "AwsAccountId,AwsAccountAlias,Region,Source,ImageId,SnapshotId,ResourceArn,SizeBytes,SizeGiB,CreationDate,Name,Description,State" | Out-File -FilePath $outputEBSAndAMI -Encoding utf8
+}
+
+Write-Host "CSV file output to: $outputRDSSnapshots"  -ForegroundColor Green
+if ($rdsSnapshotList.Count -gt 0) {
+  $rdsSnapshotList | Export-CSV -path $outputRDSSnapshots -NoTypeInformation
+} else {
+  "AwsAccountId,AwsAccountAlias,Region,Source,Engine,SnapshotIdentifier,ResourceArn,SnapshotArn,SizeBytes,SizeGiB,CreationDate,SnapshotType,Status,ClusterIdentifier" | Out-File -FilePath $outputRDSSnapshots -Encoding utf8
+}
+
+Write-Host "CSV file output to: $outputRedshiftClusters"  -ForegroundColor Green
+if ($redshiftClusterList.Count -gt 0) {
+  $redshiftClusterList | Export-CSV -path $outputRedshiftClusters -NoTypeInformation
+} else {
+  "AwsAccountId,AwsAccountAlias,Region,ClusterIdentifier,NodeType,NumberOfNodes,ClusterStatus,MasterUsername,DBName,ClusterCreateTime,AutomatedSnapshotRetentionPeriod,ManualSnapshotRetentionPeriod,ResourceArn,HasBackups,HasRecoveryPoints,BackupCount,BackupSources,LatestBackupDate,LatestBackupSizeGiB,LatestBackupSizeTiB,LatestBackupSizeGB,LatestBackupSizeTB,BackupEnumerationTruncated" | Out-File -FilePath $outputRedshiftClusters -Encoding utf8
+}
+
 # Export to JSON
 Write-Host "JSON file output to: $outputBackupPlansJSON"  -ForegroundColor Green
 $backupPlanList | ConvertTo-Json -Depth 10 > $outputBackupPlansJSON
+
+# Latest-backup logical size totals (any source). These sum LatestBackupSizeGiB over
+# rows where HasBackups is true -- the approximate Rubrik first-full bound -- and are
+# distinct from the legacy InBackupPlan-filtered provisioned-source totals above.
+function Get-LatestBackupSummary($list) {
+  $withBackups = @($list | Where-Object { $_.HasBackups })
+  # Measure-Object -Sum returns $null on an empty input, which renders as blank in
+  # the console output ("sum =  GiB / ..."). Coerce to 0 here so the summary line is
+  # always readable even when no rows have backups.
+  $sum = { param($prop) $v = ($withBackups.$prop | Measure-Object -Sum).Sum; if ($null -eq $v) { 0 } else { $v } }
+  [PSCustomObject]@{
+    Count   = $withBackups.Count
+    GiB     = & $sum 'LatestBackupSizeGiB'
+    TiB     = & $sum 'LatestBackupSizeTiB'
+    GB      = & $sum 'LatestBackupSizeGB'
+    TB      = & $sum 'LatestBackupSizeTB'
+    Sources = (($withBackups.BackupSources | Where-Object { $_ } | ForEach-Object { $_ -split ',\s*' } | Sort-Object -Unique) -join ", ")
+  }
+}
+
+$ec2LatestBackup           = Get-LatestBackupSummary $ec2List
+$ec2AttachedVolLatestBackup = Get-LatestBackupSummary $ec2AttachedVolList
+$ec2UnVolLatestBackup      = Get-LatestBackupSummary $ec2UnattachedVolList
+$rdsLatestBackup           = Get-LatestBackupSummary $rdsList
+$efsLatestBackup           = Get-LatestBackupSummary $efsList
 
 # Print Summary
 Write-Host
 Write-Host "Total # of EC2 instances: $($ec2list.count)"  -ForegroundColor Green
 Write-Host "Total # of volumes: $(($ec2list.volumes | Measure-Object -Sum).sum)"  -ForegroundColor Green
 Write-Host "Total capacity of all volumes: $ec2TotalGiB GiB or $ec2TotalGB GB or $ec2TotalTiB TiB or $ec2TotalTB TB"  -ForegroundColor Green
-Write-Host "Capacity of backed up volumes: $ec2TotalBackupGiB GiB or $ec2TotalBackupGB GB or $ec2TotalBackupTiB TiB or $ec2TotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Provisioned source size of EC2 instances in AWS Backup plans: $ec2TotalBackupGiB GiB or $ec2TotalBackupGB GB or $ec2TotalBackupTiB TiB or $ec2TotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Latest-backup logical size of EC2 instances with backups (any source): $($ec2LatestBackup.Count) resources, sum = $($ec2LatestBackup.GiB) GiB / $($ec2LatestBackup.TiB) TiB / $($ec2LatestBackup.GB) GB / $($ec2LatestBackup.TB) TB"  -ForegroundColor Green
+if ($ec2LatestBackup.Sources) { Write-Host "  Sources observed: $($ec2LatestBackup.Sources)"  -ForegroundColor Green }
 Write-Host
 
 Write-Host
 Write-Host "Total # of EC2 attached volumes: $($ec2AttachedVolList.count)"  -ForegroundColor Green
 Write-Host "Total capacity of all attached volumes: $ec2AttachedVolTotalGiB GiB or $ec2AttachedVolTotalGB GB or $ec2AttachedVolTotalTiB TiB or $ec2AttachedVolTotalTB TB"  -ForegroundColor Green
-Write-Host "Capacity of all backed up attached volumes: $ec2AttachedVolTotalBackupGiB GiB or $ec2AttachedVolTotalBackupGB GB or $ec2AttachedVolTotalBackupTiB TiB or $ec2AttachedVolTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Provisioned source size of attached EBS volumes in AWS Backup plans: $ec2AttachedVolTotalBackupGiB GiB or $ec2AttachedVolTotalBackupGB GB or $ec2AttachedVolTotalBackupTiB TiB or $ec2AttachedVolTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Latest-backup logical size of attached EBS volumes with backups (any source): $($ec2AttachedVolLatestBackup.Count) resources, sum = $($ec2AttachedVolLatestBackup.GiB) GiB / $($ec2AttachedVolLatestBackup.TiB) TiB / $($ec2AttachedVolLatestBackup.GB) GB / $($ec2AttachedVolLatestBackup.TB) TB"  -ForegroundColor Green
+if ($ec2AttachedVolLatestBackup.Sources) { Write-Host "  Sources observed: $($ec2AttachedVolLatestBackup.Sources)"  -ForegroundColor Green }
 
 Write-Host
 Write-Host "Total # of EC2 unattached volumes: $($ec2UnattachedVolList.count)"  -ForegroundColor Green
 Write-Host "Total capacity of all unattached volumes: $ec2UnVolTotalGiB GiB or $ec2UnVolTotalGB GB or $ec2UnVolTotalTiB TiB or $ec2UnVolTotalTB TB"  -ForegroundColor Green
-Write-Host "Capacity of all backed up unattached volumes: $ec2UnVolTotalBackupGiB GiB or $ec2UnVolTotalBackupGB GB or $ec2UnVolTotalBackupTiB TiB or $ec2UnVolTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Provisioned source size of unattached EBS volumes in AWS Backup plans: $ec2UnVolTotalBackupGiB GiB or $ec2UnVolTotalBackupGB GB or $ec2UnVolTotalBackupTiB TiB or $ec2UnVolTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Latest-backup logical size of unattached EBS volumes with backups (any source): $($ec2UnVolLatestBackup.Count) resources, sum = $($ec2UnVolLatestBackup.GiB) GiB / $($ec2UnVolLatestBackup.TiB) TiB / $($ec2UnVolLatestBackup.GB) GB / $($ec2UnVolLatestBackup.TB) TB"  -ForegroundColor Green
+if ($ec2UnVolLatestBackup.Sources) { Write-Host "  Sources observed: $($ec2UnVolLatestBackup.Sources)"  -ForegroundColor Green }
 
 Write-Host
 Write-Host "Total # of RDS instances: $($rdsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all RDS instances: $rdsTotalGiB GiB or $rdsTotalGB GB or $rdsTotalTiB TiB or $rdsTotalTB TB"  -ForegroundColor Green
-Write-Host "Provisioned capacity of all backed up RDS instances: $rdsTotalBackupGiB GiB or $rdsTotalBackupGB GB or $rdsTotalBackupTiB TiB or $rdsTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Provisioned source size of RDS instances in AWS Backup plans: $rdsTotalBackupGiB GiB or $rdsTotalBackupGB GB or $rdsTotalBackupTiB TiB or $rdsTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Latest-backup logical size of RDS instances with backups (any source): $($rdsLatestBackup.Count) resources, sum = $($rdsLatestBackup.GiB) GiB / $($rdsLatestBackup.TiB) TiB / $($rdsLatestBackup.GB) GB / $($rdsLatestBackup.TB) TB"  -ForegroundColor Green
+if ($rdsLatestBackup.Sources) { Write-Host "  Sources observed: $($rdsLatestBackup.Sources)"  -ForegroundColor Green }
 
 Write-Host
 Write-Host "Total # of VPCs: $($vpcList.count)" -ForegroundColor Green
@@ -3435,7 +5406,9 @@ Write-Host "Total # of IAM accounts profiled: $($iamList.count)" -ForegroundColo
 Write-Host
 Write-Host "Total # of EFS file systems: $($efsList.count)"  -ForegroundColor Green
 Write-Host "Total provisioned capacity of all EFS file systems: $efsTotalGiB GiB or $efsTotalGB GB or $efsTotalTiB TiB or $efsTotalTB TB"  -ForegroundColor Green
-Write-Host "Provisioned capacity of all backed up EFS file systems: $efsTotalBackupGiB GiB or $efsTotalBackupGB GB or $efsTotalBackupTiB TiB or $efsTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Provisioned source size of EFS file systems in AWS Backup plans: $efsTotalBackupGiB GiB or $efsTotalBackupGB GB or $efsTotalBackupTiB TiB or $efsTotalBackupTB TB"  -ForegroundColor Green
+Write-Host "Latest-backup logical size of EFS file systems with backups (any source): $($efsLatestBackup.Count) resources, sum = $($efsLatestBackup.GiB) GiB / $($efsLatestBackup.TiB) TiB / $($efsLatestBackup.GB) GB / $($efsLatestBackup.TB) TB"  -ForegroundColor Green
+if ($efsLatestBackup.Sources) { Write-Host "  Sources observed: $($efsLatestBackup.Sources)"  -ForegroundColor Green }
 
 Write-Host
 Write-Host "Total # of FSx FileSystems: $($fsxFileSystemList.count)"  -ForegroundColor Green
@@ -3514,6 +5487,29 @@ $s3BackupTotalTBsFormatted | ForEach-Object {
 Write-Host
 Write-Host "Net unblended cost of AWS Backup for past 12 months + this month so far: $("$")$backupTotalNetUnblendedCost"  -ForegroundColor Green
 Write-Host "See CSV for further breakdown of cost for Backup"  -ForegroundColor Green
+
+# Combined cost summary printed underneath the legacy 'Net unblended cost' line.
+# The two queries partition spend disjointly so a simple sum gives an upper bound.
+$snapshotNetUnblendedCost = 0
+foreach ($row in $snapshotStorageCostsList) {
+  if ($row.NetUnblendedCost) {
+    $val = "$($row.NetUnblendedCost)".TrimStart('$')
+    [double]$num = 0
+    if ([double]::TryParse($val, [ref]$num)) { $snapshotNetUnblendedCost += $num }
+  }
+}
+$awsBackupCombined = 0
+if ($backupTotalNetUnblendedCost) {
+  [double]$backupNum = 0
+  if ([double]::TryParse("$backupTotalNetUnblendedCost", [ref]$backupNum)) { $awsBackupCombined = $backupNum }
+}
+$combinedCost = [math]::Round($awsBackupCombined + $snapshotNetUnblendedCost, 2)
+Write-Host
+Write-Host "AWS Backup cost summary (past 12 months + MTD):"  -ForegroundColor Green
+Write-Host ("  AWS Backup service (fully-managed resources)        : `${0}" -f [math]::Round($awsBackupCombined, 2))  -ForegroundColor Green
+Write-Host ("  Snapshot/backup USAGE_TYPE (source-service-billed)  : `${0}" -f [math]::Round($snapshotNetUnblendedCost, 2))  -ForegroundColor Green
+Write-Host ("  Combined upper bound                                : `${0}" -f $combinedCost)  -ForegroundColor Green
+Write-Host "Note: the USAGE_TYPE component includes manual snapshots and native automated backups (DLM, RDS automated, FSx automatic, etc.), not only those created by AWS Backup. The capacity columns in the per-workload CSVs attribute backups to their exact source mechanism (BackupSources column)."  -ForegroundColor Green
 
 Write-Host
 Write-Host

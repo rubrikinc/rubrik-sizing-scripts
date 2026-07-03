@@ -101,6 +101,94 @@ To run the AWS sizing script, ensure you have the following:
       ```
     - These permissions can be installed in a cross account role by using the [Get-AWSSizingInfo-Permissions.cft](Get-AWSSizingInfo-Permissions.cft) CloudFormation template. This cross account role can be installed in multiple AWS accounts by using a [CloudFormation Stack Set](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html).
 
+### AWS Backup capacity reporting (zero account-admin action required)
+
+The script's backup **capacity** reporting requires no account-admin action
+beyond granting the standard IAM permissions via the CloudFormation template
+above. Capacity is enumerated for every backup mechanism: AWS Backup recovery
+points, native EBS snapshots, AMIs, RDS DB/cluster snapshots, FSx native
+backups, DynamoDB on-demand backups + PITR, and Redshift snapshots.
+
+Cost reporting requires an additional opt-in: Cost Explorer must be enabled on
+the account (and, for org runs, linked-account billing access must be enabled
+at the payer). See the "Optional: Cost Explorer" subsection below.
+
+Each workload row carries ten source-agnostic backup columns:
+`ResourceArn`, `HasBackups`, `HasRecoveryPoints`, `BackupCount`,
+`BackupSources`, `LatestBackupDate`, `LatestBackupSize{GiB,TiB,GB,TB}`, and
+`BackupEnumerationTruncated`.
+
+#### Backup attribution semantics (three-axis model)
+
+| Flag | Source | Meaning |
+|---|---|---|
+| `InBackupPlan` | AWS Backup selection rules (`Resources`, `ListOfTags`, `Conditions`, `NotResources`) | **AWS Backup intent** — a currently-active selection rule covers this resource |
+| `HasRecoveryPoints` | RP enumeration | **AWS Backup evidence** — at least one leaf recovery point exists |
+| `HasBackups` | RP + native (EBS/AMI/RDS/FSx/DDB/Redshift) | **Any-mechanism evidence** — at least one backup of any kind exists |
+
+`LatestBackupSize*` columns are the **primary capacity inputs for Rubrik
+first-full sizing**. The legacy "Provisioned source size of … in AWS Backup
+plans" totals (printed to the console for backward compatibility with the
+underlying CSV columns and variable names) represent provisioned source size
+of in-plan resources, NOT actual backup capacity.
+
+#### Optional: Cost Explorer (for dollar figures only)
+
+Cost reporting is **secondary** and degrades gracefully. When Cost Explorer is
+not enabled (or linked-account billing access is disabled at the org payer),
+the script prints one yellow line per account explaining the cause and writes
+both cost CSVs as header-only. Capacity output is unaffected.
+
+To enable Cost Explorer: AWS Billing console → Cost Explorer → Launch
+(~24h backfill). For org runs, additionally enable Billing → Billing
+preferences → "Linked account access to billing data".
+
+Cost reporting issues two disjoint queries:
+
+| Captured by `SERVICE = "AWS Backup"` | Captured by `USAGE_TYPE` keyword match |
+|---|---|
+| S3, EFS, FSx OpenZFS, DynamoDB-advanced, EKS, Aurora DSQL, Timestream, SAP HANA on EC2, VMware, **all logically air-gapped vaults regardless of resource** | EBS, EC2 (AMI/image), RDS (non-advanced), Aurora (non-advanced), DocumentDB, Neptune, FSx Lustre/Windows/ONTAP, Storage Gateway, **Redshift**, **Redshift Serverless**, **DynamoDB-standard PITR** |
+
+The two CSVs (`aws_backup_costs-*.csv` and `aws_snapshot_storage_costs-*.csv`)
+never double-count. The combined upper bound is printed in the console
+summary; downstream tools join the two CSVs on `(account, month)` for the
+combined view.
+
+#### Latest-RP / latest-backup, not sum
+
+`BackupSizeInBytes` is the logical (full-equivalent) size of a recovery point.
+Summing N daily incrementals returns ~N × source size, which over-counts
+hugely. The script reports the **latest** backup per resource — that is the
+relevant number for Rubrik first-full sizing.
+
+#### Known size attribution edge cases
+
+- Aurora cluster snapshots and FSx Lustre full backups report **stored bytes**
+  rather than logical source size. The under-estimate is typically <20% and in
+  the conservative direction.
+- DDB PITR uses the current `TableSizeBytes` as an upper bound: over-estimates
+  recently-shrunk tables and under-estimates very write-heavy tables.
+
+#### New flags
+
+- `-SkipBackupCapacity`: skip the entire RP enumeration and all 5 native
+  collectors. Per-row backup columns still emit (defaults).
+- `-SkipBackupCosts`: skip both Cost Explorer cost cmdlets. Cost CSVs are
+  written header-only; capacity output is unaffected.
+- `-BackupRecoveryPointTimeoutMinutes <int>` (default 60): per-region time
+  budget for AWS Backup recovery-point enumeration. On expiry the region's RP
+  capacity becomes a lower bound and affected workload rows are flagged
+  `BackupEnumerationTruncated`.
+
+#### Memory and time scale
+
+The per-resource backup aggregate hash holds ~250 bytes per distinct
+`ResourceArn`. RP enumeration default budget is 60 min/region. Per-RP rows are
+flushed to a per-region scratch CSV in batches, but the in-memory per-RP list
+is also retained until the per-account merge runs, so total memory grows with
+the total RP count (default per-region time budget is the main bound). For
+accounts with millions of RPs, lower `-BackupRecoveryPointTimeoutMinutes`.
+
 ### Running the AWS Script
 
 There are two options for running the AWS sizing script. It can run from the AWS Cloud Shell (easiest) or from a local laptop or server (more difficult). For very large environments where the script may run longer than 20-30 minutes, running the script on a laptop or server may be necessary. This is due to the Cloud Shell's default inactivity timeout. 
@@ -118,7 +206,7 @@ To run the script from a local laptop or server do the following:
 1. Verify that PowerShell v7.4.5 or higher is installed.
 1. Install the AWS modules for PowerShell with the following command:
     ```powershell
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
 
     ```
 1. Ensure AWS credentials are set up by using the `Set-AWSCredential` command. For example:
@@ -274,6 +362,7 @@ To run the GCP sizing script, ensure you have the following:
   - `spanner.instances.list`
   - `spanner.databases.list`
   - `resourcemanager.projects.get`
+  - `resourcemanager.projects.list` (required for project discovery via `gcloud projects list` when running without `-Projects`/`-ProjectFile`)
   - `serviceusage.services.list`
 - GCP Cloud SDK installed or use GCP Cloud Shell.
 - The following GCP APIs must be enabled on each project for full data collection:
@@ -312,7 +401,9 @@ To run the GCP sizing script, ensure you have the following:
 
 2. **From a local machine:**
     - Install [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
-    - Install the [gcloud CLI](https://cloud.google.com/sdk/docs/install) and run:
+    - Install the [gcloud CLI](https://cloud.google.com/sdk/docs/install). On Windows, **close and reopen
+      your PowerShell window after install** so the updated `PATH` is picked up — otherwise `gcloud` will
+      not be recognized. Then run:
         ```shell
         gcloud init
         gcloud auth login
@@ -337,6 +428,38 @@ To run the GCP sizing script, ensure you have the following:
 - `gce_cloudsql_info-<timestamp>.csv` - Cloud SQL instance information
 - `gce_spanner_info-<timestamp>.csv` - Spanner instance information
 - `output_gcp_<timestamp>.log` - Console output log
+
+### GCP Troubleshooting
+
+#### Script reports 0 projects (no other errors visible)
+
+- Problem:
+
+  In v1.0.2 and earlier the script completed without crashing but reported 0 projects discovered with
+  no explanation, because `gcloud` stderr was suppressed during project discovery. Starting in v1.0.3
+  (refined in v1.0.4) the script prints the captured `gcloud` stderr and a numbered list of common
+  causes, then halts — use that output together with the checklist below to diagnose. If `gcloud` is
+  missing from `PATH` entirely, v1.0.3+ throws a separate fail-fast error before reaching project
+  discovery, so that case never produces the "0 projects" symptom.
+
+- Most likely causes (check in this order):
+
+  1. **Not authenticated, or authenticated as the wrong account.** Run `gcloud auth list` — confirm the
+     active account belongs to the Cloud Identity organization, not a personal Google account. Re-run
+     `gcloud auth login` if needed.
+  2. **Caller lacks `resourcemanager.projects.list` at org / folder scope.** Direct project-level
+     `roles/viewer` is not enough — `gcloud projects list` returns empty if the principal has no listing
+     permission at any ancestor. Run `gcloud projects list` manually to confirm; if it returns nothing,
+     the sizing script cannot see them either.
+  3. **Cloud Resource Manager API disabled on the quota / auth project.** Enable it with
+     `gcloud services enable cloudresourcemanager.googleapis.com --project=<quota-project>`.
+
+  As a workaround while diagnosing, pass the project IDs explicitly to bypass auto-discovery — either
+  inline with `-Projects`, or from a newline-separated file with `-ProjectFile`:
+  ```powershell
+  .\Get-GCPSizingInfo.ps1 -Projects 'project-id-1,project-id-2'
+  .\Get-GCPSizingInfo.ps1 -ProjectFile path\to\projects.txt
+  ```
 
 ---
 

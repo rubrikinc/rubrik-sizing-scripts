@@ -116,7 +116,10 @@ All scripts produce timestamped CSVs and a compressed ZIP archive.
 `aws_efs_info-*.csv`, `aws_fsx_*_info-*.csv`, `aws_DynamoDB_info-*.csv`,
 `aws_eks_*_info-*.csv`, `aws_vpc_info-*.csv`, `aws_lb_info-*.csv`,
 `aws_route53_info-*.csv`, `aws_iam_info-*.csv`, `aws_backup_costs-*.csv`,
-`aws-backup-plans-info-*.json`, `aws_sizing_results_*.zip`
+`aws_backup_recovery_points-*.csv`, `aws_ebs_and_ami_info-*.csv`,
+`aws_rds_snapshot_info-*.csv`, `aws_redshift_info-*.csv`,
+`aws_snapshot_storage_costs-*.csv`, `aws-backup-plans-info-*.json`,
+`aws_sizing_results_*.zip`
 
 **Azure:** `azure_vmdisk_info-*.csv`, `azure_sql_info-*.csv`,
 `azure_file_share_info-*.csv`, `azure_backup_vault_*-*.csv`,
@@ -186,7 +189,7 @@ normalization, anonymization, metric calculations, error handling).
 
 | Provider | Required Modules |
 |----------|-----------------|
-| AWS | `AWS.Tools.Common`, `.EC2`, `.S3`, `.RDS`, `.SecurityToken`, `.Organizations`, `.IdentityManagement`, `.CloudWatch`, `.ElasticFileSystem`, `.ElasticLoadBalancing`, `.ElasticLoadBalancingV2`, `.SSO`, `.SSOOIDC`, `.FSX`, `.Backup`, `.CostExplorer`, `.DynamoDBv2`, `.Route53`, `.SQS`, `.SecretsManager`, `.KeyManagementService`, `.EKS`, `.S3Control` |
+| AWS | `AWS.Tools.Common`, `.EC2`, `.S3`, `.RDS`, `.SecurityToken`, `.Organizations`, `.IdentityManagement`, `.CloudWatch`, `.ElasticFileSystem`, `.ElasticLoadBalancing`, `.ElasticLoadBalancingV2`, `.SSO`, `.SSOOIDC`, `.FSX`, `.Backup`, `.CostExplorer`, `.DynamoDBv2`, `.Route53`, `.SQS`, `.SecretsManager`, `.KeyManagementService`, `.EKS`, `.S3Control`, `.Redshift` |
 | Azure | `Az.Accounts`, `Az.Aks`, `Az.Compute`, `Az.Storage`, `Az.Sql`, `Az.SqlVirtualMachine`, `Az.ResourceGraph`, `Az.Monitor`, `Az.Resources`, `Az.RecoveryServices`, `Az.CostManagement`, `Az.CosmosDB` |
 | GCP | `GoogleCloud` |
 

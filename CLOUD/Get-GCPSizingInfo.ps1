@@ -155,7 +155,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.2"
+$scriptVersion = "1.0.4"
 
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -166,6 +166,18 @@ $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
 
 # Disable gcloud interactive prompts for scripted execution
 $env:CLOUDSDK_CORE_DISABLE_PROMPTS = 1
+
+# Fail fast with actionable guidance if gcloud is not on PATH.
+# Without this, every gcloud invocation silently no-ops (the script suppresses
+# gcloud stderr for cleaner output) and the run reports "0 projects" with no
+# explanation -- see GCP Troubleshooting in README.md.
+if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: 'gcloud' CLI was not found on PATH." -ForegroundColor Red
+    Write-Host "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install" -ForegroundColor Red
+    Write-Host "On Windows, close and reopen your PowerShell window after installing so PATH is refreshed." -ForegroundColor Red
+    Write-Host "Then verify with: gcloud --version" -ForegroundColor Red
+    throw "gcloud CLI not found. See guidance above."
+}
 
 # --- Function definitions ---
 
@@ -206,14 +218,47 @@ function Resolve-GCPProjects {
         }
     } else {
         Write-Host "No project list provided, discovering all GCP projects accessible to the authenticated account..." -ForegroundColor green
+        # Capture stderr so a real error (auth, perms, disabled API) is not masked as "0 projects".
+        $stderrFile = New-TemporaryFile
+        $callFailed = $false
         try {
-            $projectListJson = gcloud projects list --format=json 2>$null
+            $projectListJson = gcloud projects list --format=json 2>$stderrFile
             if ($projectListJson) {
                 $projectList = ($projectListJson -join '') | ConvertFrom-Json
             }
         } catch {
+            $callFailed = $true
             Write-Host "Failed to get projects" -foregroundcolor Red
             Write-Host "Error: $_" -foregroundcolor Red
+        }
+        $stderrText = (Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue)
+        Remove-Item $stderrFile -ErrorAction SilentlyContinue
+        # Only surface the discovery diagnostic when the gcloud call itself did not throw -- otherwise
+        # the catch block above has already printed an error wall and a second one would just repeat it.
+        if (-not $callFailed -and (-not $projectList -or $projectList.Count -eq 0)) {
+            if ($stderrText) {
+                Write-Host "ERROR: 'gcloud projects list' returned no projects." -ForegroundColor Red
+                Write-Host "gcloud stderr:" -ForegroundColor Red
+                Write-Host $stderrText -ForegroundColor Red
+                Write-Host "Common causes (check in this order):" -ForegroundColor Yellow
+                Write-Host "  1. Not authenticated, or active account is the wrong one. Run: gcloud auth list" -ForegroundColor Yellow
+                Write-Host "     Re-authenticate with the Cloud Identity organization account if needed: gcloud auth login" -ForegroundColor Yellow
+                Write-Host "  2. Caller lacks 'resourcemanager.projects.list' at org / folder scope." -ForegroundColor Yellow
+                Write-Host "     Verify manually: gcloud projects list" -ForegroundColor Yellow
+                Write-Host "  3. Cloud Resource Manager API disabled on the quota project. Enable with:" -ForegroundColor Yellow
+                Write-Host "     gcloud services enable cloudresourcemanager.googleapis.com --project=<quota-project>" -ForegroundColor Yellow
+                Write-Host "Workaround: pass project IDs explicitly with -Projects or -ProjectFile:" -ForegroundColor Yellow
+                Write-Host "  .\Get-GCPSizingInfo.ps1 -Projects 'project-id-1,project-id-2'" -ForegroundColor Yellow
+                Write-Host "  .\Get-GCPSizingInfo.ps1 -ProjectFile path\to\projects.txt" -ForegroundColor Yellow
+                # Halt instead of returning an empty list -- otherwise Compress-SizingArchive still
+                # produces a ZIP that looks like a successful run.
+                throw "gcloud projects list returned no projects -- see guidance above."
+            } else {
+                # gcloud succeeded but the principal genuinely sees zero projects. Warn, do not halt.
+                Write-Host "WARNING: 'gcloud projects list' returned no projects and gcloud reported no errors." -ForegroundColor Yellow
+                Write-Host "This is expected if the authenticated principal has access to zero projects." -ForegroundColor Yellow
+                Write-Host "If you expected projects, pass them explicitly with -Projects 'id1,id2' or -ProjectFile path." -ForegroundColor Yellow
+            }
         }
     }
     return $projectList
