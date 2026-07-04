@@ -11,7 +11,7 @@ if (-not $personalAccessToken) {
 # convert secure string to plain text just for the auth header
 $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($personalAccessToken)
 try { $patPlain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally {
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) 
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
 }
 $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$patPlain"))
 $headers = @{ Authorization = "Basic $base64AuthInfo" }
@@ -46,5 +46,4 @@ foreach ($repo in $allRepos) {
         Write-Warning "Could not add size for repo $($repo.name): $($_.Exception.Message)"
     }
 }
-Write-Host "Found $($allRepos.Count) Git repos and $tfvcCount TFVC repos. Total Git size is
-$totalMB MB"
+Write-Host "Found $($allRepos.Count) Git repos and $tfvcCount TFVC repos. Total Git size is $totalMB MB"
