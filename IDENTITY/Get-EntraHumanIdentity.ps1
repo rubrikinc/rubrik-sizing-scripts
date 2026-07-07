@@ -209,10 +209,22 @@ function Connect-EntraGraph {
 
     Write-Log "Connecting to Microsoft Graph" "INFO" "Cyan"
 
+    $requiredScopes = @("User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All")
+
     try {
-        if (-not (Get-MgContext)) {
-            #Write-Log "Connecting to Microsoft Graph..." "INFO" "Green"
-            Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All"
+        $ctx = Get-MgContext
+        if ($ctx) {
+            $grantedScopes = $ctx.Scopes
+            $missingScopes = $requiredScopes | Where-Object { $_ -notin $grantedScopes }
+            if ($missingScopes) {
+                Write-Log "Existing session is missing scopes: $($missingScopes -join ', '). Reconnecting..." "WARNING" "Yellow"
+                Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+                $ctx = $null
+            }
+        }
+
+        if (-not $ctx) {
+            Connect-MgGraph -Scopes $requiredScopes
         }
 
         if (-not (Get-MgContext)) {
@@ -226,9 +238,8 @@ function Connect-EntraGraph {
     }
 }
 
-# Run Initialization and Connection
+# Run Initialization
 Initialize-EntraPrerequisites
-Connect-EntraGraph
 
 #————————————————————————————————————————
 # 1. HEADERS
@@ -476,11 +487,7 @@ function Get-ByUserData {
                 'N/A'
             }
 
-            $ownedCount      = $appOwners[$u.Id]      ?? 0
-            $enterpriseCount = $spAppOwners[$u.Id]    ?? 0
-            $miCount         = $spMiOwners[$u.Id]     ?? 0
-
-            $output.Add([PSCustomObject]@{
+            $record = [ordered]@{
                 Directory               = $directory
                 User                    = $user
                 GuestAccount            = [int]$isGuest
@@ -495,10 +502,13 @@ function Get-ByUserData {
                 CloudOnly               = $cloudOnly
                 LicensedIdentity        = [int]($isMember -and $isEnabled -and $isActive -and -not $patternMatched)
                 ADSourceDomain          = $adSourceDomain
-                OwnedAppsCount          = $ownedCount
-                EnterpriseAppsCount     = $enterpriseCount
-                ManagedIdentitiesCount  = $miCount
-            })
+            }
+            if ($CheckOwnership) {
+                $record['OwnedAppsCount']         = $appOwners[$u.Id]   ?? 0
+                $record['EnterpriseAppsCount']     = $spAppOwners[$u.Id] ?? 0
+                $record['ManagedIdentitiesCount']  = $spMiOwners[$u.Id]  ?? 0
+            }
+            $output.Add([PSCustomObject]$record)
         }
     }
 
@@ -538,20 +548,20 @@ function Get-ByDomainData {
     [object[]] $ManagedIdentities = @(),
 
     [Parameter(Mandatory)]
-    [Hashtable] $AppDomainMap
+    [Hashtable] $AppDomainMap,
+
+    [Parameter(Mandatory)]
+    [object] $Organization
   )
 
   begin {
     $rows = [System.Collections.Generic.List[object]]::new()
 
-    # Grab your tenant GUID and all verified domains
-    $org = Get-MgOrganization -ErrorAction Stop
-    $tenantId = $org.Id
+    $tenantId = $Organization.Id
 
-    # Build a map: domainName -> tenantId
     $domainTenantMap = @{}
     $verifiedDomains = @()
-    foreach ($vd in $org.VerifiedDomains) {
+    foreach ($vd in $Organization.VerifiedDomains) {
       $domainTenantMap[$vd.Name] = $tenantId
       $verifiedDomains += $vd.Name
     }
@@ -944,6 +954,8 @@ function Export-HtmlReport {
 
 try {
 
+Connect-EntraGraph
+
 #— 1) Global Microsoft Graph data retrieval
 # Get applications and create a lookup table for AppId -> PublisherDomain
 Write-Log "Loading global Graph data - Fetching Applications..." "INFO" "Cyan"
@@ -968,6 +980,10 @@ Write-Log "Loading global Graph data - Fetching Managed Identities..." "INFO" "C
 $managedIdentities = $servicePrincipals | Where-Object servicePrincipalType -eq 'ManagedIdentity'
 Write-Log "Retrieved $($managedIdentities.Count) managed identities." "INFO" "Cyan"
 
+Write-Log "Loading global Graph data - Fetching Organization info..." "INFO" "Cyan"
+$organization = Get-MgOrganization -ErrorAction Stop
+Write-Log "Organization: $($organization.DisplayName) (Tenant: $($organization.Id))" "INFO" "Cyan"
+
 #— 2) Build detailed per-user report
 Write-Log "Building per-user dataset..." "INFO" "Cyan"
 $byUser = Get-ByUserData `
@@ -987,7 +1003,8 @@ $byDomain = Get-ByDomainData `
   -Applications      $applications `
   -ServicePrincipals $servicePrincipals `
   -ManagedIdentities $managedIdentities `
-  -AppDomainMap      $appDomainMap
+  -AppDomainMap      $appDomainMap `
+  -Organization      $organization
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"

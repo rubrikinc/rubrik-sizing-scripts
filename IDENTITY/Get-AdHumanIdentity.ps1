@@ -302,6 +302,7 @@ function Get-ByOUData {
 
             $msaNames     = @($msaObjects | Select-Object -ExpandProperty SamAccountName)
             $gmsaNames    = @($gmsaObjects | Select-Object -ExpandProperty SamAccountName)
+
             $noExpireNames = @(Get-ADUser -Server $domain -Filter "PasswordNeverExpires -eq `$true -and Enabled -eq `$true" | Select-Object -ExpandProperty SamAccountName)
 
             $MSASet      = [System.Collections.Generic.HashSet[string]]::new([string[]]$msaNames, [System.StringComparer]::OrdinalIgnoreCase)
