@@ -11,6 +11,11 @@
     - **User Account Activity**: Determines if user accounts are active, inactive, or have never been used, based on their last sign-in date. This helps in excluding dormant accounts from the count of active users.
     - **Service Account Identification**: Identifies user accounts that may be service accounts based on naming conventions.
     - **Application and Service Principal Inventory**: Provides a count of applications, service principals, and managed identities to help differentiate between human and non-human accounts.
+    - **Identity Type Classification**: Classifies each user into one of four identity types based on UserType, OnPremisesSyncEnabled, and CreationType:
+        - **Hybrid Member**: Member account synced from on-premises Active Directory (OnPremisesSyncEnabled = true).
+        - **Cloud Member**: Cloud-only member account (UserType = Member, not synced from AD, not CIAM).
+        - **B2B Guest**: External guest account invited via B2B collaboration (UserType = Guest, not CIAM).
+        - **CIAM**: Consumer identity from Entra External ID / Azure AD B2C (CreationType = LocalAccount).
     - **Ownership Information**: Optionally, the script can perform a deeper analysis to identify the owners of applications and service principals, which can further help in distinguishing human accounts.
     - **Reporting Modes**:
         - **Full**: A detailed report with information about each user account, as well as a summary by domain.
@@ -23,18 +28,18 @@
     ### Per-User Report (ByUser)
     - **Directory**: The domain associated with the user (resolved from mail, identities, or UPN for guests; from on-premises domain for synced users).
     - **User**: The user's account name (the part before @ in the UPN).
-    - **Guest**: 1 if the user is an external/guest identity (UserType = Guest), 0 otherwise.
-    - **Member**: 1 if the user is a member identity owned by this tenant (UserType = Member), 0 otherwise.
     - **Account Enabled**: 1 if the account is enabled in Entra ID, 0 if disabled.
     - **Account Disabled**: 1 if the account is disabled, 0 otherwise.
     - **Active Identity**: 1 if the user has signed in within the last 180 days, 0 otherwise. Disabled accounts are never marked active.
     - **Inactive Identity**: 1 if the user has not signed in within the inactivity period or has never signed in. Disabled accounts are never marked inactive (they are simply disabled).
     - **Never Logged In**: 1 if no sign-in activity has ever been recorded for this account, 0 otherwise.
     - **Service Account Pattern**: 1 if the user's UPN matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
-    - **Synch from AD**: 1 if the account is synchronized from on-premises Active Directory (OnPremisesSyncEnabled = true), 0 otherwise.
-    - **Cloud Only**: 1 if the account exists only in Entra ID (not synced from AD), 0 otherwise.
     - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise.
     - **Source AD**: The on-premises AD domain name for synced accounts, N/A for cloud-only accounts.
+    - **Hybrid Member**: 1 if the user is a member synced from on-premises AD (OnPremisesSyncEnabled = true), 0 otherwise.
+    - **Cloud Member**: 1 if the user is a cloud-only member (UserType = Member, not synced from AD, not CIAM), 0 otherwise.
+    - **B2B Guest**: 1 if the user is an external B2B guest (UserType = Guest, not CIAM), 0 otherwise.
+    - **CIAM**: 1 if the user is a CIAM/consumer identity (CreationType = LocalAccount), 0 otherwise.
     - **App owned by User** (only with -CheckOwnership): Number of Entra ID application registrations owned by this user.
     - **SP owned by User** (only with -CheckOwnership): Number of service principals (enterprise apps) owned by this user.
     - **Managed Identity** (only with -CheckOwnership): Number of managed identities owned by this user.
@@ -42,24 +47,28 @@
     ### Per-Domain Report (ByDomain)
     - **Directory**: The domain name.
     - **Total Users**: Total number of user accounts associated with this domain.
-    - **Guest Users**: Number of guest/external accounts.
-    - **Member Users**: Number of member accounts.
     - **Account Enabled**: Number of enabled accounts.
     - **Account Disabled**: Number of disabled accounts.
     - **Active Identity**: Number of users who signed in within the inactivity period.
     - **Inactive Identity**: Number of users who have not signed in within the inactivity period.
     - **Never Logged In Users**: Number of accounts with no recorded sign-in.
     - **Service Account Pattern**: Number of accounts matching the service account naming patterns.
-    - **Synch from AD**: Number of accounts synchronized from on-premises AD.
-    - **Cloud Only**: Number of cloud-only accounts.
     - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account).
     - **Source AD**: Number of distinct on-premises AD source domains for synced accounts.
+    - **Hybrid Members**: Number of member accounts synced from on-premises AD.
+    - **Cloud Members**: Number of cloud-only member accounts.
+    - **B2B Guests**: Number of external B2B guest accounts.
+    - **CIAM Users**: Number of CIAM/consumer identity accounts.
     - **Applications**: Number of Entra ID application registrations published under this domain.
     - **Service Principals**: Number of service principals (enterprise apps) associated with this domain.
     - **Managed Identities**: Number of managed identities associated with this domain.
     ### Licensing Report
     - **Directory**: The domain name.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match.
+    - **Licensed Identities**: Total number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match.
+    - **Licensed Hybrid Members**: Number of licensed hybrid (AD-synced) member identities.
+    - **Licensed Cloud Members**: Number of licensed cloud-only member identities.
+    - **Licensed B2B Guests**: Number of licensed B2B guest identities.
+    - **Licensed CIAM**: Number of licensed CIAM/consumer identities.
 
 .PARAMETER UserServiceAccountNamesLike
     This is an optional parameter that allows you to identify service accounts based on their User Principal Name (UPN). You can provide a list of wildcard patterns, and any user account with a UPN matching one of these patterns will be flagged as a service account in the report.
@@ -209,10 +218,22 @@ function Connect-EntraGraph {
 
     Write-Log "Connecting to Microsoft Graph" "INFO" "Cyan"
 
+    $requiredScopes = @("User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All")
+
     try {
-        if (-not (Get-MgContext)) {
-            #Write-Log "Connecting to Microsoft Graph..." "INFO" "Green"
-            Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All"
+        $ctx = Get-MgContext
+        if ($ctx) {
+            $grantedScopes = $ctx.Scopes
+            $missingScopes = $requiredScopes | Where-Object { $_ -notin $grantedScopes }
+            if ($missingScopes) {
+                Write-Log "Existing session is missing scopes: $($missingScopes -join ', '). Reconnecting..." "WARNING" "Yellow"
+                Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+                $ctx = $null
+            }
+        }
+
+        if (-not $ctx) {
+            Connect-MgGraph -Scopes $requiredScopes
         }
 
         if (-not (Get-MgContext)) {
@@ -226,9 +247,8 @@ function Connect-EntraGraph {
     }
 }
 
-# Run Initialization and Connection
+# Run Initialization
 Initialize-EntraPrerequisites
-Connect-EntraGraph
 
 #————————————————————————————————————————
 # 1. HEADERS
@@ -247,18 +267,18 @@ function Get-ReportHeaders {
             $baseHeaders = [ordered]@{
                 Directory               = 'Directory'
                 User                    = 'User'
-                GuestAccount            = 'Guest'
-                MemberAccount           = 'Member'
                 AccountEnabled          = 'Account Enabled'
                 DisabledUser            = 'Account Disabled'
                 ActiveUser              = 'Active Identity'
                 InactiveUser            = 'Inactive Identity'
                 NeverLoggedInUser       = 'Never Logged In'
                 PatternMatchedUser      = 'Service Account Pattern'
-                SyncFromAD              = 'Synch from AD'
-                CloudOnly               = 'Cloud Only'
                 LicensedIdentity        = 'Licensed Identity'
                 ADSourceDomain          = 'Source AD'
+                HybridMember            = 'Hybrid Member'
+                CloudMember             = 'Cloud Member'
+                B2BGuest                = 'B2B Guest'
+                CIAM                    = 'CIAM'
             }
 
             if ($CheckOwnership) {
@@ -271,8 +291,12 @@ function Get-ReportHeaders {
 
         'Licensing' {
             return [PSCustomObject]@{
-                Domain             = 'Directory'
-                LicensedIdentities = 'Licensed Identities'
+                Domain                = 'Directory'
+                LicensedIdentities    = 'Licensed Identities'
+                LicensedHybridMembers = 'Licensed Hybrid Members'
+                LicensedCloudMembers  = 'Licensed Cloud Members'
+                LicensedB2BGuests     = 'Licensed B2B Guests'
+                LicensedCIAMs         = 'Licensed CIAM'
             }
         }
 
@@ -280,18 +304,18 @@ function Get-ReportHeaders {
             return [PSCustomObject]@{
                 Domain                        = 'Directory'
                 TotalUsers                    = 'Total Users'
-                GuestUsers                    = 'Guest Users'
-                MemberUsers                   = 'Member Users'
                 AccountEnabledCount           = 'Account Enabled'
                 DisabledUsers                 = 'Account Disabled'
                 ActiveUsers                   = 'Active Identity'
                 InactiveUsers                 = 'Inactive Identity'
                 NeverLoggedInUsers            = 'Never Logged In Users'
                 PatternMatchedUsers           = 'Service Account Pattern'
-                SyncFromADCount               = 'Synch from AD'
-                CloudOnlyCount                = 'Cloud Only'
                 LicensedIdentities            = 'Licensed Identities'
                 ADSourceDomainCounts          = 'Source AD'
+                HybridMemberCount             = 'Hybrid Members'
+                CloudMemberCount              = 'Cloud Members'
+                B2BGuestCount                 = 'B2B Guests'
+                CIAMCount                     = 'CIAM Users'
                 DomainApplicationsCount       = 'Applications'
                 DomainServicePrincipalCount   = 'Service Principals'
                 DomainManagedIdentitiesCount  = 'Managed Identities'
@@ -380,7 +404,7 @@ function Get-ByUserData {
         Write-Log "Retrieving users from Entra ID..." "INFO" "Cyan"
         $users = Get-MgUser -All -PageSize 999 `
             -Property Id,UserPrincipalName,Mail,OtherMails,Identities,UserType,AccountEnabled,SignInActivity, `
-                      OnPremisesSyncEnabled,OnPremisesDomainName `
+                      OnPremisesSyncEnabled,OnPremisesDomainName,CreationType `
             -ErrorAction Stop
         Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
 
@@ -468,37 +492,40 @@ function Get-ByUserData {
                 }
             }
 
-            $syncFromAD = [bool]$u.OnPremisesSyncEnabled
-            $cloudOnly  = [int](-not $syncFromAD)
-            $adSourceDomain = if ($syncFromAD -and -not [string]::IsNullOrWhiteSpace($u.OnPremisesDomainName)) {
+            $isSyncedFromAD = [bool]$u.OnPremisesSyncEnabled
+            $adSourceDomain = if ($isSyncedFromAD -and -not [string]::IsNullOrWhiteSpace($u.OnPremisesDomainName)) {
                 $u.OnPremisesDomainName.ToLowerInvariant()
             } else {
                 'N/A'
             }
 
-            $ownedCount      = $appOwners[$u.Id]      ?? 0
-            $enterpriseCount = $spAppOwners[$u.Id]    ?? 0
-            $miCount         = $spMiOwners[$u.Id]     ?? 0
+            $isHybridMember = $isSyncedFromAD
+            $isCIAM         = (-not $isSyncedFromAD) -and ($u.CreationType -eq 'LocalAccount')
+            $isB2BGuest     = (-not $isSyncedFromAD) -and (-not $isCIAM) -and $isGuest
+            $isCloudMember  = (-not $isSyncedFromAD) -and (-not $isCIAM) -and $isMember
 
-            $output.Add([PSCustomObject]@{
+            $record = [ordered]@{
                 Directory               = $directory
                 User                    = $user
-                GuestAccount            = [int]$isGuest
-                MemberAccount           = [int]$isMember
                 AccountEnabled          = [int]$isEnabled
                 DisabledUser            = [int](-not $isEnabled)
                 ActiveUser              = [int]$isActive
                 InactiveUser            = [int]$isInactive
                 NeverLoggedInUser       = [int]$isNeverLoggedIn
                 PatternMatchedUser      = [int]$patternMatched
-                SyncFromAD              = [int]$syncFromAD
-                CloudOnly               = $cloudOnly
+                HybridMember            = [int]$isHybridMember
+                CloudMember             = [int]$isCloudMember
+                B2BGuest                = [int]$isB2BGuest
+                CIAM                    = [int]$isCIAM
                 LicensedIdentity        = [int]($isMember -and $isEnabled -and $isActive -and -not $patternMatched)
                 ADSourceDomain          = $adSourceDomain
-                OwnedAppsCount          = $ownedCount
-                EnterpriseAppsCount     = $enterpriseCount
-                ManagedIdentitiesCount  = $miCount
-            })
+            }
+            if ($CheckOwnership) {
+                $record['OwnedAppsCount']         = $appOwners[$u.Id]   ?? 0
+                $record['EnterpriseAppsCount']     = $spAppOwners[$u.Id] ?? 0
+                $record['ManagedIdentitiesCount']  = $spMiOwners[$u.Id]  ?? 0
+            }
+            $output.Add([PSCustomObject]$record)
         }
     }
 
@@ -538,20 +565,20 @@ function Get-ByDomainData {
     [object[]] $ManagedIdentities = @(),
 
     [Parameter(Mandatory)]
-    [Hashtable] $AppDomainMap
+    [Hashtable] $AppDomainMap,
+
+    [Parameter(Mandatory)]
+    [object] $Organization
   )
 
   begin {
     $rows = [System.Collections.Generic.List[object]]::new()
 
-    # Grab your tenant GUID and all verified domains
-    $org = Get-MgOrganization -ErrorAction Stop
-    $tenantId = $org.Id
+    $tenantId = $Organization.Id
 
-    # Build a map: domainName -> tenantId
     $domainTenantMap = @{}
     $verifiedDomains = @()
-    foreach ($vd in $org.VerifiedDomains) {
+    foreach ($vd in $Organization.VerifiedDomains) {
       $domainTenantMap[$vd.Name] = $tenantId
       $verifiedDomains += $vd.Name
     }
@@ -582,22 +609,26 @@ function Get-ByDomainData {
         $rows.Add([PSCustomObject]@{
           Domain = $domain
           TotalUsers = $grpUsers.Count
-          GuestUsers = ($grpUsers | Where-Object { $_.GuestAccount -eq 1 }).Count
-          MemberUsers = ($grpUsers | Where-Object { $_.MemberAccount -eq 1 }).Count
           AccountEnabledCount = ($grpUsers | Where-Object { $_.AccountEnabled -eq 1 }).Count
           DisabledUsers = ($grpUsers | Where-Object { $_.DisabledUser -eq 1 }).Count
           ActiveUsers = ($grpUsers | Where-Object { $_.ActiveUser -eq 1 }).Count
           InactiveUsers = ($grpUsers | Where-Object { $_.InactiveUser -eq 1 }).Count
           NeverLoggedInUsers = ($grpUsers | Where-Object { $_.NeverLoggedInUser -eq 1 }).Count
           PatternMatchedUsers = ($grpUsers | Where-Object { $_.PatternMatchedUser -eq 1 }).Count
-          SyncFromADCount = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
-          CloudOnlyCount = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
           LicensedIdentities = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
           ADSourceDomainCounts = @(
             $grpUsers |
-            Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
+            Where-Object { $_.HybridMember -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
             Select-Object -ExpandProperty ADSourceDomain -Unique
           ).Count
+          HybridMemberCount = ($grpUsers | Where-Object { $_.HybridMember -eq 1 }).Count
+          CloudMemberCount = ($grpUsers | Where-Object { $_.CloudMember -eq 1 }).Count
+          B2BGuestCount = ($grpUsers | Where-Object { $_.B2BGuest -eq 1 }).Count
+          CIAMCount = ($grpUsers | Where-Object { $_.CIAM -eq 1 }).Count
+          LicensedHybridMembers = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.HybridMember -eq 1 }).Count
+          LicensedCloudMembers = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.CloudMember -eq 1 }).Count
+          LicensedB2BGuests = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.B2BGuest -eq 1 }).Count
+          LicensedCIAMs = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.CIAM -eq 1 }).Count
           DomainApplicationsCount = $domainAppsCount
           DomainServicePrincipalCount = $tenantAppsCount
           DomainManagedIdentitiesCount = $tenantMIsCount
@@ -620,18 +651,22 @@ function Get-ByDomainData {
     $rows.Add([PSCustomObject]@{
       Domain = "Service Principals from other Domains"
       TotalUsers = 0
-      GuestUsers = 0
-      MemberUsers = 0
       AccountEnabledCount = 0
       DisabledUsers = 0
       ActiveUsers = 0
       InactiveUsers = 0
       NeverLoggedInUsers = 0
       PatternMatchedUsers = 0
-      SyncFromADCount = 0
-      CloudOnlyCount = 0
       LicensedIdentities = 0
       ADSourceDomainCounts = 0
+      HybridMemberCount = 0
+      CloudMemberCount = 0
+      B2BGuestCount = 0
+      CIAMCount = 0
+      LicensedHybridMembers = 0
+      LicensedCloudMembers = 0
+      LicensedB2BGuests = 0
+      LicensedCIAMs = 0
       DomainApplicationsCount = $otherApps.Count
       DomainServicePrincipalCount = ($otherSPs | Where-Object ServicePrincipalType -eq 'Application').Count
       DomainManagedIdentitiesCount = $otherMIs.Count
@@ -944,6 +979,8 @@ function Export-HtmlReport {
 
 try {
 
+Connect-EntraGraph
+
 #— 1) Global Microsoft Graph data retrieval
 # Get applications and create a lookup table for AppId -> PublisherDomain
 Write-Log "Loading global Graph data - Fetching Applications..." "INFO" "Cyan"
@@ -968,6 +1005,10 @@ Write-Log "Loading global Graph data - Fetching Managed Identities..." "INFO" "C
 $managedIdentities = $servicePrincipals | Where-Object servicePrincipalType -eq 'ManagedIdentity'
 Write-Log "Retrieved $($managedIdentities.Count) managed identities." "INFO" "Cyan"
 
+Write-Log "Loading global Graph data - Fetching Organization info..." "INFO" "Cyan"
+$organization = Get-MgOrganization -ErrorAction Stop
+Write-Log "Organization: $($organization.DisplayName) (Tenant: $($organization.Id))" "INFO" "Cyan"
+
 #— 2) Build detailed per-user report
 Write-Log "Building per-user dataset..." "INFO" "Cyan"
 $byUser = Get-ByUserData `
@@ -987,11 +1028,12 @@ $byDomain = Get-ByDomainData `
   -Applications      $applications `
   -ServicePrincipals $servicePrincipals `
   -ManagedIdentities $managedIdentities `
-  -AppDomainMap      $appDomainMap
+  -AppDomainMap      $appDomainMap `
+  -Organization      $organization
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, LicensedHybridMembers, LicensedCloudMembers, LicensedB2BGuests, LicensedCIAMs
 
 #— 4) Prepare report headers
 $userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership
