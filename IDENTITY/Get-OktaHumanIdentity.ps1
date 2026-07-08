@@ -11,7 +11,7 @@
     - **User Account Activity**: Determines if user accounts are active, inactive, or have never been used, based on their last login date. This helps in excluding dormant accounts from the count of active users.
     - **Service Account Identification**: Identifies user accounts that may be service accounts based on naming conventions.
     - **Internal vs External Users**: Distinguishes between internal users (managed by Okta or synced from AD/LDAP) and external users (federated, social, or imported) to help differentiate between owned and external identities.
-    - **Application Inventory**: Provides a count of applications registered in the Okta tenant.
+    - **Application Assignments** (only with -CheckAppAssignments): Counts the unique applications assigned to users in each domain, based on per-user appLinks queries.
     - **Reporting Modes**:
         - **Full**: A detailed report with information about each user account, as well as a summary by domain.
         - **Summary**: A high-level report with aggregated counts for each domain.
@@ -26,7 +26,7 @@
     - **External User**: 1 if the user is from an external identity provider (Federation, Social, or Import), 0 otherwise.
     - **Internal User**: 1 if the user is managed internally (Okta, Active Directory, or LDAP provider), 0 otherwise.
     - **Account Enabled**: 1 if the account status is ACTIVE, 0 otherwise.
-    - **Account Disabled**: 1 if the account is not ACTIVE (suspended, deprovisioned, locked out, etc.), 0 otherwise.
+    - **Account Disabled**: 1 if the account is not ACTIVE (suspended, deprovisioned, locked out, password expired, staged, provisioned), 0 otherwise.
     - **Active Identity**: 1 if the user has logged in within the inactivity period and the account is enabled, 0 otherwise.
     - **Inactive Identity**: 1 if the user has not logged in within the inactivity period and the account is enabled, 0 otherwise.
     - **Never Logged In**: 1 if no login activity has ever been recorded for this account, 0 otherwise.
@@ -35,6 +35,7 @@
     - **Cloud Only**: 1 if the account is managed directly in Okta (credentials provider type is OKTA), 0 otherwise.
     - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Internal AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise.
     - **Source AD**: The Active Directory source name for AD-synced accounts, N/A otherwise.
+    - **Deprovisioned** (only with -IncludeDeprovisioned): 1 if the account status is DEPROVISIONED, 0 otherwise.
 
     ### Per-Domain Report (ByDomain)
     - **Directory**: The domain name.
@@ -51,7 +52,8 @@
     - **Cloud Only**: Number of Okta-managed cloud-only accounts.
     - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account).
     - **Source AD**: Number of distinct AD source domains for AD-synced accounts.
-    - **Applications**: Number of Okta applications published under this domain.
+    - **Deprovisioned** (only with -IncludeDeprovisioned): Number of deprovisioned accounts in this domain.
+    - **Applications** (only with -CheckAppAssignments): Number of unique application labels assigned to users in this domain (via per-user appLinks).
 
     ### Licensing Report
     - **Directory**: The domain name.
@@ -93,6 +95,9 @@
 .PARAMETER CheckAppAssignments
     When present, retrieves the list of applications assigned to each user via the Okta API (GET /api/v1/users/{id}/appLinks). This adds an "Assigned Applications" column to the ByUser report and populates the "Applications" column in the ByDomain report.
     WARNING: This makes one API call per user and can be very slow on large tenants (e.g., 10,000 users = 10,000 API calls). This information is for informational purposes only and is NOT required for Rubrik licensing.
+
+.PARAMETER IncludeDeprovisioned
+    When present, retrieves deprovisioned (deactivated) users via a separate API call and includes them in the report. By default, Okta's list-users endpoint omits DEPROVISIONED users. When enabled, a "Deprovisioned" column is added to the ByUser and ByDomain reports. Deprovisioned users do not affect the Licensed Identity count (they are neither enabled nor active).
 
 .EXAMPLE
     Example 1: Perform a full audit using an API token.
@@ -150,7 +155,7 @@
         6. Copy the Client ID
     - **Execution Policy**: You may need to adjust the PowerShell execution policy to run this script. You can do this by running "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process".
     - **Culture Settings**: The script temporarily sets the culture to 'en-US' to ensure that dates and times are parsed correctly. This change is reverted at the end of the script.
-    - **Rate Limits**: The script handles Okta API rate limits automatically by retrying requests when a 429 response is received.
+    - **Rate Limits**: The script handles Okta API rate limits automatically by retrying requests when a 429 response is received (up to 5 retries per request before aborting).
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'ApiToken')]
@@ -181,7 +186,8 @@ param (
     [ValidateSet("Summary", "Full")]
     [string]$Mode = "Full",
     [int]$DaysInactive = 180,
-    [switch]$CheckAppAssignments
+    [switch]$CheckAppAssignments,
+    [switch]$IncludeDeprovisioned
 )
 
 # === Global Variables and Logging Setup ===
@@ -521,10 +527,13 @@ function Invoke-OktaPagedRequest {
 
     $allResults = [System.Collections.Generic.List[object]]::new()
     $nextUrl = $Uri
+    $maxRetries = 5
+    $retryCount = 0
 
     while ($nextUrl) {
         try {
             $response = Invoke-WebRequest -Uri $nextUrl -Headers $script:OktaHeaders -Method Get
+            $retryCount = 0
 
             $pageData = $response.Content | ConvertFrom-Json
             if ($pageData) {
@@ -547,9 +556,19 @@ function Invoke-OktaPagedRequest {
         catch {
             $statusCode = $_.Exception.Response.StatusCode.value__
             if ($statusCode -eq 429) {
-                $retryAfter = $_.Exception.Response.Headers['Retry-After']
-                $waitSeconds = if ($retryAfter) { [int]$retryAfter } else { 30 }
-                Write-Log "Rate limited by Okta API. Waiting $waitSeconds seconds before retrying..." "WARNING" "Yellow"
+                $retryCount++
+                if ($retryCount -gt $maxRetries) {
+                    Write-Log "Okta API rate limit: exceeded $maxRetries retries. Aborting." "ERROR" "Red"
+                    throw
+                }
+                $waitSeconds = 30
+                try {
+                    $retryHeader = $_.Exception.Response.Headers
+                    if ($retryHeader -and $retryHeader.Contains('Retry-After')) {
+                        $waitSeconds = [int]($retryHeader.GetValues('Retry-After') | Select-Object -First 1)
+                    }
+                } catch { }
+                Write-Log "Rate limited by Okta API (attempt $retryCount/$maxRetries). Waiting $waitSeconds seconds..." "WARNING" "Yellow"
                 Start-Sleep -Seconds $waitSeconds
                 continue
             }
@@ -561,14 +580,6 @@ function Invoke-OktaPagedRequest {
     return $allResults
 }
 
-function Get-DomainFromLogin {
-    param([string]$Login)
-
-    if ([string]::IsNullOrWhiteSpace($Login)) { return $null }
-    if ($Login -match '@(?<Domain>[^@]+)$') { return $Matches['Domain'].ToLowerInvariant() }
-    return $null
-}
-
 #————————————————————————————————————————
 # 1. HEADERS
 #————————————————————————————————————————
@@ -577,7 +588,8 @@ function Get-ReportHeaders {
         [Parameter(Mandatory)]
         [ValidateSet('ByUser', 'ByDomain', 'Licensing')]
         [string] $Type,
-        [switch] $CheckAppAssignments
+        [switch] $CheckAppAssignments,
+        [switch] $IncludeDeprovisioned
     )
 
     switch ($Type) {
@@ -597,6 +609,9 @@ function Get-ReportHeaders {
                 CloudOnly               = 'Cloud Only'
                 LicensedIdentity        = 'Licensed Identity'
                 ADSourceDomain          = 'Source AD'
+            }
+            if ($IncludeDeprovisioned) {
+                $baseHeaders['Deprovisioned'] = 'Deprovisioned'
             }
             if ($CheckAppAssignments) {
                 $baseHeaders['AssignedAppsCount'] = 'Assigned Applications'
@@ -628,6 +643,9 @@ function Get-ReportHeaders {
                 LicensedIdentities            = 'Licensed Identities'
                 ADSourceDomainCounts          = 'Source AD'
             }
+            if ($IncludeDeprovisioned) {
+                $baseHeaders['DeprovisionedUsers'] = 'Deprovisioned'
+            }
             if ($CheckAppAssignments) {
                 $baseHeaders['DomainApplicationsCount'] = 'Applications'
             }
@@ -649,7 +667,10 @@ function Get-ByUserData {
         [string[]] $ServicePattern = @(),
 
         [Parameter()]
-        [switch]   $CheckAppAssignments
+        [switch]   $CheckAppAssignments,
+
+        [Parameter()]
+        [switch]   $IncludeDeprovisioned
     )
 
     begin {
@@ -663,6 +684,14 @@ function Get-ByUserData {
         Write-Log "Retrieving users from Okta..." "INFO" "Cyan"
         $users = Invoke-OktaPagedRequest -Uri "$($script:OktaBaseUrl)/api/v1/users?limit=200"
         Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
+
+        if ($IncludeDeprovisioned) {
+            Write-Log "Retrieving deprovisioned users from Okta..." "INFO" "Cyan"
+            $deprovisionedUsers = Invoke-OktaPagedRequest -Uri "$($script:OktaBaseUrl)/api/v1/users?limit=200&filter=status%20eq%20%22DEPROVISIONED%22"
+            Write-Log "Retrieved $($deprovisionedUsers.Count) deprovisioned users." "INFO" "Cyan"
+            $users = @($users) + @($deprovisionedUsers)
+            Write-Log "Total users (including deprovisioned): $($users.Count)." "INFO" "Cyan"
+        }
 
         if ($CheckAppAssignments) {
             Write-Log "Retrieving application assignments for $($users.Count) users (1 API call per user)..." "INFO" "Cyan"
@@ -748,6 +777,8 @@ function Get-ByUserData {
                 }
             }
 
+            $isDeprovisioned = $u.status -eq 'DEPROVISIONED'
+
             $record = [ordered]@{
                 Directory               = $directory
                 User                    = $user
@@ -763,6 +794,9 @@ function Get-ByUserData {
                 CloudOnly               = $cloudOnly
                 LicensedIdentity        = [int]($isInternal -and $isEnabled -and $isActive -and -not $patternMatched)
                 ADSourceDomain          = $adSourceDomain
+            }
+            if ($IncludeDeprovisioned) {
+                $record['Deprovisioned'] = [int]$isDeprovisioned
             }
             if ($CheckAppAssignments) {
                 $record['AssignedAppsCount'] = $assignedAppsCount
@@ -798,7 +832,10 @@ function Get-ByDomainData {
         [object[]] $UserData,
 
         [Parameter()]
-        [switch]   $CheckAppAssignments
+        [switch]   $CheckAppAssignments,
+
+        [Parameter()]
+        [switch]   $IncludeDeprovisioned
     )
 
     begin {
@@ -831,6 +868,9 @@ function Get-ByDomainData {
                         Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
                         Select-Object -ExpandProperty ADSourceDomain -Unique
                     ).Count
+                }
+                if ($IncludeDeprovisioned) {
+                    $record['DeprovisionedUsers'] = ($grpUsers | Where-Object { $_.Deprovisioned -eq 1 }).Count
                 }
                 if ($CheckAppAssignments) {
                     $uniqueAppLinks = [System.Collections.Generic.HashSet[string]]::new()
@@ -1171,7 +1211,8 @@ Write-Log "Building per-user dataset..." "INFO" "Cyan"
 $byUser = Get-ByUserData `
     -DaysInactive $DaysInactive `
     -ServicePattern $UserServiceAccountNamesLike `
-    -CheckAppAssignments:$CheckAppAssignments
+    -CheckAppAssignments:$CheckAppAssignments `
+    -IncludeDeprovisioned:$IncludeDeprovisioned
 
 # Filter out the last row (the 'TOTAL' row) before passing the data to Get-ByDomainData
 $domainDataInput = $byUser | Select-Object -SkipLast 1
@@ -1180,15 +1221,16 @@ $domainDataInput = $byUser | Select-Object -SkipLast 1
 Write-Log "Building aggregated report by Domain..." "INFO" "Cyan"
 $byDomain = Get-ByDomainData `
     -UserData          $domainDataInput `
-    -CheckAppAssignments:$CheckAppAssignments
+    -CheckAppAssignments:$CheckAppAssignments `
+    -IncludeDeprovisioned:$IncludeDeprovisioned
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
 $licensingData = $byDomain | Select-Object Domain, LicensedIdentities
 
 #— 4) Prepare report headers
-$userCols      = Get-ReportHeaders -Type ByUser -CheckAppAssignments:$CheckAppAssignments
-$domainCols    = Get-ReportHeaders -Type ByDomain -CheckAppAssignments:$CheckAppAssignments
+$userCols      = Get-ReportHeaders -Type ByUser -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned
+$domainCols    = Get-ReportHeaders -Type ByDomain -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned
 $licensingCols = Get-ReportHeaders -Type Licensing
 
 #— 5) Export CSV & HTML based on mode
