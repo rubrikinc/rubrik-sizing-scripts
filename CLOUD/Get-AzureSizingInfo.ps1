@@ -1245,6 +1245,12 @@ function Get-AzureSQLInventory {
       [hashtable]$MIPolicies
   )
 
+  # $Tenant.Name / $Subscription.Name can be null when Azure has no display name
+  # configured; fall back to TenantId/Id so hashtable keys and CSV columns are
+  # always populated with a stable, non-null value.
+  $tenantKey = if ($Tenant.Name) { $Tenant.Name } else { $Tenant.TenantId }
+  $subKey    = if ($Subscription.Name) { $Subscription.Name } else { $Subscription.Id }
+
   # Get all Azure SQL servers
   try {
     $sqlServers = Get-AzSqlServer -ErrorAction Stop
@@ -1303,8 +1309,8 @@ function Get-AzureSQLInventory {
               $sqlObj.Add("MaxSizeTiB",$poolSizes["MaxSizeTiB"])
               $sqlObj.Add("MaxSizeGB", $poolSizes["MaxSizeGB"])
               $sqlObj.Add("MaxSizeTB", $poolSizes["MaxSizeTB"])
-              $sqlObj.Add("Subscription",$Subscription.Name)
-              $sqlObj.Add("Tenant",$Tenant.Name)
+              $sqlObj.Add("Subscription",$subKey)
+              $sqlObj.Add("Tenant",$tenantKey)
               $sqlObj.Add("Region",$pool.Location)
               $sqlObj.Add("ResourceGroup",$pool.ResourceGroupName)
               $sqlObj.Add("DatabaseID","")
@@ -1338,8 +1344,8 @@ function Get-AzureSQLInventory {
           $sqlObj.Add("MaxSizeTiB",$dbSizes["MaxSizeTiB"])
           $sqlObj.Add("MaxSizeGB", $dbSizes["MaxSizeGB"])
           $sqlObj.Add("MaxSizeTB", $dbSizes["MaxSizeTB"])
-          $sqlObj.Add("Subscription",$Subscription.Name)
-          $sqlObj.Add("Tenant",$Tenant.Name)
+          $sqlObj.Add("Subscription",$subKey)
+          $sqlObj.Add("Tenant",$tenantKey)
           $sqlObj.Add("Region",$sqlDB.Location)
           $sqlObj.Add("ResourceGroup",$sqlDB.ResourceGroupName)
           $sqlObj.Add("DatabaseID",$sqlDB.DatabaseId)
@@ -1457,11 +1463,11 @@ function Get-AzureSQLInventory {
 
   # Setting up nested JSON accordingly if needed for this tenant/sub
   # JSON output is tenant -> sub -> MI -> Databases in MI
-  if(-not $MIPolicies.ContainsKey($Tenant.Name)){
-    $MIPolicies[$($Tenant.Name)] = @{}
+  if(-not $MIPolicies.ContainsKey($tenantKey)){
+    $MIPolicies[$tenantKey] = @{}
   }
-  if(-not $MIPolicies[$Tenant.Name].ContainsKey($Subscription.Name)){
-    $MIPolicies[$($Tenant.Name)][$($Subscription.Name)] = @{}
+  if(-not $MIPolicies[$tenantKey].ContainsKey($subKey)){
+    $MIPolicies[$tenantKey][$subKey] = @{}
   }
 
   foreach ($MI in $sqlManagedInstances) {
@@ -1498,7 +1504,7 @@ function Get-AzureSQLInventory {
         Write-Host "Error: $_" -ForeGroundColor Red
       }
     }
-    $MIPolicies[$($Tenant.Name)][$($Subscription.Name)][$($MI.ManagedInstanceName)] = $databases
+    $MIPolicies[$tenantKey][$subKey][$($MI.ManagedInstanceName)] = $databases
 
     $managedInstanceNum++
     $sqlObj = [ordered] @{}
@@ -1511,8 +1517,8 @@ function Get-AzureSQLInventory {
     $sqlObj.Add("MaxSizeTiB",$miSizes["MaxSizeTiB"])
     $sqlObj.Add("MaxSizeGB", $miSizes["MaxSizeGB"])
     $sqlObj.Add("MaxSizeTB", $miSizes["MaxSizeTB"])
-    $sqlObj.Add("Subscription",$Subscription.Name)
-    $sqlObj.Add("Tenant",$Tenant.Name)
+    $sqlObj.Add("Subscription",$subKey)
+    $sqlObj.Add("Tenant",$tenantKey)
     $sqlObj.Add("Region",$MI.Location)
     $sqlObj.Add("ResourceGroup",$MI.ResourceGroupName)
     $sqlObj.Add("DatabaseID","")

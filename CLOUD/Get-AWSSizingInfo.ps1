@@ -2786,6 +2786,10 @@ function Get-AWSBackupRecoveryPointInventory {
                         # Empty vault returns null per AWS Tools convention; coerce to empty array.
                         foreach ($rp in @($rpPage)) {
                             if ($null -eq $rp) { continue }
+                            # PARTIAL/DELETING/EXPIRED recovery points have unreliable or null
+                            # BackupSizeInBytes. Skip them so a newer incomplete RP cannot zero
+                            # out a previously recorded correct size in the aggregate.
+                            if ("$($rp.Status)" -ne 'COMPLETED') { continue }
                             $row = New-AWSRecoveryPointRow -RecoveryPoint $rp -Region $Region `
                                 -AccountInfo $AccountInfo -AccountAlias $AccountAlias `
                                 -PlanNameById $PlanNameById
@@ -3101,18 +3105,20 @@ function Get-AWSEBSAndAMIInventory {
     $amiBuffer = New-Object collections.arraylist
     foreach ($image in $images) {
         if ($null -eq $image) { continue }
-        $imageSize = 0L
+        # Only available AMIs represent usable backup storage. pending/failed/disabled
+        # AMIs are not restorable and should not inflate sizing.
+        if ("$($image.State)" -ne 'available') { continue }
         $imageSnapshotIds = New-Object collections.arraylist
         foreach ($bdm in @($image.BlockDeviceMappings)) {
             if ($null -ne $bdm.Ebs -and $bdm.Ebs.SnapshotId) {
                 [void]$amiSnapshotIds.Add("$($bdm.Ebs.SnapshotId)")
                 [void]$imageSnapshotIds.Add("$($bdm.Ebs.SnapshotId)")
-                if ($null -ne $bdm.Ebs.VolumeSize) { $imageSize += [long]$bdm.Ebs.VolumeSize * 1GB }
             }
         }
+        # Size is deferred to Phase 3 where actual snapshot sizes (FullSnapshotSizeInBytes)
+        # are available via $snapSizeMap, avoiding the EbsBlockDevice.VolumeSize overestimate.
         [void]$amiBuffer.Add([PSCustomObject]@{
             Image       = $image
-            Size        = $imageSize
             SnapshotIds = $imageSnapshotIds
         })
     }
@@ -3139,16 +3145,25 @@ function Get-AWSEBSAndAMIInventory {
         }
     }
 
-    # Build snapshotId -> sourceInstanceId map from snapshot descriptions.
-    # AWS auto-writes "Created by CreateImage(i-XXX) for ami-YYY" into the
-    # description of every EBS snapshot that backs an AMI, so this is the
-    # most reliable per-account signal for AMI source attribution.
+    # Build snapshotId -> sourceInstanceId map and snapshotId -> sizeBytes map
+    # from snapshot descriptions. AWS auto-writes "Created by CreateImage(i-XXX)
+    # for ami-YYY" into AMI-backing snapshot descriptions — most reliable signal
+    # for AMI source attribution. FullSnapshotSizeInBytes is the actual stored
+    # data size; VolumeSize is the source volume's provisioned capacity (fallback
+    # for older SDK versions that don't expose FullSnapshotSizeInBytes).
     $snapToInstance = @{}
+    $snapSizeMap    = @{}
     foreach ($snap in $snapshots) {
         if ($null -eq $snap) { continue }
         if ("$($snap.Description)" -match 'CreateImage\((i-[0-9a-f]+)\)') {
             $snapToInstance["$($snap.SnapshotId)"] = $matches[1]
         }
+        $sz = if ($null -ne $snap.FullSnapshotSizeInBytes) {
+            [long]$snap.FullSnapshotSizeInBytes
+        } elseif ($null -ne $snap.VolumeSize) {
+            [long]$snap.VolumeSize * 1GB
+        } else { 0L }
+        $snapSizeMap["$($snap.SnapshotId)"] = $sz
     }
 
     # Phase 3: emit AMI rows. Attribute to source EC2 instance via snapshot
@@ -3177,12 +3192,19 @@ function Get-AWSEBSAndAMIInventory {
         } else {
             "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):image/$($image.ImageId)"
         }
+        # Sum actual snapshot sizes from the Phase 2 map; far more accurate than
+        # EbsBlockDevice.VolumeSize which is the launch-volume capacity and can
+        # exceed the snapshot's actual stored data.
+        $imageSize = 0L
+        foreach ($snapId in $entry.SnapshotIds) {
+            if ($snapSizeMap.ContainsKey("$snapId")) { $imageSize += $snapSizeMap["$snapId"] }
+        }
         [void]$backups.Add([PSCustomObject]@{
             AwsAccountId  = $AccountInfo.Account
             Region        = $Region
             ResourceArn   = $sourceArn
             Source        = "AMI"
-            SizeBytes     = $entry.Size
+            SizeBytes     = $imageSize
             CreationDate  = $image.CreationDate
         })
         [void]$detailRows.Add([PSCustomObject]@{
@@ -3193,8 +3215,8 @@ function Get-AWSEBSAndAMIInventory {
             ImageId         = $image.ImageId
             SnapshotId      = ""
             ResourceArn     = $sourceArn
-            SizeBytes       = $entry.Size
-            SizeGiB         = [math]::Round($entry.Size / 1GB, 4)
+            SizeBytes       = $imageSize
+            SizeGiB         = [math]::Round($imageSize / 1GB, 4)
             CreationDate    = $image.CreationDate
             Name            = $image.Name
             Description     = $image.Description
@@ -3204,6 +3226,9 @@ function Get-AWSEBSAndAMIInventory {
 
     foreach ($snap in $snapshots) {
         if ($null -eq $snap) { continue }
+        # Only completed snapshots represent usable backup data. pending/error/
+        # recoverable snapshots should not be counted as backup coverage.
+        if ("$($snap.State)" -ne 'completed') { continue }
         if ($amiSnapshotIds.Contains("$($snap.SnapshotId)")) { continue }
 
         # AWS Backup dedup: filter snapshots that AWS Backup created. AWS Backup
@@ -3219,8 +3244,11 @@ function Get-AWSEBSAndAMIInventory {
         if ($isAwsBackup) { continue }
         $snapArn = "arn:$($partitionId):ec2:$($Region)::snapshot/$($snap.SnapshotId)"
 
-        $sizeBytes = 0L
-        if ($null -ne $snap.VolumeSize) { $sizeBytes = [long]$snap.VolumeSize * 1GB }
+        # FullSnapshotSizeInBytes is the actual stored data size. VolumeSize is
+        # the source volume's provisioned capacity (GiB) — used as a fallback for
+        # older SDK versions that don't expose FullSnapshotSizeInBytes.
+        $sizeBytes = $snapSizeMap["$($snap.SnapshotId)"]
+        if ($null -eq $sizeBytes) { $sizeBytes = 0L }
         $volArn = if ($snap.VolumeId) {
             "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($snap.VolumeId)"
         } else { $snapArn }
@@ -3298,6 +3326,9 @@ function Get-AWSRDSSnapshotInventory {
     }
     foreach ($s in $dbSnaps) {
         if ($null -eq $s) { continue }
+        # Only available snapshots represent completed, restorable backups.
+        # creating/deleting/error snapshots inflate counts without providing coverage.
+        if ("$($s.Status)" -ne 'available') { continue }
         # Cross-account shared snapshots are NOT returned by Get-RDSDBSnapshot
         # unless -IncludeShared $true is passed (default false). We omit the
         # parameter to keep the default. The SnapshotOwner property is not
@@ -3362,6 +3393,7 @@ function Get-AWSRDSSnapshotInventory {
     }
     foreach ($s in $clSnaps) {
         if ($null -eq $s) { continue }
+        if ("$($s.Status)" -ne 'available') { continue }
         # Same as DB snapshots: -IncludeShared default false keeps cross-account
         # snapshots out without us needing to filter.
         $name = "$($s.DBClusterSnapshotIdentifier)"
@@ -3442,19 +3474,26 @@ function Get-AWSFSxBackupInventory {
         if ($null -eq $b) { continue }
         $type = "$($b.Type)"
         if ($type -eq 'AWS_BACKUP') { continue }
+        # SizeInBytes is only populated once a backup reaches AVAILABLE. Skip
+        # in-progress backups (CREATING/TRANSFERRING/PENDING) so a newer but
+        # incomplete backup does not overwrite the correct size of the previous
+        # completed one in Merge-BackupAggregates.
+        if ("$($b.Lifecycle)" -ne 'AVAILABLE') { continue }
         $source = switch ($type) {
             'AUTOMATIC'      { 'FSxAutomatic' }
             'USER_INITIATED' { 'FSxUserInitiated' }
             default          { 'FSxUserInitiated' }
         }
-        $sizeBytes = 0L
-        if ($b.PSObject.Properties['Lifecycle'] -and $b.Lifecycle.PSObject.Properties['StorageCapacity']) {
-            $sizeBytes = [long]$b.Lifecycle.StorageCapacity * 1GB
-        } elseif ($b.PSObject.Properties['FileSystem'] -and $b.FileSystem.PSObject.Properties['StorageCapacity']) {
-            $sizeBytes = [long]$b.FileSystem.StorageCapacity * 1GB
-        }
-        $arn = if ($b.PSObject.Properties['FileSystem'] -and $b.FileSystem.PSObject.Properties['FileSystemId']) {
+        # SizeInBytes is the actual backup data size (bytes); present for both
+        # file-system and volume (OpenZFS/ONTAP) backups. Optional per the API.
+        $sizeBytes = if ($null -ne $b.SizeInBytes) { [long]$b.SizeInBytes } else { 0L }
+        # Rebuild the source resource ARN so Merge-BackupAggregates can join
+        # this backup to the matching workload row. ResourceARN on the Backup
+        # object is the backup's own ARN (arn:...:backup/...), not the source.
+        $arn = if ($null -ne $b.FileSystem -and $b.FileSystem.PSObject.Properties['FileSystemId']) {
             "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):file-system/$($b.FileSystem.FileSystemId)"
+        } elseif ($null -ne $b.Volume -and $b.Volume.PSObject.Properties['VolumeId']) {
+            "arn:$($partitionId):fsx:$($Region):$($AccountInfo.Account):volume/$($b.Volume.VolumeId)"
         } else { "$($b.ResourceARN)" }
         [void]$backups.Add([PSCustomObject]@{
             AwsAccountId  = $AccountInfo.Account
@@ -3499,6 +3538,9 @@ function Get-AWSDDBBackupInventory {
     }
     foreach ($b in $onDemand) {
         if ($null -eq $b) { continue }
+        # CREATING backups have BackupSizeBytes = 0 or null; skip them so a newer
+        # in-progress backup cannot zero out a completed backup's size in Merge-BackupAggregates.
+        if ("$($b.BackupStatus)" -ne 'AVAILABLE') { continue }
         $sizeBytes = 0L
         if ($null -ne $b.BackupSizeBytes) { $sizeBytes = [long]$b.BackupSizeBytes }
         $arn = "$($b.TableArn)"
@@ -3602,6 +3644,9 @@ function Get-AWSRedshiftSnapshotInventory {
     }
     foreach ($s in $snaps) {
         if ($null -eq $s) { continue }
+        # Only available snapshots are fully committed and restorable. creating/failed
+        # snapshots have unreliable or zero TotalBackupSizeInMegaBytes.
+        if ("$($s.Status)" -ne 'available') { continue }
         if ($s.PSObject.Properties['OwnerAccount'] -and $s.OwnerAccount -and "$($s.OwnerAccount)" -ne "$($AccountInfo.Account)") { continue }
         $sizeBytes = 0L
         # Redshift API returns MB as decimal megabytes (10^6), not MiB. PowerShell's
