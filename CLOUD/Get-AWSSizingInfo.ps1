@@ -387,7 +387,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.2.0"
+$scriptVersion = "1.3.0"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
@@ -497,6 +497,8 @@ $outputEBSAndAMI = "aws_ebs_and_ami_info-$date_string.csv"
 $outputRDSSnapshots = "aws_rds_snapshot_info-$date_string.csv"
 # Redshift cluster workload inventory (new CSV; clusters were never enumerated).
 $outputRedshiftClusters = "aws_redshift_info-$date_string.csv"
+# S3 Tables (managed Apache Iceberg table buckets) per-table inventory.
+$outputS3Tables = "aws_s3_tables_info-$date_string.csv"
 # Snapshot-storage USAGE_TYPE cost CSV. Captures EBS/EC2/RDS/Aurora/DocDB/Neptune/
 # FSx-non-OpenZFS/StorageGateway/Redshift/DDB-standard-PITR -- the resources that
 # bill snapshot storage to the source service rather than the AWS Backup service.
@@ -529,6 +531,7 @@ $outputFiles = @(
     $outputEBSAndAMI,
     $outputRDSSnapshots,
     $outputRedshiftClusters,
+    $outputS3Tables,
     $outputSnapshotStorageCosts,
     $outputBackupPlansJSON,
     $output_log
@@ -645,6 +648,17 @@ function Invoke-AWSWithRetry {
 #   Get-RSCluster / Get-RSClusterSnapshot   -> AWS.Tools.Redshift (newly added module;
 #       not installable in this sandbox). Redshift cmdlets historically use
 #       -Marker; verify -Marker vs -NextToken at implementation time in Task 9.
+#   Get-S3TTableBucketList / Get-S3TTableList -> AWS.Tools.S3Tables v5.0.106+.
+#       Both cmdlets return the full response object (ListTableBucketsResponse /
+#       ListTablesResponse) — AOS does NOT unwrap because each response has two
+#       non-metadata properties (TableBuckets/ContinuationToken and Tables/ContinuationToken
+#       respectively). Callers must access .TableBuckets / .Tables explicitly.
+#       ContinuationToken is on the response object; loop reads it from $AWSHistory
+#       (confirmed against installed module v5.0.106).
+#   Get-S3TResourceTag                       -> single-item call, no pagination.
+#       ListTagsForResourceResponse has one non-metadata property (Tags:
+#       Dictionary<string,string>); AOS returns Tags directly.
+#   Get-S3TTable                             -> single-item call, no pagination.
 #
 # All inspected read cmdlets keep stable parameter names across v4 and v5 (only the
 # CloudWatch time-parameter rename required the existing Get-CWMetricStatisticsForAllVersion
@@ -2147,6 +2161,116 @@ function Get-AWSDynamoDBInventory {
     return ,$ddbResult
 }
 
+function Get-AWSS3TablesInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    $result = New-Object collections.arraylist
+
+    # AWS.Tools.S3Tables (GA Nov 2024) could not be introspected in the build
+    # sandbox, so we do NOT assume auto-paging. Use an explicit continuation-token
+    # loop for both list cmdlets (see the pagination annotation block above). The
+    # first page is fetched with no token parameter, so a single-page result is
+    # unaffected even if the assumed token name is wrong.
+    $tableBuckets = New-Object collections.arraylist
+    try {
+        $tbToken = $null
+        do {
+            $tbParams = @{ Credential = $Credential; Region = $Region }
+            if ($tbToken) { $tbParams.ContinuationToken = $tbToken }
+            $tbPage = Get-S3TTableBucketList @tbParams -ErrorAction Stop
+            # TableBucketSummary properties: .Arn, .Name, .CreatedAt, .OwnerAccountId, .TableBucketId
+            if ($tbPage.TableBuckets) { [void]$tableBuckets.AddRange(@($tbPage.TableBuckets)) }
+            $tbToken = $AWSHistory.LastServiceResponse.ContinuationToken
+        } while ($tbToken)
+    } catch {
+        Write-Host "Failed to get S3 Tables bucket list for region $Region in account $($AccountInfo.Account)" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+    }
+
+    foreach ($bucket in $tableBuckets) {
+        # Initialize to empty hashtable BEFORE the try so GetEnumerator() is safe if
+        # the tag call fails. AWS Tools AOS selects the Tags Dictionary<string,string>
+        # directly (verified: default Select = 'Tags' on GetS3TResourceTagCmdlet), so no
+        # .Tags sub-property is needed; a hashtable and a Dictionary both expose GetEnumerator().
+        $bucketTags = @{}
+        try {
+            $tagsResult = Get-S3TResourceTag -ResourceArn $bucket.Arn `
+                -Credential $Credential -Region $Region -ErrorAction Stop
+            if ($null -ne $tagsResult) { $bucketTags = $tagsResult }
+        } catch {
+            Write-Host "Failed to get tags for S3 Tables bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+            Write-Host "Error: $_" -ForegroundColor Yellow
+        }
+
+        $tables = New-Object collections.arraylist
+        try {
+            $tblToken = $null
+            do {
+                $tblParams = @{ TableBucketARN = $bucket.Arn; Credential = $Credential; Region = $Region }
+                if ($tblToken) { $tblParams.ContinuationToken = $tblToken }
+                $tblPage = Get-S3TTableList @tblParams -ErrorAction Stop
+                # TableSummary properties: .TableARN, .Namespace (List<string>), .Type,
+                # .CreatedAt, .ModifiedAt, .Name. NOTE: .WarehouseLocation is NOT on
+                # TableSummary -- it requires a per-table Get-S3TTable call.
+                if ($tblPage.Tables) { [void]$tables.AddRange(@($tblPage.Tables)) }
+                $tblToken = $AWSHistory.LastServiceResponse.ContinuationToken
+            } while ($tblToken)
+        } catch {
+            Write-Host "Failed to get S3 Tables list for bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Red
+            Write-Host "Error: $_" -ForegroundColor Red
+            continue
+        }
+
+        foreach ($table in $tables) {
+            $tableNamespace = $table.Namespace -join "/"
+            $warehouseLocation = ""
+            try {
+                $tableDetail = Get-S3TTable -TableBucketARN $bucket.Arn `
+                    -Namespace $tableNamespace -Name $table.Name `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                $warehouseLocation = $tableDetail.WarehouseLocation
+            } catch {
+                Write-Host "Failed to get details for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
+            }
+
+            $s3tObj = [PSCustomObject] @{
+                "AwsAccountId"      = $AccountInfo.Account
+                "AwsAccountAlias"   = $AccountAlias
+                "Region"            = $Region
+                "TableBucketName"   = $bucket.Name
+                "TableBucketArn"    = $bucket.Arn
+                "Namespace"         = $tableNamespace
+                "TableName"         = $table.Name
+                "TableArn"          = $table.TableARN
+                "ResourceArn"       = $table.TableARN
+                "WarehouseLocation" = $warehouseLocation
+                "TableType"         = $table.Type
+                "CreatedAt"         = $table.CreatedAt
+                "ModifiedAt"        = $table.ModifiedAt
+                "BackupPlans"       = ""
+                "InBackupPlan"      = $false
+            }
+            Add-BackupColumnsToRow -Row $s3tObj -ResourceArn $table.TableARN
+
+            foreach ($tag in $bucketTags.GetEnumerator()) {
+                $sanitizedKey = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+                $s3tObj | Add-Member -MemberType NoteProperty -Name "Tag: $sanitizedKey" `
+                                     -Value $tag.Value -Force
+            }
+
+            [void]$result.Add($s3tObj)
+        }
+    }
+
+    return ,$result
+}
+
 function Get-AWSSimpleServiceCounts {
     param(
         $Credential,
@@ -2285,7 +2409,7 @@ function Test-RowTagConditionMatch {
         $tagKey = $rawKey
     }
     $sanitizedKey = $tagKey -replace '[^a-zA-Z0-9]', '_'
-    $prop = $Row.PSObject.Properties[$sanitizedKey]
+    $prop = $Row.PSObject.Properties["Tag: $sanitizedKey"]
     if ($null -eq $prop) { return $false }
     $rowValue = $prop.Value
     if ($null -eq $rowValue) { return $false }
@@ -2337,7 +2461,8 @@ function Get-AWSBackupPlanInventory {
         $FSxList,
         $FSxFileSystemList,
         $S3List,
-        $DDBList
+        $DDBList,
+        $S3TablesList
     )
 
     $backupPlanResult = New-Object collections.arraylist
@@ -2547,6 +2672,37 @@ function Get-AWSBackupPlanInventory {
                 }
               }
             }
+            "s3tables" {
+              # arn:{partition}:s3tables:::* in the case of 'all s3tables'
+              # (commercial: arn:aws:s3tables:::*, GovCloud: arn:aws-us-gov:s3tables:::*)
+              if (($resource -split ':')[-1] -eq "*") {
+                foreach ($s3tObj in $S3TablesList) {
+                  if ($Region -eq $s3tObj.Region -and $AccountInfo.Account -eq $s3tObj.AwsAccountId) {
+                    if ("" -eq $s3tObj.BackupPlans) {
+                        $s3tObj.BackupPlans = "$($plan.BackupPlanName)"
+                    } else {
+                        $s3tObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $s3tObj.InBackupPlan = $true
+                  }
+                }
+              } else {
+                # Extract bucket name from bucket-level ARN: split('/')[1] = "bucket-name"
+                $tableBucketName = ($resource -split '/')[1]
+                foreach ($s3tObj in $S3TablesList) {
+                  if ($s3tObj.TableBucketName -eq $tableBucketName -and
+                      $Region -eq $s3tObj.Region -and
+                      $AccountInfo.Account -eq $s3tObj.AwsAccountId) {
+                    if ("" -eq $s3tObj.BackupPlans) {
+                        $s3tObj.BackupPlans = "$($plan.BackupPlanName)"
+                    } else {
+                        $s3tObj.BackupPlans += ", $($plan.BackupPlanName)"
+                    }
+                    $s3tObj.InBackupPlan = $true
+                  }
+                }
+              }
+            }
             "dynamodb" {
               if(($resource -split ':')[-1] -eq "*") {
                 foreach ($ddbObj in $DDBList) {
@@ -2610,7 +2766,7 @@ function Get-AWSBackupPlanInventory {
 
         $allWorkloadLists = @(
           $EC2List, $EC2UnattachedVolumesRaw, $EC2AttachedVolList, $RDSList,
-          $EFSList, $FSxList, $FSxFileSystemList, $S3List, $DDBList
+          $EFSList, $FSxList, $FSxFileSystemList, $S3List, $DDBList, $S3TablesList
         )
 
         if ($orTags.Count -gt 0 -or $andConds.Count -gt 0 -or $notConds.Count -gt 0) {
@@ -4392,11 +4548,21 @@ function getAWSData($cred) {
       foreach ($ddbItem in $ddbResult) { $ddbList.Add($ddbItem) | Out-Null }
     }
 
+    # Collect S3 Tables inventory for this region. Must run before the backup
+    # plan block below so $s3TablesList is populated when passed to
+    # Get-AWSBackupPlanInventory for S3 Tables backup attribution.
+    $s3TablesResult = Get-AWSS3TablesInventory -Credential $cred -Region $awsRegion `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+    if ($null -ne $s3TablesResult) {
+      foreach ($s3tItem in $s3TablesResult) { $s3TablesList.Add($s3tItem) | Out-Null }
+    }
+
     # Collect backup plan inventory for this region
     $backupPlanResult = Get-AWSBackupPlanInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias -EC2List $ec2List -EC2UnattachedVolumesRaw $ec2UnattachedVolumesRaw `
         -EC2AttachedVolList $ec2AttachedVolList -RDSList $rdsList -EFSList $efsList -FSxList $fsxList `
-        -FSxFileSystemList $fsxFileSystemList -S3List $s3List -DDBList $ddbList
+        -FSxFileSystemList $fsxFileSystemList -S3List $s3List -DDBList $ddbList `
+        -S3TablesList $s3TablesList
     if ($null -ne $backupPlanResult) {
       foreach ($bpItem in $backupPlanResult) { $backupPlanList.Add($bpItem) | Out-Null }
     }
@@ -4553,6 +4719,13 @@ function getAWSData($cred) {
   $mergedBackupAggregate = Merge-BackupAggregates -SourceAggregates $backupSourceAggregates `
     -NativeBackupLists $accountNativeBackups
 
+  # NOTE: $s3TablesList intentionally omitted. AWS Backup does not support S3 Tables
+  # as a protected resource type as of July 2026 (absent from the AWS Backup feature
+  # availability matrix). When support is added, verify the ResourceArn shape of
+  # recovery points: if bucket-level (arn:aws:s3tables:.../bucket/name), a fan-out
+  # from TableBucketArn -> table rows will be needed rather than a direct ResourceArn
+  # match (rows carry table-level ARNs). Confirm via:
+  #   Get-BAKRecoveryPointsByBackupVault | Where { $_.ResourceArn -like '*s3tables*' }
   $workloadLists = @(
     $ec2List, $ec2AttachedVolList, $ec2UnattachedVolList, $rdsList, $efsList,
     $fsxFileSystemList, $fsxList, $s3List, $ddbList, $redshiftClusterList
@@ -4611,6 +4784,7 @@ $rdsSnapshotList = New-Object collections.arraylist
 $redshiftClusterList = New-Object collections.arraylist
 $eksNodeGroupList = New-Object collections.arraylist
 $eksList = New-Object collections.arraylist
+$s3TablesList = New-Object collections.arraylist
 
 try{
 if ($RegionToQuery) {
@@ -5085,8 +5259,8 @@ if ($Anonymize) {
                                   "NodegroupName", "NodeRole", "OwnerId", "ParentRecoveryPointArn", "Project", "RDSInstance",
                                   "RecoveryPointArn", "RequestId", "ResourceArn", "ResourceId", "ResourceName", "Resources",
                                   "RoleArn", "RuleId", "RuleName", "SnapshotArn", "SnapshotId", "SnapshotIdentifier",
-                                  "TableArn", "TableId", "TableName", "TargetBackupVaultName",
-                                  "VersionId", "VolumeId", "VpcId")
+                                  "TableArn", "TableBucketArn", "TableBucketName", "TableId", "TableName", "TargetBackupVaultName",
+                                  "VersionId", "VolumeId", "VpcId", "WarehouseLocation")
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
     foreach($field in $anonFieldsList){
@@ -5169,7 +5343,7 @@ if ($Anonymize) {
             if (-not $global:anonymizeDict.ContainsKey("$tagName")) {
                 $global:anonymizeDict["$tagName"] = Get-NextAnonymizedValue($script:tagKeyAnonField)
             }
-            $anonymizedTagKey = $script:tagPrefix + $global:anonymizeDict["$tagName"]
+            $anonymizedTagKey = $script:tagPrefix + " " + $global:anonymizeDict["$tagName"]
 
             $anonymizedTagValue = $null
             if ($null -ne $tagValue) {
@@ -5199,7 +5373,10 @@ if ($Anonymize) {
               $DataObject.$propertyName = $newVal
             }
           }
-          elseif ($property.Value -is [PSObject]) {
+          elseif ($property.Value -is [PSObject] -and -not $property.Value.GetType().IsValueType) {
+              # Skip value types (DateTime, enum, bool, int…): PowerShell wraps them
+              # in PSObject so the -is [PSObject] check matches, but they have read-only
+              # properties that cause 'is a ReadOnly property' errors on recursion.
               $DataObject.$propertyName = Invoke-Anonymization -DataObject $property.Value
           }
           elseif ($property.Value -is [System.Collections.IEnumerable] -and -not ($property.Value -is [string])) {
@@ -5246,6 +5423,7 @@ if ($Anonymize) {
   $redshiftClusterList = Invoke-CollectionAnonymization -Collection $redshiftClusterList
   $snapshotStorageCostsList = Invoke-CollectionAnonymization -Collection $snapshotStorageCostsList
   $ddbList = Invoke-CollectionAnonymization -Collection $ddbList
+  $s3TablesList = Invoke-CollectionAnonymization -Collection $s3TablesList
   $ec2List = Invoke-CollectionAnonymization -Collection $ec2List
   $ec2AttachedVolList = Invoke-CollectionAnonymization -Collection $ec2AttachedVolList
   $ec2UnattachedVolList = Invoke-CollectionAnonymization -Collection $ec2UnattachedVolList
@@ -5316,6 +5494,10 @@ $fsxList | Export-CSV -path $outputFSX
 
 Write-Host "CSV file output to: $outputDDB"  -ForegroundColor Green
 $ddbList | Export-CSV -path $outputDDB
+
+Add-TagsToAllObjectsInList($s3TablesList)
+Write-Host "CSV file output to: $outputS3Tables" -ForegroundColor Green
+$s3TablesList | Export-CSV -path $outputS3Tables
 
 Write-Host "CSV file output to: $outputSecrets"  -ForegroundColor Green
 $secretsList | Export-CSV -path $outputSecrets
@@ -5476,6 +5658,7 @@ Write-Host "Total # of SQS Queues: $($totalQueues)"  -ForegroundColor Green
 Write-Host
 Write-Host "Total # of DynamoDB Tables: $($ddbList.count)"  -ForegroundColor Green
 Write-Host "Total table size of all DynamoDB Tables: $ddbTotalGiB GiB or $ddbTotalGB GB or $ddbTotalTiB TiB or $ddbTotalTB TB"  -ForegroundColor Green
+Write-Host "Total # of S3 Tables (Iceberg tables): $($s3TablesList.Count)" -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green

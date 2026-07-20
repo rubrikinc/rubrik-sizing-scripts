@@ -90,6 +90,10 @@ To run the AWS sizing script, ensure you have the following:
                       "s3:GetBucketTagging",
                       "s3:ListStorageLensConfigurations",
                       "s3:GetStorageLensConfiguration",
+                      "s3tables:ListTableBuckets",
+                      "s3tables:ListTables",
+                      "s3tables:GetTable",
+                      "s3tables:ListTagsForResource",
                       "secretsmanager:ListSecrets",
                       "sts:AssumeRole",
                       "sqs:ListQueues"
@@ -219,7 +223,7 @@ In both cases run the sizing script with the appropriate options and send the da
     ```powershell
     .\Get-AWSSizingInfo.ps1
     ```
-1. The script will output a summary to the console and create a zip file with CSV and JSON files, along with a LOG of the console output.
+1. The script will output a summary to the console and create a zip file with CSV and JSON files (including `aws_s3_tables_info-<timestamp>.csv` for S3 Tables inventory), along with a LOG of the console output.
 1. Please download the ZIP file and send it to your Rubrik representative.
 
 ### Aurora DB Processing
