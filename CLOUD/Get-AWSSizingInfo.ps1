@@ -5237,13 +5237,15 @@ $s3TotalTBsFormatted  = $s3TotalTBs.GetEnumerator() |
   $totalAwsManagedKeys = (@($kmsList) | Where-Object { $_.KeyManager -eq 'AWS' }).Count
   $totalQueues = ($sqsList.Queues | Measure-Object -Sum).sum
 
-  # If statement is a workaround for error when getting backup plans when payer account 
-  # does not allow access for linked accounts
-  if ($null -eq $backupCostsList.AWSBackupNetUnblendedCost) {
+  $backupTotalNetUnblendedCost = 0
+  if ($backupCostsList.Count -eq 0 -or $null -eq $backupCostsList.AWSBackupNetUnblendedCost) {
     Write-Error "No AWS Backup costs found."
     Write-Error "AWS Cost data not reported"
   } else {
-    $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost | ForEach-Object { [decimal]($_.TrimStart('$')) } | Measure-Object -Sum).sum
+    $backupTotalNetUnblendedCost = ($backupCostsList.AWSBackupNetUnblendedCost |
+      Where-Object { $null -ne $_ } |
+      ForEach-Object { [decimal]($_.TrimStart('$')) } |
+      Measure-Object -Sum).Sum
   }
 
 if ($Anonymize) {
