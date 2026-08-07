@@ -53,25 +53,34 @@ To run the AWS sizing script, ensure you have the following:
                   "Sid": "VisualEditor0",
                   "Effect": "Allow",
                   "Action": [
-                      "backup:ListBackupPlans",
-                      "backup:ListBackupSelections",
                       "backup:GetBackupPlan",
                       "backup:GetBackupSelection",
+                      "backup:ListBackupPlans",
+                      "backup:ListBackupSelections",
+                      "backup:ListBackupVaults",
+                      "backup:ListRecoveryPointsByBackupVault",
                       "ce:GetCostAndUsage",
+                      "ce:GetDimensionValues",
                       "cloudwatch:GetMetricStatistics",
                       "cloudwatch:ListMetrics",
-                      "dynamodb:ListTables",
+                      "dynamodb:DescribeContinuousBackups",
                       "dynamodb:DescribeTable",
+                      "dynamodb:ListBackups",
+                      "dynamodb:ListTables",
+                      "ec2:DescribeImages",
                       "ec2:DescribeInstances",
                       "ec2:DescribeRegions",
+                      "ec2:DescribeSnapshots",
                       "ec2:DescribeVolumes",
                       "ec2:DescribeVpcs",
                       "eks:DescribeCluster",
+                      "eks:DescribeNodegroup",
                       "eks:ListClusters",
                       "eks:ListNodegroups",
                       "elasticloadbalancing:DescribeLoadBalancers",
                       "elasticloadbalancing:DescribeTags",
                       "elasticfilesystem:DescribeFileSystems",
+                      "fsx:DescribeBackups",
                       "fsx:DescribeFileSystems",
                       "fsx:DescribeVolumes",
                       "iam:ListAccountAliases",
@@ -82,8 +91,12 @@ To run the AWS sizing script, ensure you have the following:
                       "kms:ListAliases",
                       "kms:ListKeys",
                       "organizations:ListAccounts",
+                      "rds:DescribeDBClusterSnapshots",
                       "rds:DescribeDBClusters",
                       "rds:DescribeDBInstances",
+                      "rds:DescribeDBSnapshots",
+                      "redshift:DescribeClusters",
+                      "redshift:DescribeClusterSnapshots",
                       "route53:ListHostedZones",
                       "s3:GetBucketLocation",
                       "s3:ListAllMyBuckets",
@@ -210,7 +223,7 @@ To run the script from a local laptop or server do the following:
 1. Verify that PowerShell v7.4.5 or higher is installed.
 1. Install the AWS modules for PowerShell with the following command:
     ```powershell
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.S3Control,AWS.Tools.S3Tables,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
 
     ```
 1. Ensure AWS credentials are set up by using the `Set-AWSCredential` command. For example:
