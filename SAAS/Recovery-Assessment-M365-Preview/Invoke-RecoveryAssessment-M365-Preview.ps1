@@ -1,3 +1,4 @@
+#Requires -Modules Microsoft.Graph.Reports, Microsoft.Graph.Authentication
 <#
 .SYNOPSIS
     M365 Recovery Criticality Assessment - PREVIEW BUILD. Runs the exact same
@@ -19,6 +20,20 @@
     a tunable, completely unredacted assessment.
 
 .DESCRIPTION
+    A NOTE ON VERSION NUMBERS: this script tracks two independent version
+    lines, and they will not match each other - that's by design, not a typo.
+      - The "PREVIEW BUILD (vX.Y.Z)" banner (console header, HTML report
+        footer, _RunManifest.txt header) tracks changes to THIS script's own
+        Preview-only redaction/lock behavior.
+      - The vX.Y.Z numbers cited throughout the rest of this .DESCRIPTION and
+        in inline comments (e.g. "v3.1.0", "v3.10.0") track the underlying
+        recovery-model/tiering engine, which this script shares with
+        Invoke-RecoveryAssessment-M365-Full.ps1 and which is versioned on its
+        own, separate track.
+    If you're chasing a scoring/tiering/recovery-time question, follow the
+    inline vX.Y.Z comments. If you're chasing a Preview-specific redaction or
+    UI-lock question, follow the PREVIEW BUILD banner version instead.
+
     v3.1.0 - corrects what "recovery time" means for ABR. v3.0.0 tiered
     Mailboxes/OneDrive/SharePoint by an efficiency-ranked walk-forward budget
     (rank by score-per-minute-of-FULL-object-recovery-time, then fill Groups
@@ -144,13 +159,13 @@
     Folder to write CSVs/HTML to. Defaults to a timestamped folder.
 
 .EXAMPLE
-    .\Invoke-RecoveryAssessment-M365-Full.ps1
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1
 
 .EXAMPLE
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -Full -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -Full -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
 
 .EXAMPLE
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -CompareTo .\M365CriticalityAssessment_20260615_090000 -OverridesFile .\overrides.json
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -CompareTo .\M365CriticalityAssessmentPreview_20260615_090000 -OverridesFile .\overrides.json
 #>
 
 [CmdletBinding()]
@@ -5389,38 +5404,65 @@ if (-not $SkipHtmlReport) {
     Write-Host "HTML report              ->  $htmlReportPath" -ForegroundColor Gray
 }
 
-$manifest = @"
+# Precompute every dynamic value first, then substitute into a LITERAL
+# (single-quoted) template via .Replace() - same pattern the HTML report uses
+# (.Replace() against __PLACEHOLDER__ tokens) instead of an expandable "@"..."@
+# here-string. An expandable here-string re-parses its own source for $/$()
+# syntax; a literal one doesn't, so nothing in a run-time value (a tenant
+# label, an -OverridesFile path, etc.) can ever be misread as PowerShell
+# syntax, however unlikely that is in practice today.
+$manifestRunTimeUtc      = (Get-Date).ToUniversalTime().ToString()
+$manifestTierSplit       = $TierSplit -join ' / '
+$manifestPermissionMode  = if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' }
+$manifestGraphScopes     = if ($Full) { if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' } } else { 'Reports.Read.All' }
+$manifestSignedInAs      = (Get-MgContext).Account
+$manifestOverridesFile   = if ($OverridesFile) { $OverridesFile } else { '(none)' }
+$manifestComparedAgainst = if ($CompareTo) { $CompareTo } else { '(none)' }
+$manifestExceedsLines    = ( @('Critical Group 1', 'Critical Group 2', 'Critical Group 3') | ForEach-Object {
+        $m = $recoveryModel.Milestones[$_]
+        if ($m.ExceedsTarget) { "  $_ exceeds its target by: $([math]::Round($m.TargetGapMin / 60, 1)) hr" }
+    } ) -join "`n"
+$manifestFullEnrichment  = if ($Full) {
+    $groupsLine = if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" } else { '' }
+    "`nFull-mode enrichment:`n  Users profile-enriched: $($userEnrichment.Count)`n  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$groupsLine"
+} else { '' }
+$manifestGroup1CumMin    = ([math]::Round($group1CumMin, 1)).ToString()
+$manifestGroup1CumHr     = ([math]::Round($group1CumMin / 60, 1)).ToString()
+$manifestFullRestoreMin  = ([math]::Round($recoveryModel.FullRestoreUnprioritizedMin, 1)).ToString()
+$manifestFullRestoreHr   = ([math]::Round($recoveryModel.FullRestoreUnprioritizedMin / 60, 1)).ToString()
+
+$manifest = @'
 Recovery Assessment - M365 - PREVIEW BUILD - Run Manifest (v3.7.2)
-Run time (UTC):        $((Get-Date).ToUniversalTime())
-Usage report period:   $Period
-Tier split (Teams only): $($TierSplit -join ' / ')
-Permission mode:       $(if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' })
-Graph scopes used:     $(if ($Full) { if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' } } else { 'Reports.Read.All' })
-Signed in as:          $((Get-MgContext).Account)
-Overrides file used:   $(if ($OverridesFile) { $OverridesFile } else { '(none)' })
-Compared against:      $(if ($CompareTo) { $CompareTo } else { '(none)' })
+Run time (UTC):        __RUN_TIME_UTC__
+Usage report period:   __PERIOD__
+Tier split (Teams only): __TIER_SPLIT__
+Permission mode:       __PERMISSION_MODE__
+Graph scopes used:     __GRAPH_SCOPES__
+Signed in as:          __SIGNED_IN_AS__
+Overrides file used:   __OVERRIDES_FILE__
+Compared against:      __COMPARED_AGAINST__
 
 Tiering: all four workloads ranked by composite score and split by -TierSplit
-($($TierSplit -join ' / ')) - Group 1 = top tier = recover first.
+(__TIER_SPLIT__) - Group 1 = top tier = recover first.
 
 RTO targets (compliance check against ABR recovery time - Mailboxes/OneDrive/SharePoint only):
-  Preset resolved:       $resolvedPresetLabel
-  Reason:                $presetReason
-  Group 1 target:        $Group1TargetHours hr
-  Group 2 target:        $Group2TargetHours hr (cumulative)
-  Group 3 target:        $Group3TargetHours hr (cumulative)
-$(( @('Critical Group 1','Critical Group 2','Critical Group 3') | ForEach-Object { $m = $recoveryModel.Milestones[$_]; if ($m.ExceedsTarget) { "  $_ exceeds its target by: $([math]::Round($m.TargetGapMin/60,1)) hr" } } ) -join "`n")
+  Preset resolved:       __PRESET_LABEL__
+  Reason:                __PRESET_REASON__
+  Group 1 target:        __G1_TARGET__ hr
+  Group 2 target:        __G2_TARGET__ hr (cumulative)
+  Group 3 target:        __G3_TARGET__ hr (cumulative)
+__EXCEEDS_TARGET_LINES__
 Row counts by workload:
-  Mailboxes:               $($mailboxes.Count)
-  OneDrive accounts:       $($onedrive.Count)
-  SharePoint sites:        $($sharepoint.Count)  (excluded as OneDrive/Team: $($sharepointExcluded.Count))
-  Teams:                   $($teams.Count)
-$(if ($Full) { "`nFull-mode enrichment:`n  Users profile-enriched: $($userEnrichment.Count)`n  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$(if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" })" })
+  Mailboxes:               __MAILBOX_COUNT__
+  OneDrive accounts:       __ONEDRIVE_COUNT__
+  SharePoint sites:        __SHAREPOINT_COUNT__  (excluded as OneDrive/Team: __SHAREPOINT_EXCLUDED_COUNT__)
+  Teams:                   __TEAMS_COUNT__
+__FULL_MODE_ENRICHMENT__
 
 Recovery model (Preview weights/tiers as computed at run time - the HTML report recomputes live):
-  SP/OD throughput tier:  $($recoveryModel.Meta.SPODTierBucket)
-  Group 1 online in:      $([math]::Round($group1CumMin,1)) min ($([math]::Round($group1CumMin/60,1)) hr)  [ABR, recent/active data]
-  Full restore (all):     $([math]::Round($recoveryModel.FullRestoreUnprioritizedMin,1)) min ($([math]::Round($recoveryModel.FullRestoreUnprioritizedMin/60,1)) hr)  [Mass Recovery, full data]
+  SP/OD throughput tier:  __SPOD_TIER__
+  Group 1 online in:      __G1_CUM_MIN__ min (__G1_CUM_HR__ hr)  [ABR, recent/active data]
+  Full restore (all):     __FULL_RESTORE_MIN__ min (__FULL_RESTORE_HR__ hr)  [Mass Recovery, full data]
 
 PREVIEW BUILD: this is the redacted preview script, not the full assessment.
 Group 1 above is this tenant's real data end to end. Groups 2/3/4 in the HTML
@@ -5429,7 +5471,35 @@ weight sliders, keyword tables, and manual overrides are shown read-only/frozen
 so Group 1 can't be re-tiered by mistake. RTO targets, downtime cost, recovery
 window, and SP/OD throughput tier are still live. Run Invoke-RecoveryAssessment-M365-Full.ps1
 (the full script) for a tunable, fully unredacted assessment.
-"@
+'@
+
+$manifest = $manifest.
+    Replace('__RUN_TIME_UTC__', $manifestRunTimeUtc).
+    Replace('__PERIOD__', $Period).
+    Replace('__TIER_SPLIT__', $manifestTierSplit).
+    Replace('__PERMISSION_MODE__', $manifestPermissionMode).
+    Replace('__GRAPH_SCOPES__', $manifestGraphScopes).
+    Replace('__SIGNED_IN_AS__', $manifestSignedInAs).
+    Replace('__OVERRIDES_FILE__', $manifestOverridesFile).
+    Replace('__COMPARED_AGAINST__', $manifestComparedAgainst).
+    Replace('__PRESET_LABEL__', $resolvedPresetLabel).
+    Replace('__PRESET_REASON__', $presetReason).
+    Replace('__G1_TARGET__', $Group1TargetHours.ToString()).
+    Replace('__G2_TARGET__', $Group2TargetHours.ToString()).
+    Replace('__G3_TARGET__', $Group3TargetHours.ToString()).
+    Replace('__EXCEEDS_TARGET_LINES__', $manifestExceedsLines).
+    Replace('__MAILBOX_COUNT__', $mailboxes.Count.ToString()).
+    Replace('__ONEDRIVE_COUNT__', $onedrive.Count.ToString()).
+    Replace('__SHAREPOINT_COUNT__', $sharepoint.Count.ToString()).
+    Replace('__SHAREPOINT_EXCLUDED_COUNT__', $sharepointExcluded.Count.ToString()).
+    Replace('__TEAMS_COUNT__', $teams.Count.ToString()).
+    Replace('__FULL_MODE_ENRICHMENT__', $manifestFullEnrichment).
+    Replace('__SPOD_TIER__', $recoveryModel.Meta.SPODTierBucket).
+    Replace('__G1_CUM_MIN__', $manifestGroup1CumMin).
+    Replace('__G1_CUM_HR__', $manifestGroup1CumHr).
+    Replace('__FULL_RESTORE_MIN__', $manifestFullRestoreMin).
+    Replace('__FULL_RESTORE_HR__', $manifestFullRestoreHr)
+
 Set-Content -Path (Join-Path $OutputPath '_RunManifest.txt') -Value $manifest -Encoding UTF8
 
 Write-Host "`n=== Done ===" -ForegroundColor Cyan
