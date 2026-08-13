@@ -4,7 +4,7 @@ A redacted version of the full assessment, safe to run live against a real tenan
 
 **Script file:** `Invoke-RecoveryAssessment-M365-Preview.ps1`
 
-Looking for the complete, unredacted build for a real engagement? See [`../full_script/README.md`](../full_script/README.md).
+A separate, complete, unredacted build of this assessment exists for real customer engagements (no locked figures, live scoring/override controls, `-DetailedSizing` support). It's distributed separately — contact your Rubrik team for it.
 
 ## Permissions & Prerequisites
 
@@ -57,8 +57,28 @@ Same file set as the full script, with the same redaction applied to both the CS
 
 ## How Tiering Works
 
-Identical to the full script — see [`../full_script/README.md`](../full_script/README.md)'s "How Tiering Works" section for the scoring and RTO-preset mechanics. Only what's *shown* differs between the two builds.
+Every object gets a composite score from weighted, normalized metrics, so a mailbox's item count can't be swamped by a OneDrive account's byte count. Mailboxes, OneDrive, and SharePoint are walked into Critical Group 1 (highest priority) until adding the next object would exceed Group 1's recovery-time budget, then into Group 2 against its own remaining budget, then Group 3. Teams has no independent recovery-time model, so it's split into even thirds by score instead.
+
+| Tier | Meaning |
+|---|---|
+| Critical Group 1 | Recovers first — highest priority within its time budget |
+| Critical Group 2 | Recovers next, within its own remaining budget |
+| Critical Group 3 | Recovers last among still-active objects |
+| Group 4 | Minimal activity in the period; recovered via bulk Mass Recovery, not on the critical path |
+
+**RTO presets:**
+
+| Preset | Group 1 | Group 2 | Group 3 |
+|---|---|---|---|
+| Standard | 4h | 24h | 72h |
+| Enterprise | 24h | 5 days | 10 days |
+| Auto (default) | Automatically picks Standard or Enterprise from an early tenant-wide recovery-time estimate |
+| Custom | Any values you pass explicitly via `-Group1/2/3TargetHours` — always wins over a preset |
+
+Scoring weights are visible (read-only) in the report's Methodology & Glossary tab. `-TierSplit` reshapes Teams' thirds.
 
 ## Known Limitations
 
-Same underlying model as the full script — see [`../full_script/README.md`](../full_script/README.md)'s "Known Limitations."
+- SharePoint "broad access across the org" is an activity proxy (page views + active files), not a true unique-accessor count.
+- The mailbox-type classifier and hub-site detection use heuristics, not authoritative directory reads.
+- Recovery-time modeling assumes flat throughput caps regardless of slice size, matching the underlying recovery-time calculator's own formulas.
