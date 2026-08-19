@@ -387,13 +387,15 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.3.0"
+$scriptVersion = "1.3.1"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
 $script:tagPrefixLength = 4
 $script:tagKeyAnonField = "TagName"
 $script:tagValueAnonField = "TagValue"
+# Engines that share the RDS API surface but are not supported by Rubrik.
+$script:UnsupportedRDSEngines = @('docdb', 'neptune')
 
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -1307,8 +1309,14 @@ function Get-AWSRDSInventory {
     foreach ($rds in $rdsDBs) {
       Write-Progress -ID 6 -Activity "Processing RDS database: $($rds.DBInstanceIdentifier)" -Status "RDS database $($counter) of $($rdsDBs.Count)" -PercentComplete (($counter / $rdsDBs.Count) * 100)
       $counter++
+      # Aurora is Rubrik-supported but collected at the cluster level; skip here to avoid double-counting.
       if($rds.Engine -like "*aurora*") {
-        Write-Debug "Skipping Aurora database $($rds.DBInstanceIdentifier)"
+        Write-Debug "Skipping Aurora database $($rds.DBInstanceIdentifier) ($($rds.Engine))"
+        continue
+      }
+      $isUnsupported = $rds.Engine -and ($script:UnsupportedRDSEngines | Where-Object { $rds.Engine -like "*$_*" })
+      if($isUnsupported) {
+        Write-Debug "Skipping unsupported engine database $($rds.DBInstanceIdentifier) ($($rds.Engine))"
         continue
       }
       $rdsSizes = ConvertTo-SizeUnits -Value $rds.AllocatedStorage -Prefix "Size" -InputUnit GiB -GBPrecision 3
@@ -3496,6 +3504,15 @@ function Get-AWSRDSSnapshotInventory {
         # prefix; that is the only reliable signal (snapshot ARN does not appear
         # in the RP API which keys on source DB ARN).
         if (& $isAwsBackupName $name) { continue }
+        # Neptune and DocumentDB share the RDS API surface but are unsupported by Rubrik.
+        # Neptune does not produce DB-level snapshots in practice (AWS routes them to the
+        # cluster snapshot API), but both engines are filtered via the shared array for consistency.
+        # Both DocumentDB and Neptune DB-level snapshots are filtered by the guard below.
+        $isUnsupported = $s.Engine -and ($script:UnsupportedRDSEngines | Where-Object { $s.Engine -like "*$_*" })
+        if ($isUnsupported) {
+          Write-Debug "Skipping unsupported engine DB snapshot $($s.DBSnapshotIdentifier) ($($s.Engine))"
+          continue
+        }
 
         $sizeBytes = 0L
         if ($null -ne $s.AllocatedStorage) { $sizeBytes = [long]$s.AllocatedStorage * 1GB }
@@ -3555,6 +3572,14 @@ function Get-AWSRDSSnapshotInventory {
         $name = "$($s.DBClusterSnapshotIdentifier)"
         $arn  = "$($s.DBClusterSnapshotArn)"
         if (& $isAwsBackupName $name) { continue }
+        # Neptune and DocumentDB share the RDS cluster snapshot API but are
+        # unsupported by Rubrik. Neptune cluster snapshots appear here;
+        # DocumentDB cluster snapshots also surface via this API.
+        $isUnsupported = $s.Engine -and ($script:UnsupportedRDSEngines | Where-Object { $s.Engine -like "*$_*" })
+        if ($isUnsupported) {
+          Write-Debug "Skipping unsupported engine cluster snapshot $($s.DBClusterSnapshotIdentifier) ($($s.Engine))"
+          continue
+        }
 
         # Aurora is auto-managed storage: AllocatedStorage on cluster snapshots is
         # always 1 GiB, which would systematically under-report Aurora capacity.
