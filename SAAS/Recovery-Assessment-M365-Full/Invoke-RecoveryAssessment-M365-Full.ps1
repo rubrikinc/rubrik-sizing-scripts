@@ -2386,6 +2386,11 @@ tbody tr:hover td:first-child { background: #FAFBFC; }
 .table-scroll-shell.has-more-right .scroll-fade-right { opacity: 1; }
 .scroll-hint { font-size: .74rem; font-weight: 700; color: var(--blue); white-space: nowrap; opacity: 1; transition: opacity .25s ease; }
 .scroll-hint.scrolled { opacity: 0; visibility: hidden; }
+/* NEW v3.10.3: MAX_TABLE_ROWS cap notice, shown under a workload table (or
+   the Group 1 overview) once there are more matching rows than are rendered. */
+.table-cap-notice { font-size: .78rem; color: var(--dark-gray); padding: .5rem 0 0; }
+.table-cap-notice button { border: 1px solid #D7DCE1; border-radius: 6px; background: #fff; padding: .15rem .5rem; font-size: .76rem; cursor: pointer; color: var(--blue); }
+.table-cap-notice button:hover { background: #F4F6F8; }
 .badge { display: inline-block; padding: .18rem .6rem; border-radius: 999px; font-size: .7rem; font-weight: 700; white-space: nowrap; }
 .badge.override { background: #093565; color: #fff; margin-left: .35rem; }
 .tier-select { border: 1px solid #D7DCE1; border-radius: 6px; padding: .2rem .4rem; font-size: .76rem; }
@@ -2512,6 +2517,21 @@ var DATA = JSON.parse(document.getElementById("report-data").textContent);
 // the same Group 1/2/3 naming convention instead of calling it out as its
 // own "dormant" category, and swaps its badge from amber (which read as an
 // alert) to a neutral gray (--mid-gray) so it doesn't draw the eye.
+// NEW v3.10.3: large-tenant render cap. Every workload table (and the Group 1
+// cross-workload overview) used to render one <tr> per object with no limit -
+// fine at demo scale, but a real tenant with tens of thousands of objects per
+// workload turned "click Criticality Groups" into tens of thousands of DOM
+// rows built and laid out synchronously on every recompute (including the
+// very first page load, since recomputeAll() renders every tab up front) -
+// long enough for the browser to flag the page as unresponsive. Tables now
+// render only the top MAX_TABLE_ROWS (by score, so the highest-priority
+// objects are always what you see first) and show a "Show all" toggle per
+// table/section for when someone genuinely needs the full list on screen
+// (e.g. to eyeball everything before an Export overrides pass). Search and
+// filters still run over the FULL underlying dataset first - the cap only
+// limits how many of the matching rows get rendered, so a search for one
+// specific object always finds it even if it's outside the default top slice.
+var MAX_TABLE_ROWS = 500;
 var TIER_ORDER = ["Critical Group 1","Critical Group 2","Critical Group 3","Group 4"];
 var TIER_META = {
   "Critical Group 1": {bg:"#0E5BCF", fg:"#FFFFFF", short:"Group 1"},
@@ -2635,6 +2655,12 @@ var state = {
   // (true/undefined = show everything, unchanged default behavior; false =
   // essentials-only view). Persisted the same way overrides are, below.
   columnPrefs: {},
+  // NEW v3.10.3: per-workload/section "render every row, not just the top
+  // MAX_TABLE_ROWS" opt-in. Deliberately NOT persisted to localStorage (unlike
+  // overrides/columnPrefs) - defaults back to the fast, capped view on every
+  // fresh page load rather than silently re-triggering the slow render.
+  showAllRows: {},
+  group1ShowAll: false,
   recovery: {
     windowDays: DATA.meta.recoveryWindowDays, licenseTier: DATA.meta.recoveryLicenseTierRequested, costPerHour: DATA.meta.downtimeCostPerHour,
     // NEW v3.0.0: RTO targets (hours), seeded from the resolved server-side
@@ -3620,7 +3646,7 @@ function buildWorkloadSection(wdKey) {
   // is the primary "find this one thing" control - rerenderWorkloadSection
   // preserves focus/cursor position across the re-render so typing doesn't
   // get interrupted.
-  var searchBox = '<input type="text" class="search-box" id="search-' + wdKey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="setFilter(\'' + wdKey + '\',\'search\',this.value)">';
+  var searchBox = '<input type="text" class="search-box" id="search-' + wdKey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="onSearchInput(\'' + wdKey + '\',this.value)">';
 
   var attrFilters = "";
   if (hasEnrichment) {
@@ -3642,10 +3668,19 @@ function buildWorkloadSection(wdKey) {
     ? buildWorkloadTotalsRow(wdKey, visibleRows, "Filtered View (" + visibleRows.length + " of " + rows.length + " shown)")
     : "";
 
-  var bodyRows = visibleRows.slice().sort(function (a, b) { return (b._Score || 0) - (a._Score || 0); }).map(function (row) {
+  var sortedVisible = visibleRows.slice().sort(function (a, b) { return (b._Score || 0) - (a._Score || 0); });
+  var showAll = !!state.showAllRows[wdKey];
+  var renderedRows = showAll ? sortedVisible : sortedVisible.slice(0, MAX_TABLE_ROWS);
+  var isCapped = !showAll && sortedVisible.length > MAX_TABLE_ROWS;
+  var bodyRows = renderedRows.map(function (row) {
     return buildRowHtml(row, wd, wdKey, hasEnrichment, hasMailboxType, hasGroups);
   }).join("");
   if (!bodyRows) { bodyRows = '<tr><td colspan="12" style="text-align:center;color:var(--dark-gray);padding:2rem;white-space:normal;">No rows match the current filters.</td></tr>'; }
+  var capNoticeHtml = isCapped
+    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(sortedVisible.length) + ' rows, sorted by score - search or filter above to narrow, or <button onclick="setShowAllRows(\'' + wdKey + '\')">show all ' + fmtNum(sortedVisible.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    : (showAll && sortedVisible.length > MAX_TABLE_ROWS
+      ? '<div class="table-cap-notice">Showing all ' + fmtNum(sortedVisible.length) + ' rows. <button onclick="setShowAllRows(\'' + wdKey + '\', true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
+      : "");
 
   var extraHeaders = "";
   if (hasEnrichment) { extraHeaders += '<th class="col-detail">Job Title</th><th class="col-detail">Department</th><th class="col-detail">Manager</th>'; }
@@ -3686,6 +3721,7 @@ function buildWorkloadSection(wdKey) {
       "</tr></thead><tbody>" + bodyRows + "</tbody></table></div>" +
       '<div class="scroll-fade-right" aria-hidden="true"></div>' +
     "</div>" +
+    capNoticeHtml +
     "</section>";
 }
 
@@ -3730,6 +3766,32 @@ function setFilter(wdKey, field, value) {
   var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
   f[field] = value;
   rerenderWorkloadSection(wdKey);
+}
+
+// NEW v3.10.3: see MAX_TABLE_ROWS above. reset=true flips back to the fast,
+// capped view; omitted/false renders every row currently passing filters.
+function setShowAllRows(wdKey, reset) {
+  state.showAllRows[wdKey] = !reset;
+  rerenderWorkloadSection(wdKey);
+}
+
+// Same idea as setShowAllRows, for the standalone Group 1 cross-workload
+// overview table (buildGroup1Overview) rather than a per-workload section.
+function setGroup1ShowAll(reset) {
+  state.group1ShowAll = !reset;
+  refreshGroupsBody();
+}
+
+// NEW v3.10.3: debounces the live search box so a fast typist on a large
+// tenant doesn't trigger a full filter+sort+render on every keystroke - only
+// once input has paused for SEARCH_DEBOUNCE_MS. The <input> itself is never
+// re-created mid-type (rerenderWorkloadSection already preserves focus/cursor
+// position), this just delays how often that rebuild actually fires.
+var SEARCH_DEBOUNCE_MS = 250;
+var searchDebounceTimers = {};
+function onSearchInput(wdKey, value) {
+  clearTimeout(searchDebounceTimers[wdKey]);
+  searchDebounceTimers[wdKey] = setTimeout(function () { setFilter(wdKey, "search", value); }, SEARCH_DEBOUNCE_MS);
 }
 
 function onTierDropdownChange(wdKey, identifier, newTier) {
@@ -4069,12 +4131,21 @@ function buildGroup1Overview() {
     });
   });
   combined.sort(function (a, b) { return b.score - a.score; });
-  var rows = combined.map(function (c) {
+  var g1ShowAll = !!state.group1ShowAll;
+  var g1Rendered = g1ShowAll ? combined : combined.slice(0, MAX_TABLE_ROWS);
+  var g1Capped = !g1ShowAll && combined.length > MAX_TABLE_ROWS;
+  var rows = g1Rendered.map(function (c) {
     return "<tr><td>" + esc(c.workload) + "</td><td>" + esc(c.objectName) + "</td><td>" + esc(c.identifier) + "</td><td>" + Math.round(c.score * 100) + '%</td><td class="criteria-tags">' + esc(c.tags) + "</td><td>" + esc(c.lastActivity) + "</td></tr>";
   }).join("") || '<tr><td colspan="6" style="text-align:center;color:var(--dark-gray);padding:2rem;">No Critical Group 1 objects.</td></tr>';
+  var g1CapNoticeHtml = g1Capped
+    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(combined.length) + ' rows, sorted by score - <button onclick="setGroup1ShowAll()">show all ' + fmtNum(combined.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    : (g1ShowAll && combined.length > MAX_TABLE_ROWS
+      ? '<div class="table-cap-notice">Showing all ' + fmtNum(combined.length) + ' rows. <button onclick="setGroup1ShowAll(true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
+      : "");
   return '<section class="workload" id="group1-overview"><h3>Critical Group 1 - All Workloads <span style="font-weight:400;font-size:.9rem;color:var(--dark-gray);">(' + combined.length + ')</span></h3>' +
     '<p class="pill-note">Every object tiered Critical Group 1, across all five workloads, in one place - the full recover-first picture. Recomputes live with the controls above.</p>' +
-    '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Score</th><th>Why</th><th>Last Activity</th></tr></thead><tbody>' + rows + "</tbody></table></div></section>";
+    '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Score</th><th>Why</th><th>Last Activity</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+    g1CapNoticeHtml + "</section>";
 }
 
 // Split into a controls-grid (sliders + Live Impact Preview) that's built
@@ -4346,7 +4417,7 @@ function buildGlossaryHtml() {
   html += "<dt>Entra ID group filter</dt><dd>Full mode + -Groups only (requests the additional Group.Read.All scope). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
   html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
-  html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time).</dd>";
+  html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time). Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>";
   html += "</dl>";
   return html;
 }

@@ -4,7 +4,7 @@ Identifies which mailboxes, OneDrive accounts, SharePoint sites, and Teams matte
 
 **Script file:** `Invoke-RecoveryAssessment-M365-Full.ps1`
 
-Looking for the redacted trade-show/demo build instead? See [`../preview_script/README.md`](../preview_script/README.md).
+Looking for the redacted trade-show/demo build instead? It's distributed as a separate script/repo — contact your Rubrik team for it.
 
 ## Permissions & Prerequisites
 
@@ -57,6 +57,8 @@ A single, self-contained HTML file — no server or installation needed to view 
 Two PDF export options — **One Page Summary** and **Full Report** — both computed fresh from whatever's on screen at export time.
 
 Manual overrides: every row's tier is a dropdown; changing it always wins over the computed tier. `Export overrides` downloads a JSON file — pass it back in via `-OverridesFile` on a later run so overrides persist.
+
+**Large tenants:** the Criticality Groups tab's tables render only the top 500 rows per section by score (highest-priority objects first), not every object — a tenant with tens of thousands of objects per workload would otherwise hang the browser building that many table rows at once. A "Show all N rows" button appears whenever a table is capped, for anyone who needs the full list on screen. Search and filters still run against every object regardless of the cap, so searching for one specific person or site always finds it.
 
 ## How Tiering Works
 
