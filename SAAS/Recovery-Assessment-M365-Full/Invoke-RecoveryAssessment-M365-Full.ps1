@@ -70,55 +70,47 @@
 
 .NOTES
     ============================================================================
-    PERMISSIONS - PREVIEW (default) vs FULL (-Full)
+    PERMISSIONS
     ============================================================================
-    PREVIEW:    Entra role "Reports Reader". Delegated scope Reports.Read.All
-              only. No directory/user/site read access requested or needed.
-    FULL: Same role. Adds delegated scopes User.Read.All, Sites.Read.All.
-              Buys: user profile enrichment (Job Title, Department, Employee
+    BASE (always requested): Entra role "Reports Reader". Delegated scopes
+              Reports.Read.All, User.Read.All, Sites.Read.All. Buys: full
+              tiering, recovery time, and cost modeling for every workload,
+              plus user profile enrichment (Job Title, Department, Employee
               Type, Manager, manager roll-up chain, mailbox-type heuristic,
               title-weight scoring) and exact Team<->SharePoint site
-              resolution. Never requested unless -Full is passed.
-    GROUPS (-Groups, requires -Full): Adds delegated scope Group.Read.All.
-              Buys: each user's Entra ID group membership (Mailboxes/OneDrive
-              only - same UPN join as manager enrichment, resolved from the
-              SAME single directory pull, no extra Graph call), surfaced as
-              a "Filter to Entra ID group" control next to the manager filter
-              so you can bulk-select/mass-tier "everyone in this group" -
-              mirroring how RSC Mass Recovery groups users by AD/Entra ID
-              Group for OneDrive/Exchange. Requests the broader Group.Read.All
-              rather than the strict-minimum GroupMember.Read.All so a future
+              resolution.
+    GROUPS (-Groups): Adds delegated scope Group.Read.All. Buys: each user's
+              Entra ID group membership (Mailboxes/OneDrive only - same UPN
+              join as the base enrichment pull, resolved from the SAME single
+              directory pull, no extra Graph call), surfaced as a "Filter to
+              Entra ID group" control next to the manager filter so you can
+              bulk-select/mass-tier "everyone in this group" - mirroring how
+              RSC Mass Recovery groups users by AD/Entra ID Group for
+              OneDrive/Exchange. Requests the broader Group.Read.All rather
+              than the strict-minimum GroupMember.Read.All so a future
               per-group detail lookup (type, owners, dynamic membership rule)
               does not require asking the customer for a second consent grant.
-              Ignored (with a warning) if passed without -Full, since there is
-              no bulk user pull to expand group membership onto without it.
-    DETAILED SIZING (-DetailedSizing, requires -Full): NOT a Graph scope - a
-              SEPARATE connection entirely (Connect-ExchangeOnline, via the
-              ExchangeOnlineManagement PowerShell module) plus a per-mailbox
-              loop over every active mailbox. Buys: Archive Mailbox storage/
-              items and Recoverable Items folder storage/items on the Sizing
-              tab, ported from the standalone Get-RubrikM365SizingInfo.ps1
-              sizing script. Without this switch, the Sizing tab still shows
+    DETAILED SIZING (-DetailedSizing): NOT a Graph scope - a SEPARATE
+              connection entirely (Connect-ExchangeOnline, via the
+              ExchangeOnlineManagement PowerShell module), a SEPARATE
+              interactive sign-in from the Graph connection above, plus a
+              per-mailbox loop over every active mailbox. Requires a
+              read-only Exchange Online admin role (e.g. "View-Only
+              Recipients" - see README). Buys: Archive Mailbox storage/items
+              and Recoverable Items folder storage/items on the Sizing tab,
+              ported from the standalone Get-RubrikM365SizingInfo.ps1 sizing
+              script. Without this switch, the Sizing tab still shows
               Exchange/OneDrive/SharePoint totals and Archive Mailbox COUNT
-              (free - already in the same usage report every mode collects) -
+              (free - already in the same usage report every run collects) -
               just not Archive storage or Recoverable Items. Opt-in because
               the per-mailbox loop is the slowest, most timeout-prone part of
               the entire run on a large tenant - it runs LAST, after every
               other export has already succeeded, and a failure here never
-              affects the rest of the report. Ignored (with a warning) if
-              passed without -Full.
+              affects the rest of the report.
 
-    NOTE ON NAMING: "Preview"/"Full" above is the PERMISSION MODE controlled by
-    this switch - it is NOT the same axis as which script file you're running.
-    This file (Invoke-RecoveryAssessment-M365-Full.ps1) is the full customer-
-    engagement script; Invoke-RecoveryAssessment-M365-Preview.ps1 is the
-    separate, redacted webinar/trade-show build. Either script file can be run
-    in either permission mode - "the Preview build run with -Full permissions"
-    is a real, valid combination, not a contradiction.
-
-    Hub-site keyword detection runs in BOTH modes (no extra scope - it reuses
+    Hub-site keyword detection needs no extra scope - it reuses
     already-collected page-view/active-file activity as a breadth proxy, NOT
-    a true group-membership count - see README "Hub site detection").
+    a true group-membership count - see README "Hub site detection".
 
     ============================================================================
     TENANT PREREQUISITE
@@ -148,7 +140,7 @@
     .\Invoke-RecoveryAssessment-M365-Full.ps1
 
 .EXAMPLE
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -Full -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
+    .\Invoke-RecoveryAssessment-M365-Full.ps1 -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
 
 .EXAMPLE
     .\Invoke-RecoveryAssessment-M365-Full.ps1 -CompareTo .\M365CriticalityAssessment_20260615_090000 -OverridesFile .\overrides.json
@@ -167,7 +159,7 @@ param(
     [hashtable]$SharePointWeights    = @{ PageViews        = 0.35; ActiveFiles  = 0.35; Storage  = 0.30 },
     [hashtable]$TeamsWeights         = @{ ActiveUsers      = 0.50; ChannelMsgs  = 0.35; Meetings  = 0.15 },
 
-    # NEW v2.0.0: title-keyword weights (0-1 scale). FULL ONLY (needs JobTitle).
+    # NEW v2.0.0: title-keyword weights (0-1 scale). Needs JobTitle (from base enrichment).
     # First (longest/most specific) match wins by highest weight found, matched as a
     # case-insensitive substring against JobTitle. Fully customer-editable - and
     # editable LIVE in the HTML report without re-running the script.
@@ -188,7 +180,13 @@ param(
 
     # NEW v2.0.0: hub-site keywords for the SharePoint "department one-stop-shop"
     # heuristic. No extra Graph scope - see NOTES. Editable live in the report.
-    [string[]]$HubSiteKeywords = @('Payroll','HR','Human Resources','Benefits','IT Help','Help Desk','Service Desk','Finance','Legal','Compliance','Onboarding','Policies'),
+    # Blank by default - deliberately no built-in keyword list. Which
+    # departments/site names actually matter to a business is not something
+    # this tool should guess at; it varies customer to customer. Left blank,
+    # the hub-site heuristic flags nothing. The report's live input shows
+    # example keywords as placeholder (ghost) text only - never a real value
+    # unless the customer types their own.
+    [string[]]$HubSiteKeywords = @(),
     [double]$HubSiteBonus = 0.15,
 
     # Tier split as fractions of the ACTIVE (non-zero-activity) population.
@@ -198,26 +196,22 @@ param(
 
     [switch]$SkipHtmlReport,
 
-    [switch]$Full,
-
-    # NEW: Entra ID group membership enrichment (Mailboxes/OneDrive only, same
-    # UPN join as manager enrichment) - requires -Full (it rides the same
-    # bulk Get-MgUser directory pull) and requests the extra Group.Read.All
-    # scope. Lets you bulk-select/mass-tier "everyone in this group," the
-    # same selection model RSC Mass Recovery uses for AD/Entra ID Groups. If
-    # passed without -Full, it is ignored with a warning - see Main below.
+    # Entra ID group membership enrichment (Mailboxes/OneDrive only) - rides
+    # the same bulk Get-MgUser directory pull already made for base
+    # enrichment and requests the extra Group.Read.All scope. Lets you
+    # bulk-select/mass-tier "everyone in this group," the same selection
+    # model RSC Mass Recovery uses for AD/Entra ID Groups.
     [switch]$Groups,
 
-    # NEW: Sizing tab detail - Archive Mailbox storage/items and Recoverable
+    # Sizing tab detail - Archive Mailbox storage/items and Recoverable
     # Items sizing, ported from the standalone Get-RubrikM365SizingInfo.ps1
-    # sizing script. Requires -Full and a SEPARATE Exchange Online connection
+    # sizing script. Requires a SEPARATE Exchange Online connection
     # (ExchangeOnlineManagement module) plus a per-mailbox loop over every
     # active mailbox - can be slow on large tenants, which is exactly why
     # it's opt-in rather than default. Without this switch, the Sizing tab
     # still shows Exchange/OneDrive/SharePoint totals and Archive Mailbox
     # COUNT (all free, from data already collected) - just not Archive
-    # storage or Recoverable Items. If passed without -Full, it is ignored
-    # with a warning - see Main below.
+    # storage or Recoverable Items.
     [switch]$DetailedSizing,
 
     [switch]$IncludeGroupConnectedSites,
@@ -303,31 +297,22 @@ $ProgressPreference = 'SilentlyContinue'
 #region ---------- Setup / connection ----------
 
 function Assert-GraphModules {
-    param([switch]$Full, [switch]$Groups, [switch]$DetailedSizing)
+    param([switch]$Groups, [switch]$DetailedSizing)
 
-    $required = @('Microsoft.Graph.Reports', 'Microsoft.Graph.Authentication')
+    $required = @('Microsoft.Graph.Reports', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Users', 'Microsoft.Graph.Sites')
     foreach ($m in $required) {
         if (-not (Get-Module -ListAvailable -Name $m)) {
             throw "Required module '$m' is not installed. Run: Install-Module $m -Scope CurrentUser"
         }
         Import-Module $m -ErrorAction Stop
     }
-
-    if ($Full) {
-        foreach ($m in @('Microsoft.Graph.Users', 'Microsoft.Graph.Sites')) {
-            if (-not (Get-Module -ListAvailable -Name $m)) {
-                throw "Required module '$m' is not installed for -Full mode. Run: Install-Module $m -Scope CurrentUser"
-            }
-            Import-Module $m -ErrorAction Stop
-        }
-    }
     # NOTE: -Groups does NOT require the separate Microsoft.Graph.Groups
     # module today - group membership is pulled via -ExpandProperty MemberOf
     # on the same Get-MgUser -All call in Get-UserEnrichmentIndex (already
-    # part of Microsoft.Graph.Users, already required above for -Full). If a
-    # future enhancement adds per-group detail lookups (Get-MgGroup for type/
-    # owners/dynamic membership rule), THAT would need Microsoft.Graph.Groups
-    # added here - it is not a real requirement yet, so it is not asserted.
+    # part of Microsoft.Graph.Users, already required above). If a future
+    # enhancement adds per-group detail lookups (Get-MgGroup for type/owners/
+    # dynamic membership rule), THAT would need Microsoft.Graph.Groups added
+    # here - it is not a real requirement yet, so it is not asserted.
 
     # NEW: -DetailedSizing needs a SEPARATE module (not part of the Graph SDK
     # at all) and a SEPARATE connection (Connect-ExchangeOnline, not
@@ -344,15 +329,13 @@ function Assert-GraphModules {
 
 function Connect-Assessment {
     param(
-        [switch]$Full,
         [switch]$Groups,
         [string]$TenantId,
         [string]$ClientId,
         [string]$CertificateThumbprint
     )
 
-    $scopes = @('Reports.Read.All')
-    if ($Full) { $scopes += @('User.Read.All', 'Sites.Read.All') }
+    $scopes = @('Reports.Read.All', 'User.Read.All', 'Sites.Read.All')
     if ($Groups) { $scopes += @('Group.Read.All') }
 
     $useAppOnly = $TenantId -and $ClientId -and $CertificateThumbprint
@@ -408,11 +391,9 @@ Entra admin center > Applications > App registrations > New registration.
 ## 2. Add API permissions (APPLICATION permissions, not delegated)
 API permissions > Add a permission > Microsoft Graph > Application permissions:
 - Reports.Read.All
-- (Only if you also want Full-mode enrichment/exact Team-site dedupe:)
-  User.Read.All
-  Sites.Read.All
-- (Only if you also want -Groups - Entra ID group-based bulk selection,
-  requires -Full above:)
+- User.Read.All
+- Sites.Read.All
+- (Only if you also want -Groups - Entra ID group-based bulk selection:)
   Group.Read.All
 
 Click "Grant admin consent for <tenant>" - this step requires a Global
@@ -462,7 +443,7 @@ it tries to connect to Exchange Online - the rest of the report is
 unaffected (see Get-DetailedSizingInfo's error handling).
 
 ## 5. Run the assessment
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-Full] [-DetailedSizing] [other params]
+    .\Invoke-RecoveryAssessment-M365-Full.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-Groups] [-DetailedSizing] [other params]
 
 ## When you're done
 Revoke or delete the app registration (or at minimum rotate/remove the
@@ -604,17 +585,17 @@ function Add-UserEnrichment {
 function Add-MailboxTypeHeuristic {
     <#
         v3.0.0: the mailbox usage report (Get-MgReportMailboxUsageDetail,
-        already pulled in PREVIEW mode - no extra scope) includes a real
-        'Recipient Type' column (e.g. "User Mailbox", "Shared Mailbox",
-        "Room Mailbox", "Equipment Mailbox"). Validated against real customer
-        data: the OLD proxy below (AccountEnabled=$false => "likely
-        Shared/Resource") caught 0 of 2 real Shared mailboxes in that data -
-        both had AccountEnabled=$true - i.e. it was worse than a coin flip.
-        Recipient Type is now the AUTHORITATIVE signal and is populated by
-        Get-MailboxCriticality regardless of -Full. The old
-        AccountEnabled-based guess is kept ONLY as a last-resort fallback for
-        the rare tenant/report export where Recipient Type comes back blank,
-        and only runs in that case.
+        already pulled with no extra scope) includes a real 'Recipient Type'
+        column (e.g. "User Mailbox", "Shared Mailbox", "Room Mailbox",
+        "Equipment Mailbox"). Validated against real customer data: the OLD
+        proxy below (AccountEnabled=$false => "likely Shared/Resource")
+        caught 0 of 2 real Shared mailboxes in that data - both had
+        AccountEnabled=$true - i.e. it was worse than a coin flip. Recipient
+        Type is now the AUTHORITATIVE signal and is populated by
+        Get-MailboxCriticality on every run. The old AccountEnabled-based
+        guess is kept ONLY as a last-resort fallback for the rare tenant/
+        report export where Recipient Type comes back blank, and only runs
+        in that case.
     #>
     param([Parameter(Mandatory)] [array] $Data)
     foreach ($row in $Data) {
@@ -629,7 +610,7 @@ function Add-MailboxTypeHeuristic {
             }
         }
         elseif ($null -eq $row.AccountEnabled -or $row.AccountEnabled -eq '') {
-            'Unknown (Recipient Type blank; run -Full for the AccountEnabled fallback)'
+            'Unknown (Recipient Type and AccountEnabled both blank for this object)'
         }
         elseif ($row.AccountEnabled -eq $false) {
             'Likely Shared/Resource (AccountEnabled fallback - Recipient Type was blank; low confidence, see Methodology tab)'
@@ -1776,7 +1757,7 @@ function Get-MailboxCriticality {
         $itemCount    = [double](Get-ColumnValue $u @('Item Count') 0)
         $storageBytes = [double](Get-ColumnValue $u @('Storage Used (Byte)', 'Storage Used (Bytes)') 0)
         # NEW v3.0.0: real Exchange recipient type, straight from the mailbox
-        # usage report - already pulled in PREVIEW mode, no extra scope needed.
+        # usage report - already pulled with no extra scope needed.
         # Authoritative signal for Add-MailboxTypeHeuristic (replaces the old
         # AccountEnabled proxy - see that function's header for why).
         $recipientType = Get-ColumnValue $u @('Recipient Type') ''
@@ -1961,9 +1942,9 @@ function Get-SharePointCriticality {
         }
         elseif ($isTeamSite) {
             $reason = if ($useExactMode) {
-                "Exact match to a Team's SharePoint site (resolved via Get-MgGroupSite, Full mode) - already tiered under Teams."
+                "Exact match to a Team's SharePoint site (resolved via Get-MgGroupSite) - already tiered under Teams."
             } else {
-                "Group/Teams-connected site (RootWebTemplate=$template) - heuristic match, likely already tiered under Teams. Re-run with -IncludeGroupConnectedSites to keep sites like this, or -Full for exact (non-heuristic) matching."
+                "Group/Teams-connected site (RootWebTemplate=$template) - heuristic match, likely already tiered under Teams. Re-run with -IncludeGroupConnectedSites to keep sites like this."
             }
             Add-Member -InputObject $obj -NotePropertyName 'ExclusionReason' -NotePropertyValue $reason -Force
             $excluded.Add($obj)
@@ -3904,7 +3885,7 @@ function buildControlsSliders() {
   html += '<div class="control-row"><label>Title-weight bonus</label><input type="range" id="wslider-_bonus-titleWeight" min="0" max="100" step="5" value="' + twPct + '" data-wd="_bonus" data-field="titleWeight" oninput="onWeightSlide(this)"><span class="valdisp" id="wval-_bonus-titleWeight">' + twPct + '%</span></div>';
   html += '<div class="control-row"><label>Hub-site bonus</label><input type="range" id="wslider-_bonus-hubSite" min="0" max="100" step="5" value="' + hsPct + '" data-wd="_bonus" data-field="hubSite" oninput="onWeightSlide(this)"><span class="valdisp" id="wval-_bonus-hubSite">' + hsPct + '%</span></div>';
   html += "</div>";
-  html += '<div class="control-row" style="margin-top:.9rem;"><label>Hub-site keywords</label><input type="text" style="flex:1;max-width:400px;" value="' + esc(state.hubSiteKeywords.join(", ")) + '" onchange="onHubKeywordsChange(this.value)"></div>';
+  html += '<div class="control-row" style="margin-top:.9rem;"><label>Hub-site keywords</label><input type="text" style="flex:1;max-width:400px;" placeholder="e.g. Payroll, HR, Finance, IT Help Desk (blank = no hub-site matching)" value="' + esc(state.hubSiteKeywords.join(", ")) + '" onchange="onHubKeywordsChange(this.value)"></div>';
   html += '<div class="control-row"><label>Filter to org under manager</label><input type="text" placeholder="Manager display name..." style="flex:1;max-width:300px;" onchange="onManagerFilterChange(this.value)"></div>';
   html += buildGroupFilterControlHtml();
   html += "</div>";
@@ -3920,15 +3901,13 @@ function buildControlsSliders() {
 // conditions in rowPassesFilters) - "everyone in this group AND under this
 // manager" works without any extra code. Only rendered as usable when
 // -Groups actually resolved data this run; otherwise shown disabled with an
-// explanatory hint rather than silently doing nothing (which is what the
-// manager box does if -Full was never passed - fine for a switch that's
-// always been there, less fine for one someone may not know exists yet).
+// explanatory hint rather than silently doing nothing.
 function buildGroupFilterControlHtml() {
   var groupRows = (DATA.workloads.mailboxes || []).concat(DATA.workloads.onedrive || []);
   var groupNames = distinctGroupNames(groupRows);
   var currentGroup = ((state.activeFilters.mailboxes || {}).group) || "";
   if (groupNames.length === 0) {
-    return '<div class="control-row"><label>Filter to Entra ID group</label><select disabled title="Not collected this run - re-run with -Full -Groups to enable"><option>Not collected this run</option></select></div>';
+    return '<div class="control-row"><label>Filter to Entra ID group</label><select disabled title="Not collected this run - re-run with -Groups to enable"><option>Not collected this run</option></select></div>';
   }
   var opts = '<option value="">Filter to Entra ID group: All</option>';
   groupNames.forEach(function (g) { opts += '<option value="' + esc(g) + '"' + (g === currentGroup ? " selected" : "") + ">" + esc(g) + "</option>"; });
@@ -4410,11 +4389,11 @@ function buildGlossaryHtml() {
   html += "<dt>RTO targets and presets</dt><dd>Group 1/2/3 targets (hours, cumulative) are a compliance check against each group's ABR cumulative time - NOT a tiering rule (see above). Standard = 4h / 24h / 72h. Enterprise = 24h / 120h / 240h (Day 1 / 5 days / 10 days). Auto suggests Standard or Enterprise based on this tenant's estimated full recovery time (&ge; 5 days / 7200 min picks Enterprise) and always tells you which it picked and why - it never silently overrides an explicit choice.</dd>";
   html += "<dt>Group 4</dt><dd>Limited activity across every metric in the reporting window - carved out before any scoring/tiering runs, for every workload. Gets no ABR timing at all and is recovered entirely by Mass Recovery, alongside the rest of the tenant. Still protected; just not on the critical path to getting the business running again.</dd>";
   html += "<dt>Manual override</dt><dd>Set via the tier dropdown on any row, or via mass-reassignment on a filtered set. Overrides always win over the computed tier and are flagged with an \"override\" badge. Use Export overrides to save them to a file and pass it back in via -OverridesFile on the next run so they persist.</dd>";
-  html += "<dt>Job title weight</dt><dd>Full mode only. Job title is matched (case-insensitive substring) against a customer-editable keyword table; the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
+  html += "<dt>Job title weight</dt><dd>Job title is matched (case-insensitive substring) against a customer-editable keyword table; the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
   html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
-  html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (already pulled in PREVIEW mode, no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
-  html += "<dt>Manager roll-up</dt><dd>Full mode only. Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. Use the \"Filter to org under manager\" box to isolate or mass-tier everyone reporting up through a given leader.</dd>";
-  html += "<dt>Entra ID group filter</dt><dd>Full mode + -Groups only (requests the additional Group.Read.All scope). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
+  html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
+  html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. Use the \"Filter to org under manager\" box to isolate or mass-tier everyone reporting up through a given leader.</dd>";
+  html += "<dt>Entra ID group filter</dt><dd>Requires -Groups (requests the additional Group.Read.All scope). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
   html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
   html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time). Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>";
@@ -4589,7 +4568,6 @@ function buildPrintHeaderHtml(subtitle) {
       '<span>Usage window: <b>' + esc(DATA.meta.period) + '</b></span>' +
       '<span>Sign-in lookback: <b>' + esc(DATA.meta.signInLookbackDays) + ' days</b></span>' +
       '<span>Generated: <b>' + esc(DATA.meta.generatedAt) + '</b></span>' +
-      '<span>Permission mode: <b>' + esc(DATA.meta.mode) + '</b></span>' +
     "</div>" +
   "</div>";
 }
@@ -4972,8 +4950,6 @@ function buildPrintFullHtml() {
   html += '<div class="pr-page-break"></div>';
   html += buildSizingPdfHtml();
 
-  html += '<div class="pr-footer">Generated by the Recovery Assessment - M365 script. Internal Rubrik SE tooling - verify before sharing externally. Every figure in this report is computed live from the embedded raw metrics; nothing is sent anywhere.</div>';
-
   return html;
 }
 
@@ -5190,7 +5166,6 @@ $script:ReportHtmlTemplate = @'
   <div class="meta">
     <span>Usage window: <b>__PERIOD__</b></span>
     <span>Generated: <b>__GENERATED__</b></span>
-    <span>Permission mode: <b>__MODE__</b></span>
   </div>
 </div>
 <div class="tabbar">
@@ -5262,7 +5237,6 @@ $script:ReportHtmlTemplate = @'
 </main>
 <footer>
   <p>Tiers, totals, and recovery/cost figures are a data-driven starting point computed LIVE in this page from the embedded raw metrics - adjust weights, title/hub-site keywords, or manual overrides above and everything recomputes instantly. Nothing you change here is sent anywhere; use "Export overrides" to save your adjustments and pass the file back in via -OverridesFile on the next run so they persist.</p>
-  <p>Generated by the Recovery Assessment - M365 script (v3.0.0). Internal Rubrik SE tooling - verify before sharing externally.</p>
 </footer>
 <!-- NEW v3.6.0: PDF export target. Hidden on screen always; only shown
      during an actual print (see @media print rules) when body carries
@@ -5284,7 +5258,6 @@ function New-M365HtmlReport {
         [Parameter(Mandatory)] [string] $Period,
         [Parameter(Mandatory)] [string] $OutFile,
         [Parameter(Mandatory)] [string] $RunId,
-        [switch]    $Full,
         [switch]    $Groups,
         [hashtable] $MailboxWeights,
         [hashtable] $OneDriveWeights,
@@ -5319,7 +5292,7 @@ function New-M365HtmlReport {
             customerLabel                = $CustomerLabel
             period                       = $Period
             generatedAt                  = (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt')
-            mode                         = if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' }
+            mode                         = if ($Groups) { 'FULL + GROUPS' } else { 'FULL' }
             groupsRequested              = [bool]$Groups
             recoveryWindowDays           = $RecoveryWindowDays
             recoveryLicenseTierRequested = $RecoveryLicenseTier
@@ -5386,13 +5359,256 @@ function New-M365HtmlReport {
     $html = $html.Replace('__CUSTOMER__', (ConvertTo-SafeHtml $CustomerLabel))
     $html = $html.Replace('__PERIOD__', (ConvertTo-SafeHtml $Period))
     $html = $html.Replace('__GENERATED__', $dataObject.meta.generatedAt)
-    $html = $html.Replace('__MODE__', $dataObject.meta.mode)
     $html = $html.Replace('__FAVICON__', $faviconB64)
     $html = $html.Replace('__CSS__', $script:ReportCss)
     $html = $html.Replace('__JS__', $allJs)
     $html = $html.Replace('__DATA_JSON__', $reportDataJson)
 
     Set-Content -Path $OutFile -Value $html -Encoding UTF8
+    return $OutFile
+}
+
+function New-M365SummaryHtmlReport {
+    <#
+        The "Summary" report - a small, static, aggregate-only companion to
+        the Interactive report, added in v3.11.0. Unlike the Interactive
+        report, this file embeds NO per-object data at all - no per-row JSON
+        array, no client-side scoring/tiering engine - only pre-computed
+        totals and counts. That distinction (not the rendered table rows) is
+        what actually keeps large-tenant Interactive reports huge; a
+        true aggregate-only build sidesteps it entirely rather than just
+        hiding rows behind a cap. Retains total-objects-per-group per
+        workload, since that detail is useful even without row-level data.
+        Always generated alongside the Interactive report on every run -
+        meant to be the file a customer can open on a phone or forward
+        around without a multi-hundred-MB attachment; the Interactive report
+        remains the working session for row-level detail, live weight/RTO
+        tuning, and manual tier overrides. Reuses the same visual language as
+        the Interactive report's "One Page Summary" PDF export
+        (buildPrintSummaryHtml/buildSizingPdfHtml in the JS engine) and the
+        same $script:ReportCss stylesheet, rendered server-side here instead
+        of recomputed client-side, since there is no embedded data for a
+        client-side engine to recompute from.
+    #>
+    param(
+        [Parameter(Mandatory)] [array]  $Mailboxes,
+        [Parameter(Mandatory)] [array]  $OneDrive,
+        [Parameter(Mandatory)] [array]  $SharePoint,
+        [Parameter(Mandatory)] [array]  $Teams,
+        [Parameter(Mandatory)] [string] $CustomerLabel,
+        [Parameter(Mandatory)] [string] $Period,
+        [Parameter(Mandatory)] [string] $OutFile,
+        [Parameter(Mandatory)] $RecoveryModel,
+        [double] $DowntimeCostPerHour = 0,
+        [double] $RecoveryWindowDays = 7,
+        [double] $Group1TargetHours = 4,
+        [double] $Group2TargetHours = 24,
+        [double] $Group3TargetHours = 72,
+        [string] $RTOPresetResolved = 'Standard',
+        [string] $RTOPresetReason = '',
+        [switch] $DetailedSizingRequested,
+        $Sizing = $null
+    )
+
+    function local:fmtMin($min) {
+        if (-not $min -or $min -le 0) { return '0 min' }
+        if ($min -lt 60) { return "$([math]::Round($min)) min" }
+        if ($min -lt 1440) { return "{0:N1} hr" -f ($min / 60) }
+        return "{0:N1} days" -f ($min / 1440)
+    }
+    function local:fmtMoney($n) { return "`${0:N0}" -f [math]::Round([double]$n) }
+    function local:fmtNum($n) { return "{0:N0}" -f [double]$n }
+    function local:fmtGB($bytes) { if (-not $bytes) { return '0.00' }; return "{0:N2}" -f ([double]$bytes / 1GB) }
+
+    $tierOrder = @('Critical Group 1', 'Critical Group 2', 'Critical Group 3', 'Group 4')
+    $tierShort = @{ 'Critical Group 1' = 'Group 1'; 'Critical Group 2' = 'Group 2'; 'Critical Group 3' = 'Group 3'; 'Group 4' = 'Group 4' }
+    $workloads = @(
+        @{ Label = 'Mailboxes';  Rows = $Mailboxes }
+        @{ Label = 'OneDrive';   Rows = $OneDrive }
+        @{ Label = 'SharePoint'; Rows = $SharePoint }
+        @{ Label = 'Teams';      Rows = $Teams }
+    )
+
+    $g1 = $RecoveryModel.Milestones['Critical Group 1']
+    $g2 = $RecoveryModel.Milestones['Critical Group 2']
+    $g3 = $RecoveryModel.Milestones['Critical Group 3']
+    $fullRestoreMin = $RecoveryModel.FullRestoreUnprioritizedMin
+    $fullExposureMoney = ($fullRestoreMin / 60.0) * $DowntimeCostPerHour
+    $abrCostG1 = ($g1.WallClockCumulativeMin / 60.0) * $DowntimeCostPerHour
+    $savingsMoney = [math]::Max(0, $fullExposureMoney - $abrCostG1)
+    $pctReduction = if ($fullExposureMoney -gt 0) { [math]::Round(($savingsMoney / $fullExposureMoney) * 100) } else { 0 }
+
+    $body = '<div class="pr-header">' +
+        '<div class="pr-eyebrow">Recovery Sequencing Assessment - Summary</div>' +
+        '<div class="pr-title">Recovery Assessment - M365 - ' + (ConvertTo-SafeHtml $CustomerLabel) + '</div>' +
+        '<div class="pr-meta">' +
+        '<span>Usage window: <b>' + (ConvertTo-SafeHtml $Period) + '</b></span>' +
+        '<span>Generated: <b>' + (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt') + '</b></span>' +
+        '</div>' +
+        '</div>'
+
+    $body += '<div class="pr-tiles">' +
+        '<div class="pr-tile"><div class="pr-tile-label">Time to Critical Data</div><div class="pr-tile-value">' + (fmtMin $g1.WallClockCumulativeMin) + '</div><div class="pr-tile-sub">instead of ' + (fmtMin $fullRestoreMin) + ' with a traditional, random-order restore</div></div>' +
+        '<div class="pr-tile"><div class="pr-tile-label">Downtime Cost Avoided</div><div class="pr-tile-value">' + $(if ($DowntimeCostPerHour -gt 0) { fmtMoney $savingsMoney } else { 'n/a' }) + '</div><div class="pr-tile-sub">' + $(if ($DowntimeCostPerHour -gt 0) { "$pctReduction% reduction vs. a fully random-order restore" } else { 'set -DowntimeCostPerHour for a dollar figure' }) + '</div></div>' +
+        '</div>'
+
+    $body += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first - the data people were actually working on - so the business is operational in hours, not weeks, while Mass Recovery continues restoring everything else in the background, in whatever order it happens to land.</div>'
+
+    $body += '<div class="pr-section-title">Recovery Times by Group</div>'
+    $body += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">ABR Time</th><th class="num">Target</th><th>Status</th></tr></thead><tbody>'
+    $rtoRows = @(
+        @{ Label = 'Group 1 online';    M = $g1; Target = $Group1TargetHours }
+        @{ Label = 'Groups 1-2 online'; M = $g2; Target = $Group2TargetHours }
+        @{ Label = 'Groups 1-3 online'; M = $g3; Target = $Group3TargetHours }
+    )
+    foreach ($r in $rtoRows) {
+        $status = if ($r.M.ExceedsTarget) { '<span class="pr-badge exceeds">Exceeds target</span>' } else { 'Within target' }
+        $body += "<tr><td>$($r.Label)</td><td class=""num"">$(fmtMin $r.M.WallClockCumulativeMin)</td><td class=""num"">$($r.Target) hr</td><td>$status</td></tr>"
+    }
+    $body += "<tr class=""total-row""><td>Full tenant (Mass Recovery baseline)</td><td class=""num"">$(fmtMin $fullRestoreMin)</td><td class=""num"">&mdash;</td><td>&mdash;</td></tr>"
+    $body += '</tbody></table>'
+    $body += "<div class=""pr-subnote"">RTO preset: $(ConvertTo-SafeHtml $RTOPresetResolved). $(ConvertTo-SafeHtml $RTOPresetReason)</div>"
+
+    if ($DowntimeCostPerHour -gt 0 -and $fullRestoreMin -gt 0) {
+        $body += '<div class="pr-section-title">Downtime Cost Avoided by Group</div>'
+        $body += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">Time</th><th class="num">Downtime Cost</th><th class="num">Cost Avoided</th><th class="num">Reduction</th></tr></thead><tbody>'
+        foreach ($r in $rtoRows) {
+            $cost = ($r.M.WallClockCumulativeMin / 60.0) * $DowntimeCostPerHour
+            $avoided = [math]::Max(0, $fullExposureMoney - $cost)
+            $pct = if ($fullExposureMoney -gt 0) { [math]::Round(($avoided / $fullExposureMoney) * 100) } else { 0 }
+            $body += "<tr><td>$($r.Label)</td><td class=""num"">$(fmtMin $r.M.WallClockCumulativeMin)</td><td class=""num"">$(fmtMoney $cost)</td><td class=""num"">$(fmtMoney $avoided)</td><td class=""num"">$pct%</td></tr>"
+        }
+        $body += "<tr class=""total-row""><td>Full tenant (Mass Recovery baseline)</td><td class=""num"">$(fmtMin $fullRestoreMin)</td><td class=""num"">$(fmtMoney $fullExposureMoney)</td><td class=""num"">&mdash;</td><td class=""num"">&mdash;</td></tr>"
+        $body += '</tbody></table>'
+    }
+
+    $body += '<div class="pr-section-title">Group Overview by Workload</div>'
+    $body += '<div class="pr-subnote">Object counts per recovery-priority tier - no individual names, identifiers, or other per-object detail. See the Interactive report from this same run for row-level detail and live customization.</div>'
+    $body += '<table class="pr-table"><thead><tr><th>Workload</th>' + (($tierOrder | ForEach-Object { "<th class=""num"">$($tierShort[$_])</th>" }) -join '') + '<th class="num">Total</th></tr></thead><tbody>'
+    $grandTotals = @{}; foreach ($t in $tierOrder) { $grandTotals[$t] = 0 }
+    $grandTotal = 0
+    foreach ($wd in $workloads) {
+        $rowHtml = "<tr><td>$($wd.Label)</td>"
+        foreach ($t in $tierOrder) {
+            $count = @($wd.Rows | Where-Object { $_.Tier -eq $t }).Count
+            $grandTotals[$t] += $count
+            $rowHtml += "<td class=""num"">$(fmtNum $count)</td>"
+        }
+        $grandTotal += $wd.Rows.Count
+        $rowHtml += "<td class=""num"">$(fmtNum $wd.Rows.Count)</td></tr>"
+        $body += $rowHtml
+    }
+    $body += "<tr class=""total-row""><td>Total</td>" + (($tierOrder | ForEach-Object { "<td class=""num"">$(fmtNum $grandTotals[$_])</td>" }) -join '') + "<td class=""num"">$(fmtNum $grandTotal)</td></tr>"
+    $body += '</tbody></table>'
+
+    # ---- Sizing (aggregate only - same math as buildSizingSummary/
+    # buildSizingPdfHtml in the JS engine, computed here server-side instead) ----
+    $body += '<div class="pr-page-break"></div>'
+    $body += '<div class="pr-section-title">M365 Sizing</div>'
+    $body += '<div class="pr-subnote">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups above.</div>'
+
+    $userMb = @($Mailboxes | Where-Object { $_.RecipientType -notmatch 'shared' })
+    $sharedMb = @($Mailboxes | Where-Object { $_.RecipientType -match 'shared' })
+    $archiveMb = @($Mailboxes | Where-Object { $_.HasArchive -eq $true })
+
+    $exUserStorage = Get-FieldSum $userMb 'StorageBytes'
+    $exUserItems = Get-FieldSum $userMb 'ItemCount'
+    $exSharedStorage = Get-FieldSum $sharedMb 'StorageBytes'
+    $exSharedItems = Get-FieldSum $sharedMb 'ItemCount'
+    $exTotalStorage = Get-FieldSum $Mailboxes 'StorageBytes'
+    $exTotalItems = Get-FieldSum $Mailboxes 'ItemCount'
+
+    $detailed = [bool]$DetailedSizingRequested -and $Sizing
+    if ($detailed) {
+        $archStorage = $Sizing.archiveStorageBytes
+        $archItems = $Sizing.archiveItems
+        $archiveStorageCell = fmtGB $archStorage
+        $archiveItemsCell = fmtNum $archItems
+        $rifStorage = $Sizing.recoverableItemsStorageBytes
+        $rifItems = $Sizing.recoverableItemsItems
+        $rifCount = $Sizing.recoverableItemsCount
+        $rifRow = "<tr><td>Recoverable Items</td><td class=""num"">$(fmtNum $rifCount)</td><td class=""num"">$(fmtGB $rifStorage)</td><td class=""num"">$(fmtNum $rifItems)</td></tr>"
+        $totalStorageForAvg = $exTotalStorage + $archStorage + $rifStorage
+    } else {
+        $archiveStorageCell = '*'
+        $archiveItemsCell = '*'
+        $rifRow = '<tr><td>Recoverable Items</td><td class="num">*</td><td class="num">*</td><td class="num">*</td></tr>'
+        $totalStorageForAvg = $exTotalStorage
+    }
+
+    $body += '<table class="pr-table"><thead><tr><th>Mailbox Type</th><th class="num">Count</th><th class="num">Storage (GB)</th><th class="num">Items</th></tr></thead><tbody>' +
+        "<tr><td>User Mailboxes</td><td class=""num"">$(fmtNum $userMb.Count)</td><td class=""num"">$(fmtGB $exUserStorage)</td><td class=""num"">$(fmtNum $exUserItems)</td></tr>" +
+        "<tr><td>Shared Mailboxes</td><td class=""num"">$(fmtNum $sharedMb.Count)</td><td class=""num"">$(fmtGB $exSharedStorage)</td><td class=""num"">$(fmtNum $exSharedItems)</td></tr>" +
+        "<tr><td>Archive Mailboxes</td><td class=""num"">$(fmtNum $archiveMb.Count)</td><td class=""num"">$archiveStorageCell</td><td class=""num"">$archiveItemsCell</td></tr>" +
+        $rifRow +
+        "<tr class=""total-row""><td>Total</td><td class=""num"">$(fmtNum $Mailboxes.Count)</td><td class=""num"">$(fmtGB $totalStorageForAvg)</td><td class=""num"">$(fmtNum $exTotalItems)</td></tr>" +
+        '</tbody></table>'
+
+    if (-not $detailed) {
+        $body += '<div class="pr-note">*Note: Not collected - run the script with -DetailedSizing to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>'
+    }
+
+    $odStorage = Get-FieldSum $OneDrive 'StorageBytes'
+    $odFiles = Get-FieldSum $OneDrive 'FileCount'
+    $spStorage = Get-FieldSum $SharePoint 'StorageBytes'
+    $spFiles = Get-FieldSum $SharePoint 'FileCount'
+
+    $body += '<table class="pr-table"><tbody>' +
+        "<tr><td>OneDrive accounts</td><td class=""num"">$(fmtNum $OneDrive.Count)</td></tr>" +
+        "<tr><td>OneDrive storage (GB)</td><td class=""num"">$(fmtGB $odStorage)</td></tr>" +
+        "<tr><td>OneDrive files</td><td class=""num"">$(fmtNum $odFiles)</td></tr>" +
+        "<tr><td>SharePoint sites</td><td class=""num"">$(fmtNum $SharePoint.Count)</td></tr>" +
+        "<tr><td>SharePoint storage (GB)</td><td class=""num"">$(fmtGB $spStorage)</td></tr>" +
+        "<tr><td>SharePoint files</td><td class=""num"">$(fmtNum $spFiles)</td></tr>" +
+        '</tbody></table>'
+
+    $totalStorageAll = $totalStorageForAvg + $odStorage + $spStorage
+    $totalItemsFiles = $exTotalItems + $odFiles + $spFiles
+    $licenseEstimate = [math]::Max([math]::Max($userMb.Count, $sharedMb.Count), $OneDrive.Count)
+    $body += "<div class=""pr-note"">Discovery Summary - Total Users/Accounts: $(fmtNum $licenseEstimate), Total Storage: $(fmtGB $totalStorageAll) GB, Total Items &amp; Files: $(fmtNum $totalItemsFiles).</div>"
+
+    $body += '<div class="pr-page-break"></div>'
+    $body += '<div class="pr-section-title">Methodology (Brief)</div>'
+    $body += '<dl class="pr-glossary">' +
+        '<dt>Tiers</dt><dd>All four workloads ranked by composite score (weighted activity/size metrics) and split into recovery-priority tiers - Critical Group 1 recovers first, then 2, then 3. Group 4 has minimal activity in the period and is recovered via bulk Mass Recovery, not on the critical path.</dd>' +
+        "<dt>ABR recovery time</dt><dd>ABR (Autonomous Business Recovery) recovers each object's RECENT/ACTIVE data first, estimated from real telemetry already collected. Mass Recovery continues afterward to fully restore the remaining (older) data, and is also the baseline figure for a fully undifferentiated restore with no prioritization.</dd>" +
+        '<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour set via -DowntimeCostPerHour. Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>' +
+        '</dl>'
+
+    $body += "<div class=""pr-footer"">Recovery window: $RecoveryWindowDays days &middot; SP/OD throughput tier: $($RecoveryModel.Meta.SPODTierBucket) &middot; Downtime cost: $(if ($DowntimeCostPerHour -gt 0) { (fmtMoney $DowntimeCostPerHour) + '/hour' } else { 'not set' }). This is an aggregate-only summary - no individual identities, totals only. For row-level detail, live customization, and manual tier overrides, see the Interactive report from this same run.</div>"
+
+    $summaryTemplate = @'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__TITLE__</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+__CSS__
+body { padding: 0 0 3rem; }
+.pr-wrap { max-width: 900px; margin: 2rem auto 0; padding: 2rem 2.5rem; background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.pr-print-btn { position: fixed; top: 14px; right: 18px; background: var(--blue); color: #fff; border: none; border-radius: 6px; padding: .5rem 1rem; font-weight: 700; font-size: .82rem; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+@media print { .pr-print-btn { display: none; } }
+</style>
+</head>
+<body>
+<div class="rainbow-bar"></div>
+<button class="pr-print-btn" onclick="window.print()">Print / Save as PDF</button>
+<div class="pr-wrap">
+__BODY__
+</div>
+</body>
+</html>
+'@
+
+    $pageHtml = $summaryTemplate.
+        Replace('__TITLE__', (ConvertTo-SafeHtml "Recovery Assessment - M365 Summary - $CustomerLabel")).
+        Replace('__CSS__', $script:ReportCss).
+        Replace('__BODY__', $body)
+
+    Set-Content -Path $OutFile -Value $pageHtml -Encoding UTF8
     return $OutFile
 }
 
@@ -5416,30 +5632,12 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 # Always written, no side effects - the guided (not automated) Enterprise App path.
 Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md') -Encoding UTF8
 
-# -Groups rides the SAME bulk Get-MgUser directory pull -Full already makes
-# (see Get-UserEnrichmentIndex) - there is nothing to expand group membership
-# onto without it, so it's a no-op (not a silent scope request) if -Full
-# wasn't also passed.
-if ($Groups -and -not $Full) {
-    Write-Warning "-Groups requires -Full (Entra ID group membership is resolved as part of the same directory pull as manager enrichment). Ignoring -Groups this run - re-run with both -Full -Groups."
-    $Groups = $false
-}
+Assert-GraphModules -Groups:$Groups -DetailedSizing:$DetailedSizing
+Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
 
-if ($DetailedSizing -and -not $Full) {
-    Write-Warning "-DetailedSizing requires -Full. Ignoring -DetailedSizing this run - re-run with both -Full -DetailedSizing."
-    $DetailedSizing = $false
-}
-
-Assert-GraphModules -Full:$Full -Groups:$Groups -DetailedSizing:$DetailedSizing
-Connect-Assessment -Full:$Full -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
-
-if ($Full) {
-    $groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { "" }
-    $sizingNote = if ($DetailedSizing) { " -DetailedSizing is on: Archive Mailbox and Recoverable Items sizing will run last, via a separate Exchange Online connection." } else { "" }
-    Write-Host "`nRunning in FULL mode - User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote$sizingNote" -ForegroundColor Magenta
-} else {
-    Write-Host "`nRunning in PREVIEW mode (default) - Reports.Read.All only. Pass -Full for enrichment." -ForegroundColor DarkGray
-}
+$groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { "" }
+$sizingNote = if ($DetailedSizing) { " -DetailedSizing is on: Archive Mailbox and Recoverable Items sizing will run last, via a separate Exchange Online connection." } else { "" }
+Write-Host "`nReports.Read.All/User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote$sizingNote" -ForegroundColor Magenta
 
 $overridesIndex = Import-Overrides -Path $OverridesFile
 
@@ -5460,11 +5658,8 @@ if ($CompareTo) {
     }
 }
 
-$userEnrichment = @{}
-if ($Full) {
-    Write-Host "`n--- User profile enrichment (Full) ---" -ForegroundColor Yellow
-    $userEnrichment = Get-UserEnrichmentIndex -IncludeGroups:$Groups
-}
+Write-Host "`n--- User profile enrichment ---" -ForegroundColor Yellow
+$userEnrichment = Get-UserEnrichmentIndex -IncludeGroups:$Groups
 
 $results = @{}
 
@@ -5473,7 +5668,7 @@ $results = @{}
 # any scoring/tiering, because -RTOPreset Auto needs an early, whole-tenant
 # recovery-time estimate from their RAW totals to pick Standard-vs-Enterprise
 # targets. Teams is still collected before SharePoint so exact Team-site
-# exclusion (Full) works exactly as before.
+# exclusion works exactly as before.
 # ---------------------------------------------------------------------------
 Write-Host "`n--- Collecting raw usage data ---" -ForegroundColor Yellow
 $mailboxesRaw = @(Get-MailboxCriticality -Period $Period -WorkDir $rawDir)
@@ -5484,11 +5679,8 @@ Write-Host ("{0,-24} {1,5} rows" -f 'OneDrive', $onedriveRaw.Count) -ForegroundC
 $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
 
-$exactTeamSiteUrls = $null
-if ($Full) {
-    Write-Host "Resolving exact Team SharePoint sites (Full)..." -ForegroundColor Gray
-    $exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams
-}
+Write-Host "Resolving exact Team SharePoint sites..." -ForegroundColor Gray
+$exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams
 
 $sharepointResult = Get-SharePointCriticality -Period $Period -WorkDir $rawDir -IncludeGroupConnectedSites:$IncludeGroupConnectedSites -ExactTeamSiteKeys $exactTeamSiteUrls
 $sharepointRaw = @($sharepointResult.Sites)
@@ -5595,14 +5787,12 @@ Write-Host ("Reason: {0}" -f $presetReason) -ForegroundColor Gray
 
 Write-Host "`n--- Mailboxes ---" -ForegroundColor Yellow
 $mailboxes = $mailboxesRaw
-if ($Full) {
-    $mailboxes = @(Add-UserEnrichment -Data $mailboxes -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
-    $mailboxes = @(Add-TitleWeightScore -Data $mailboxes -TitleWeights $TitleWeights)
-    $MailboxWeights = $MailboxWeights + @{ TitleWeight = $TitleWeightContribution }
-}
+$mailboxes = @(Add-UserEnrichment -Data $mailboxes -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
+$mailboxes = @(Add-TitleWeightScore -Data $mailboxes -TitleWeights $TitleWeights)
+$MailboxWeights = $MailboxWeights + @{ TitleWeight = $TitleWeightContribution }
 # Recipient Type (authoritative, from the mailbox usage report) runs
-# regardless of -Full; the AccountEnabled fallback inside only has data
-# to fall back to when -Full enrichment ran above.
+# regardless; the AccountEnabled fallback inside only has data to fall
+# back to when the enrichment lookup above didn't find this user.
 $mailboxes = @(Add-MailboxTypeHeuristic -Data $mailboxes)
 $mailboxes = @(Add-RecentDataEstimate -Data $mailboxes -TotalItemField 'ItemCount' -TotalStorageField 'StorageUsedMB' -RecentItemField 'SendRecvActivity7d')
 $mailboxes = @(Add-CompositeScore -Data $mailboxes -MetricWeights $MailboxWeights)
@@ -5615,11 +5805,9 @@ $results['Mailboxes'] = Export-WorkloadResult -Data $mailboxes -Name 'Mailboxes'
 
 Write-Host "`n--- OneDrive ---" -ForegroundColor Yellow
 $onedrive = $onedriveRaw
-if ($Full) {
-    $onedrive = @(Add-UserEnrichment -Data $onedrive -EnrichmentIndex $userEnrichment -UpnField 'OwnerUpn')
-    $onedrive = @(Add-TitleWeightScore -Data $onedrive -TitleWeights $TitleWeights)
-    $OneDriveWeights = $OneDriveWeights + @{ TitleWeight = $TitleWeightContribution }
-}
+$onedrive = @(Add-UserEnrichment -Data $onedrive -EnrichmentIndex $userEnrichment -UpnField 'OwnerUpn')
+$onedrive = @(Add-TitleWeightScore -Data $onedrive -TitleWeights $TitleWeights)
+$OneDriveWeights = $OneDriveWeights + @{ TitleWeight = $TitleWeightContribution }
 $onedrive = @(Add-RecentDataEstimate -Data $onedrive -TotalItemField 'FileCount' -TotalStorageField 'StorageBytes' -RecentItemField 'ViewedOrEditedCount7d')
 $onedrive = @(Add-CompositeScore -Data $onedrive -MetricWeights $OneDriveWeights)
 $onedrive = @(Add-CriteriaTags -Data $onedrive -MetricWeights $OneDriveWeights)
@@ -5710,6 +5898,7 @@ if ($DetailedSizing) {
 }
 
 $htmlReportPath = $null
+$summaryReportPath = $null
 if (-not $SkipHtmlReport) {
     Write-Host "`n--- HTML report ---" -ForegroundColor Yellow
     $resolvedCustomerLabel = if ($CustomerName) {
@@ -5719,13 +5908,27 @@ if (-not $SkipHtmlReport) {
         if ($acct -and $acct.Contains('@')) { $acct.Split('@')[1] } else { 'Customer Tenant' }
     }
     $htmlReportPath = New-M365HtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        -CustomerLabel $resolvedCustomerLabel -Period $Period -RunId $runId -Full:$Full -Groups:$Groups `
+        -CustomerLabel $resolvedCustomerLabel -Period $Period -RunId $runId -Groups:$Groups `
         -MailboxWeights $MailboxWeights -OneDriveWeights $OneDriveWeights -SharePointWeights $SharePointWeights -TeamsWeights $TeamsWeights `
         -TierSplit $TierSplit -TitleWeights $TitleWeights -TitleWeightContribution $TitleWeightContribution -HubSiteKeywords $HubSiteKeywords -HubSiteBonus $HubSiteBonus `
         -RecoveryWindowDays $RecoveryWindowDays -RecoveryLicenseTier $RecoveryLicenseTier -DowntimeCostPerHour $DowntimeCostPerHour -PriorRunData $priorRunData `
         -Group1TargetHours $Group1TargetHours -Group2TargetHours $Group2TargetHours -Group3TargetHours $Group3TargetHours -RTOPresetResolved $resolvedPresetLabel -RTOPresetReason $presetReason `
         -DetailedSizingRequested:$DetailedSizing -Sizing $detailedSizingResult `
-        -OutFile (Join-Path $OutputPath 'CriticalityAssessment_Report.html')
+        -OutFile (Join-Path $OutputPath 'Interactive_CriticalityAssessment_Report.html')
+    Write-Host "Interactive report        ->  $htmlReportPath" -ForegroundColor Gray
+
+    # NEW v3.11.0: small, static, aggregate-only companion report - no
+    # embedded per-object data, safe to email/forward without a
+    # multi-hundred-MB attachment. Always generated alongside the Interactive
+    # report; see New-M365SummaryHtmlReport's header comment.
+    $summaryReportPath = New-M365SummaryHtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
+        -CustomerLabel $resolvedCustomerLabel -Period $Period -RecoveryModel $recoveryModel `
+        -DowntimeCostPerHour $DowntimeCostPerHour -RecoveryWindowDays $RecoveryWindowDays `
+        -Group1TargetHours $Group1TargetHours -Group2TargetHours $Group2TargetHours -Group3TargetHours $Group3TargetHours `
+        -RTOPresetResolved $resolvedPresetLabel -RTOPresetReason $presetReason `
+        -DetailedSizingRequested:$DetailedSizing -Sizing $detailedSizingResult `
+        -OutFile (Join-Path $OutputPath 'Summary_CriticalityAssessment_Report.html')
+    Write-Host "Summary report             ->  $summaryReportPath" -ForegroundColor Gray
 
     # Also save the embedded data blob standalone, so a FUTURE run's -CompareTo can load it.
     $reportDataForCompare = [PSCustomObject]@{
@@ -5738,7 +5941,6 @@ if (-not $SkipHtmlReport) {
         }
     }
     $reportDataForCompare | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path (Join-Path $OutputPath '_ReportData.json') -Encoding UTF8
-    Write-Host "HTML report              ->  $htmlReportPath" -ForegroundColor Gray
 }
 
 $manifest = @"
@@ -5746,8 +5948,7 @@ Recovery Assessment - M365 - Run Manifest (v3.0.0)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
-Permission mode:       $(if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' })
-Graph scopes used:     $(if ($Full) { if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' } } else { 'Reports.Read.All' })
+Graph scopes used:     $(if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' })
 Detailed sizing:       $(if ($DetailedSizing) { 'Requested (Exchange Online - Archive/Recoverable Items sizing included)' } else { 'Not requested (Sizing tab shows Exchange/OneDrive/SharePoint totals + Archive count only)' })
 Signed in as:          $((Get-MgContext).Account)
 Overrides file used:   $(if ($OverridesFile) { $OverridesFile } else { '(none)' })
@@ -5768,7 +5969,10 @@ Row counts by workload:
   OneDrive accounts:       $($onedrive.Count)
   SharePoint sites:        $($sharepoint.Count)  (excluded as OneDrive/Team: $($sharepointExcluded.Count))
   Teams:                   $($teams.Count)
-$(if ($Full) { "`nFull-mode enrichment:`n  Users profile-enriched: $($userEnrichment.Count)`n  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$(if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" })" })
+
+User profile enrichment:
+  Users profile-enriched: $($userEnrichment.Count)
+  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$(if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" })
 
 Recovery model (Preview weights/tiers as computed at run time - the HTML report recomputes live):
   SP/OD throughput tier:  $($recoveryModel.Meta.SPODTierBucket)
@@ -5784,7 +5988,8 @@ Set-Content -Path (Join-Path $OutputPath '_RunManifest.txt') -Value $manifest -E
 
 Write-Host "`n=== Done ===" -ForegroundColor Cyan
 Write-Host "Per-workload CSVs, _MasterSummary.csv, _ReportData.json, and _RunManifest.txt written to: $OutputPath" -ForegroundColor Green
-if ($htmlReportPath) { Write-Host "Open the HTML report:      $htmlReportPath" -ForegroundColor Green }
+if ($htmlReportPath) { Write-Host "Open the Interactive report: $htmlReportPath" -ForegroundColor Green }
+if ($summaryReportPath) { Write-Host "Open the Summary report:    $summaryReportPath" -ForegroundColor Green }
 Write-Host "Enterprise App setup guide: $(Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md')" -ForegroundColor Green
 
 $masterRows | Group-Object Workload, Tier | Sort-Object Name | Format-Table @{L='Workload / Tier';E={$_.Name}}, Count -AutoSize
