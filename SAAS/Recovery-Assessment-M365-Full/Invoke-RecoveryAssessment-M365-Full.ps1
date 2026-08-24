@@ -658,7 +658,7 @@ function Add-HubSiteFlag {
     #>
     param(
         [Parameter(Mandatory)] [array]    $Data,
-        [Parameter(Mandatory)] [string[]] $Keywords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Keywords,
         [double] $Bonus = 0.15
     )
     if ($Data.Count -eq 0) { return $Data }
@@ -2078,6 +2078,7 @@ h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25re
 .exec-hero-card .exec-hero-value { font-size: 1.9rem; font-weight: 800; color: var(--navy); margin: .2rem 0; }
 .exec-hero-card .exec-hero-sub { font-size: .82rem; color: var(--dark-gray); }
 .exec-hero-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .55rem .85rem; margin: -.6rem 0 1.6rem; }
+.exec-hero-caption { font-size: .78rem; color: var(--dark-gray); margin: -.4rem 0 1rem; max-width: 70ch; }
 .exec-hero-linkout { font-size: .78rem; color: var(--blue); cursor: pointer; text-decoration: underline; }
 
 /* NEW: Financial Impact as a before/after comparison, closed with a bold
@@ -2276,6 +2277,19 @@ h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25re
 .bonus-label-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
 .bonus-tag { font-size: .62rem; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #fff; background: var(--teal); padding: .15rem .45rem; border-radius: 4px; }
 .bonus-hint { font-size: .72rem; color: var(--dark-gray); margin: -.2rem 0 .7rem; }
+
+/* Editable title-weight keyword table (see buildTitleWeightTableHtml()). */
+.tw-table { margin: .5rem 0 .9rem; border: 1px solid #D7DCE1; border-radius: 8px; overflow: hidden; }
+.tw-head, .tw-row { display: grid; grid-template-columns: 1fr 74px 28px; gap: .5rem; align-items: center; padding: .35rem .6rem; }
+.tw-head { background: #F0F3F6; font-size: .66rem; font-weight: 700; color: var(--dark-gray); text-transform: uppercase; letter-spacing: .02em; }
+.tw-row { border-top: 1px solid #D7DCE1; }
+.tw-row input[type=text] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .5rem; font-size: .78rem; width: 100%; box-sizing: border-box; }
+.tw-row input[type=number] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .3rem; font-size: .78rem; width: 100%; box-sizing: border-box; text-align: center; }
+.tw-rm { background: none; border: none; color: #C0392B; font-size: 1rem; cursor: pointer; line-height: 1; padding: 0; }
+.tw-add-row { padding: .4rem .6rem; border-top: 1px solid #D7DCE1; }
+.tw-add-row button { background: none; border: 1px dashed var(--blue); color: var(--blue); font-size: .72rem; font-weight: 700; border-radius: 6px; padding: .3rem .7rem; cursor: pointer; }
+.tw-add-row button:hover { background: #EAF4FF; }
+.tw-note { font-size: .68rem; color: var(--dark-gray); margin: -.3rem 0 .8rem; }
 
 .preview-card { background: #FAFBFC; border: 1px solid #EBEEF1; border-radius: 10px; padding: 1.1rem 1.3rem 1.3rem; }
 .preview-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .15rem; }
@@ -2628,6 +2642,14 @@ var state = {
   weights: JSON.parse(JSON.stringify(DATA.weights)),
   tierSplit: DATA.tierSplit.slice(),
   titleWeights: JSON.parse(JSON.stringify(DATA.titleWeights)),
+  // Ordered [{keyword, weight}] view of titleWeights, used only to drive the
+  // editable table in the report (add/rename/reweight/remove rows) - plain
+  // JS objects can't have a key "renamed" in place, so edits happen on this
+  // array and titleWeights itself is rebuilt from it via syncTitleWeights().
+  titleWeightRows: Object.keys(DATA.titleWeights).map(function (k) { return { keyword: k, weight: DATA.titleWeights[k] }; }),
+  // Collapsed by default (see buildTitleWeightTableHtml/toggleTitleWeightTable) -
+  // persists across full recomputes so editing a row doesn't re-collapse it.
+  titleWeightTableExpanded: false,
   titleWeightContribution: DATA.titleWeightContribution,
   hubSiteKeywords: DATA.hubSiteKeywords.slice(),
   hubSiteBonus: DATA.hubSiteBonus,
@@ -3313,6 +3335,7 @@ function renderExecFinancialAndRecoveryTop() {
   var g3EmptyNote = g3Count === 0 ? '<div class="exec-empty-note">Same as Groups 1-2 - no objects fall in Group 3.</div>' : "";
 
   var recoveryHtml = '<div class="exec-hero-label">Recovery Times (ABR, sequenced by group)</div>' +
+    '<div class="exec-hero-caption">"Cumulative" = elapsed time from the start of recovery, not added on top of the group before it - Groups 1-2 online in ' + fmtMin(g2.wallClockCumMin) + ' means ' + fmtMin(g2.wallClockCumMin) + ' total since recovery began, ' + fmtMin(g1.wallClockCumMin) + ' of which is Group 1 recovering first.</div>' +
     '<div class="exec-hero-grid">' +
       '<div class="exec-hero-card"><div class="exec-hero-tag">Group 1 online in</div><div class="exec-hero-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="exec-hero-sub">' + fmtNum(g1Count) + " objects - target: " + state.recovery.group1Hours + " hr</div></div>" +
       '<div class="exec-hero-card"><div class="exec-hero-tag">Groups 1-2 online in' + g2EmptyBadge + '</div><div class="exec-hero-value">' + fmtMin(g2.wallClockCumMin) + '</div><div class="exec-hero-sub">cumulative - target: ' + state.recovery.group2Hours + " hr</div>" + g2EmptyNote + "</div>" +
@@ -3635,12 +3658,23 @@ function buildWorkloadSection(wdKey) {
     attrFilters += buildSelectFilter(wdKey, "employeeType", "Employee Type", distinctValues(rows, "EmployeeType"));
     attrFilters += buildSelectFilter(wdKey, "officeLocation", "Office Location", distinctValues(rows, "OfficeLocation"));
     attrFilters += '<input type="text" id="titlefilter-' + wdKey + '" placeholder="Title contains..." value="' + esc(f.titleContains || "") + '" oninput="setFilter(\'' + wdKey + '\',\'titleContains\',this.value)" style="border:1px solid #D7DCE1;border-radius:6px;padding:.3rem .5rem;font-size:.78rem;">';
+    // Manager filter lives here (not in the scoring-weights panel) so
+    // "filter to this manager's org, then mass-reassign" is one motion.
+    // Same enrichment pull as JobTitle/Department, so gated the same way.
+    attrFilters += '<input type="text" id="managerfilter-' + wdKey + '" placeholder="Manager display name..." value="' + esc(f.manager || "") + '" oninput="setFilter(\'' + wdKey + '\',\'manager\',this.value)" style="border:1px solid #D7DCE1;border-radius:6px;padding:.3rem .5rem;font-size:.78rem;">';
   }
   if (hasMailboxType) {
     attrFilters += buildSelectFilter(wdKey, "mailboxType", "Mailbox Type", distinctValues(rows, "MailboxTypeHeuristic"));
   }
   if (wdKey === "sharepoint") {
     attrFilters += buildSelectFilter(wdKey, "hubSite", "Hub Site", ["Yes", "No"]);
+  }
+  if (hasGroups) {
+    // Entra ID group filter, same relocation reasoning as the manager filter
+    // above - only rendered when this workload's rows actually carry group
+    // membership (i.e. -Groups was used), matching the Mailbox Type/Hub Site
+    // pattern of simply omitting filters for data that wasn't collected.
+    attrFilters += buildSelectFilter(wdKey, "group", "Entra ID Group", distinctGroupNames(rows));
   }
 
   var visibleRows = rows.filter(function (r) { return rowPassesFilters(r, wdKey); });
@@ -3864,6 +3898,48 @@ $script:ReportJsRenderB = @'
 // state.weights stays a 0-1 fraction throughout (percent / 100), so nothing
 // downstream (computeScoresAndTiers, the Methodology tab's weights table,
 // the PDF exports) needs to change - only the slider markup and its handler.
+// Editable keyword -> weight table backing the Title-weight bonus above.
+// Replaces the old command-line-only -TitleWeights hashtable with a live
+// UI: add/rename/reweight/remove rows, recomputes instantly. Matching stays
+// case-insensitive substring against JobTitle (see computeTitleWeight) - a
+// single keyword like "Chief" already catches "Chief Operating Officer,"
+// "Chief People Officer," etc. without any wildcard syntax; acronyms (COO,
+// CPO, VP...) still need their own row since one can't be derived from the
+// other. Pre-populated with Rubrik's default seniority list (kept
+// intentionally, unlike the blank-by-default hub-site keywords - title/
+// seniority as a criticality signal is a defensible universal default in a
+// way "which SharePoint site names matter" isn't).
+function buildTitleWeightTableHtml() {
+  var rows = state.titleWeightRows.map(function (r, idx) {
+    return '<div class="tw-row">' +
+      '<input type="text" value="' + esc(r.keyword) + '" onchange="onTitleWeightKeywordChange(' + idx + ',this.value)">' +
+      '<input type="number" min="0" max="1" step="0.05" value="' + r.weight + '" onchange="onTitleWeightWeightChange(' + idx + ',this.value)">' +
+      '<button type="button" class="tw-rm" onclick="removeTitleWeightRow(' + idx + ')" title="Remove">&times;</button>' +
+      "</div>";
+  }).join("");
+  var tableHtml = '<div class="tw-table"><div class="tw-head"><span>Title keyword</span><span>Weight</span><span></span></div>' + rows +
+    '<div class="tw-add-row"><button type="button" onclick="addTitleWeightRow()">+ Add keyword</button></div></div>' +
+    '<div class="tw-note">Matches are a case-insensitive substring against Job Title, so "Chief" alone already catches every "Chief &hellip; Officer" variant - list acronyms (COO, CPO&hellip;) as their own row since they can\'t be derived automatically. Highest-weight match wins per person.</div>';
+  // Collapsed by default - a 24-row default keyword table dominated this
+  // panel visually. Same rt-toggle/rt-detail pattern already used for the
+  // Recovery tab's "+ Workload breakdown" - state.titleWeightTableExpanded
+  // persists the open/closed state across full recomputes (e.g. editing a
+  // row inside triggers recomputeAll(), which would otherwise silently
+  // re-collapse this every time).
+  var isOpen = !!state.titleWeightTableExpanded;
+  var toggleLabel = (isOpen ? "&minus; Hide" : "+ Show") + " title keywords (" + state.titleWeightRows.length + ")";
+  return '<div class="rt-toggle" onclick="toggleTitleWeightTable()">' + toggleLabel + "</div>" +
+    '<div class="rt-detail' + (isOpen ? " open" : "") + '" id="tw-detail">' + tableHtml + "</div>";
+}
+
+function toggleTitleWeightTable() {
+  state.titleWeightTableExpanded = !state.titleWeightTableExpanded;
+  var el = document.getElementById("tw-detail");
+  if (el) { el.classList.toggle("open", state.titleWeightTableExpanded); }
+  var toggle = el ? el.previousElementSibling : null;
+  if (toggle) { toggle.innerHTML = (state.titleWeightTableExpanded ? "&minus; Hide" : "+ Show") + " title keywords (" + state.titleWeightRows.length + ")"; }
+}
+
 function buildControlsSliders() {
   var html = '<div class="controls-panel"><h4 class="panel-title">Live scoring controls</h4>' +
     '<p class="panel-sub">Each workload\'s metrics are weighted as a share of <b>100%</b> - adjust one and everything below recomputes instantly. Title-weight and hub-site bonus further down are separate <b>bonus points added on top</b>, capped so no single factor can dominate a score.</p>';
@@ -3883,36 +3959,22 @@ function buildControlsSliders() {
   var twPct = Math.round(state.titleWeightContribution * 100);
   var hsPct = Math.round(state.hubSiteBonus * 100);
   html += '<div class="control-row"><label>Title-weight bonus</label><input type="range" id="wslider-_bonus-titleWeight" min="0" max="100" step="5" value="' + twPct + '" data-wd="_bonus" data-field="titleWeight" oninput="onWeightSlide(this)"><span class="valdisp" id="wval-_bonus-titleWeight">' + twPct + '%</span></div>';
+  html += buildTitleWeightTableHtml();
   html += '<div class="control-row"><label>Hub-site bonus</label><input type="range" id="wslider-_bonus-hubSite" min="0" max="100" step="5" value="' + hsPct + '" data-wd="_bonus" data-field="hubSite" oninput="onWeightSlide(this)"><span class="valdisp" id="wval-_bonus-hubSite">' + hsPct + '%</span></div>';
   html += "</div>";
   html += '<div class="control-row" style="margin-top:.9rem;"><label>Hub-site keywords</label><input type="text" style="flex:1;max-width:400px;" placeholder="e.g. Payroll, HR, Finance, IT Help Desk (blank = no hub-site matching)" value="' + esc(state.hubSiteKeywords.join(", ")) + '" onchange="onHubKeywordsChange(this.value)"></div>';
-  html += '<div class="control-row"><label>Filter to org under manager</label><input type="text" placeholder="Manager display name..." style="flex:1;max-width:300px;" onchange="onManagerFilterChange(this.value)"></div>';
-  html += buildGroupFilterControlHtml();
   html += "</div>";
   return html;
 }
-
-// Entra ID group-based bulk selection - same idea and same scope
-// (Mailboxes/OneDrive only) as the manager filter above, mirroring how RSC
-// Mass Recovery groups users by AD/Entra ID Group. A <select> of exact group
-// names (rather than free text like the manager box) since group names are
-// canonical identifiers, not something most admins have memorized. Combines
-// with the manager filter automatically (both are independent AND
-// conditions in rowPassesFilters) - "everyone in this group AND under this
-// manager" works without any extra code. Only rendered as usable when
-// -Groups actually resolved data this run; otherwise shown disabled with an
-// explanatory hint rather than silently doing nothing.
-function buildGroupFilterControlHtml() {
-  var groupRows = (DATA.workloads.mailboxes || []).concat(DATA.workloads.onedrive || []);
-  var groupNames = distinctGroupNames(groupRows);
-  var currentGroup = ((state.activeFilters.mailboxes || {}).group) || "";
-  if (groupNames.length === 0) {
-    return '<div class="control-row"><label>Filter to Entra ID group</label><select disabled title="Not collected this run - re-run with -Groups to enable"><option>Not collected this run</option></select></div>';
-  }
-  var opts = '<option value="">Filter to Entra ID group: All</option>';
-  groupNames.forEach(function (g) { opts += '<option value="' + esc(g) + '"' + (g === currentGroup ? " selected" : "") + ">" + esc(g) + "</option>"; });
-  return '<div class="control-row"><label>Filter to Entra ID group</label><select style="flex:1;max-width:300px;" onchange="onGroupFilterChange(this.value)">' + opts + "</select></div>";
-}
+// NOTE: "Filter to org under manager" and "Filter to Entra ID group" used to
+// live here as global controls, but they're row filters like Department/
+// Title/Mailbox Type - they belong in each workload's own filter bar next to
+// the mass-reassign action, not in the scoring-weights panel. Moved into
+// buildWorkloadSection() (see the hasEnrichment/hasGroups blocks) so
+// "filter down to this manager or group, then mass-reassign the filtered set"
+// is one continuous motion instead of two separate panels. rowPassesFilters
+// already read f.manager/f.group generically, so this was a pure UI move -
+// no filtering-logic change.
 
 // Keeps a workload's weights from ever summing past 100%, WITHOUT ever
 // touching a slider other than the one the user is actively dragging (a
@@ -4087,20 +4149,33 @@ function resetImpactBaseline() {
 }
 
 function onHubKeywordsChange(value) { state.hubSiteKeywords = value.split(",").map(function (s) { return s.trim(); }).filter(Boolean); recomputeAll(); }
-function onManagerFilterChange(value) {
-  ["mailboxes", "onedrive"].forEach(function (wdKey) {
-    var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
-    f.manager = value || null;
-    rerenderWorkloadSection(wdKey);
+
+// Rebuilds state.titleWeights (the plain object computeTitleWeight() actually
+// reads) from state.titleWeightRows (the ordered array the editable table
+// works against). Blank/whitespace-only keyword rows are skipped - lets a
+// half-filled "Add keyword" row sit in the table without matching every
+// title. Duplicate keywords simply let the later row win (last write wins on
+// object-key assignment), same as if two same-named entries were passed via
+// -TitleWeights on the command line.
+function syncTitleWeights() {
+  var next = {};
+  state.titleWeightRows.forEach(function (r) {
+    var kw = (r.keyword || "").trim();
+    if (kw) { next[kw] = r.weight; }
   });
+  state.titleWeights = next;
 }
-function onGroupFilterChange(value) {
-  ["mailboxes", "onedrive"].forEach(function (wdKey) {
-    var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
-    f.group = value || null;
-    rerenderWorkloadSection(wdKey);
-  });
+function onTitleWeightKeywordChange(idx, value) { state.titleWeightRows[idx].keyword = value; syncTitleWeights(); recomputeAll(); }
+function onTitleWeightWeightChange(idx, value) {
+  var n = parseFloat(value);
+  if (isNaN(n)) { n = 0; }
+  n = Math.max(0, Math.min(1, n));
+  state.titleWeightRows[idx].weight = n;
+  syncTitleWeights();
+  recomputeAll();
 }
+function removeTitleWeightRow(idx) { state.titleWeightRows.splice(idx, 1); syncTitleWeights(); recomputeAll(); }
+function addTitleWeightRow() { state.titleWeightRows.push({ keyword: "", weight: 0.5 }); syncTitleWeights(); recomputeAll(); }
 
 function buildGroup1Overview() {
   var combined = [];
@@ -5220,10 +5295,17 @@ $script:ReportHtmlTemplate = @'
          (previously the only thing on this tab). -->
     <div id="exec-financial"></div>
     <div id="exec-recovery-times"></div>
-    <div id="exec-cost-table"></div>
+    <!-- NEW: reordered again 2026-08-24 per feedback - Totals Across All
+         Workloads (exec-totals, which renders its own "Totals Across All
+         Workloads" <h2>) now leads the group breakdown, ahead of the
+         per-workload Group Overview cards, which in turn now comes before
+         the Downtime Cost Avoided table. Pure DOM reorder - each section
+         still renders into its own div by id from the same render
+         functions, regardless of where that div sits in this template. -->
+    <div id="exec-totals"></div>
     <h2 style="margin-top:2rem;">Group Overview</h2>
     <div class="summary-grid" id="exec-summary-cards"></div>
-    <div id="exec-totals"></div>
+    <div id="exec-cost-table"></div>
     <!-- NEW v3.6.0: Dormant Data moved to the very bottom of the Report tab
          and collapsed by default, per feedback 2026-07-22 - see
          renderExecFinancialAndRecoveryTop's dormantHtml block. -->
