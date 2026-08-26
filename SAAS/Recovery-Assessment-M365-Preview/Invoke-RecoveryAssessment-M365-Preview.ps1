@@ -1048,7 +1048,7 @@ $script:SPODTierTable = @(
     @{ Bucket = '1k-5k';   Max = 5000;                       Parallelism = 6  }
     @{ Bucket = '5k-15k';  Max = 15000;                      Parallelism = 9  }
     @{ Bucket = '15k-50k'; Max = 50000;                      Parallelism = 12 }
-    @{ Bucket = '50k+';    Max = [double]::PositiveInfinity;  Parallelism = 15 }
+    @{ Bucket = '50k+';    Max = $null;                       Parallelism = 15 }
 )
 # NEW v3.10.0 (M365 MVC Recovery Time Estimator - RSC M365 Restoration
 # Benchmark, Mar 2025 / M365 Sizing Guidance, Jan 2026 - superseding the
@@ -1907,6 +1907,34 @@ function ConvertTo-SafeHtml {
     param([string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return '' }
     return [System.Net.WebUtility]::HtmlEncode($Text)
+}
+
+<#
+    PowerShell's ConvertTo-Json happily emits the bare words Infinity,
+    -Infinity, and NaN for [double]::PositiveInfinity/NegativeInfinity/NaN
+    values anywhere in the object graph - none of which are valid JSON
+    (the spec has no numeric literal for them). The browser's JSON.parse()
+    on the embedded report-data blob throws on the very first one, which
+    kills DATA entirely and leaves every tab blank - with no error visible
+    anywhere except the browser console, so it looks like a silently broken
+    report rather than a crash. Found live 2026-08-26: the SPOD throughput
+    tier table's uncapped "50k+" bucket was still [double]::PositiveInfinity
+    (fixed to $null, which the JS side already expected), but nothing
+    stopped the NEXT such value - added anywhere in $dataObject by a future
+    change - from doing the exact same thing again, undetected by node
+    --check or a JS-logic vm harness (both operate on an already-parsed JS
+    object, never the raw JSON text a browser's JSON.parse() actually sees).
+    Call this on the compressed JSON string immediately after every
+    ConvertTo-Json call that builds an embedded/exported report-data blob,
+    before it's written anywhere - fails loudly and immediately at
+    generation time instead of shipping a report that only looks broken
+    once a customer opens it.
+#>
+function Assert-ValidReportJson {
+    param([Parameter(Mandatory)][string]$Json, [string]$Context = 'report data')
+    if ($Json -match '(?<=[:,\[])(-?Infinity|NaN)(?=[,\]}])') {
+        throw "Assert-ValidReportJson: found a bare '$($Matches[1])' token in $Context - not valid JSON, will crash JSON.parse() in the browser and leave the report blank. Root cause is almost always a [double]::PositiveInfinity/NegativeInfinity/NaN value somewhere in the object passed to ConvertTo-Json; replace it with `$null` (or a finite sentinel) before this point."
+    }
 }
 
 $script:ReportCss = @'
@@ -5151,6 +5179,7 @@ function New-M365HtmlReport {
     }
 
     $reportDataJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportDataJson -Context 'the embedded HTML report-data blob'
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
     $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsBootstrap) -join "`n"
 
@@ -5476,7 +5505,9 @@ if (-not $SkipHtmlReport) {
             teams      = ConvertTo-ReportRows -Data $teams          -MetricFields @('TotalActivity')
         }
     }
-    $reportDataForCompare | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path (Join-Path $OutputPath '_ReportData.json') -Encoding UTF8
+    $reportDataForCompareJson = $reportDataForCompare | ConvertTo-Json -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportDataForCompareJson -Context '_ReportData.json (for a future -CompareTo run)'
+    $reportDataForCompareJson | Set-Content -Path (Join-Path $OutputPath '_ReportData.json') -Encoding UTF8
     Write-Host "HTML report              ->  $htmlReportPath" -ForegroundColor Gray
 }
 
