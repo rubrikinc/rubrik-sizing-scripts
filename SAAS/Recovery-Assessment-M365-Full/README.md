@@ -11,10 +11,12 @@ Looking for the redacted trade-show/demo build instead? It's distributed as a se
 | | Always required | Add `-Groups` | Add `-DetailedSizing` |
 |---|---|---|---|
 | **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ | same | same |
-| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` | same | + `ExchangeOnlineManagement` |
+| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) | same | + `ExchangeOnlineManagement` 3.0.0 or later |
 | **Directory role** | Reports Reader | same | same, plus a read-only Exchange Online role (e.g. View-Only Recipients) |
 | **Graph/API scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All` | + `Group.Read.All` | same as base, plus a separate, second interactive sign-in to Exchange Online (not a Graph scope) |
 | **Unlocks** | Full tiering, recovery time, and cost modeling for every workload, plus manager/job title/department enrichment, mailbox-type detection, and exact Team-site matching | A "Filter to Entra ID group" bulk-selection tool | Archive Mailbox and Recoverable Items sizing detail on the Sizing tab |
+
+Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
 
 **Required tenant setting:** in the M365 admin center, go to Settings → Org settings → Reports, and turn on **"Displayed concealed user, group, and site names in all reports."** Without this, usage reports return anonymized identifiers instead of real names, and the assessment won't be usable.
 
@@ -126,3 +128,61 @@ For scheduled or recurring runs without an interactive sign-in. Run `-ShowEnterp
 - SharePoint "broad access across the org" is an activity proxy (page views + active files), not a true unique-accessor count.
 - The mailbox-type classifier and hub-site detection use heuristics, not authoritative directory reads.
 - Recovery-time modeling assumes flat throughput caps regardless of slice size, matching the underlying recovery-time calculator's own formulas.
+
+## Updating PowerShell Modules
+
+**Minimum versions:** `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Reports`, and `Microsoft.Graph.Sites` all ship together as one family and must be **the same version as each other** — 2.38.0 or later. `ExchangeOnlineManagement` (only needed for `-DetailedSizing`) needs 3.0.0 or later; if you're on PowerShell 7, versions 3.10.0+ additionally require PowerShell 7.6 or later (Windows PowerShell 5.1 is unaffected either way).
+
+By far the most common real-world failure isn't a module being too old — it's the four Graph modules being **mismatched versions of each other** (e.g. `Microsoft.Graph.Users` updated but `Microsoft.Graph.Authentication` didn't), which throws an assembly-load error that names a specific version it can't find, like:
+
+```
+Could not load file or assembly 'Microsoft.Graph.Authentication, Version=2.39.0.0, Culture=neutral,
+PublicKeyToken=31bf3856ad364e35' or one of its dependencies. The system cannot find the file specified.
+```
+
+That happens when a partial `Update-Module`, multiple side-by-side installs, or a manually-copied module left the four Graph submodules out of sync. The fix is a clean uninstall of every installed version of every `Microsoft.Graph.*` module, followed by a fresh install of just the four this script needs — **run this in a brand-new PowerShell window**, not the one that hit the error (a session that already loaded a mismatched assembly can't unload it mid-run):
+
+```powershell
+# 1. See what's currently installed (useful to save/screenshot if the issue persists after this)
+Get-InstalledModule -Name Microsoft.Graph* | Select-Object Name, Version | Sort-Object Name, Version
+
+# 2. Uninstall every installed version of every Microsoft.Graph* module
+Get-InstalledModule -Name Microsoft.Graph* | ForEach-Object {
+    Write-Host "Removing $($_.Name) $($_.Version)..." -ForegroundColor Yellow
+    Uninstall-Module -Name $_.Name -AllVersions -Force -ErrorAction SilentlyContinue
+}
+
+# 3. Filesystem sweep - catches leftover module folders PowerShellGet's own uninstall
+#    sometimes can't clean up (partial installs, or a module that was manually copied
+#    in rather than installed via Install-Module). Reads $env:PSModulePath directly
+#    instead of guessing paths, so this works on Windows PowerShell or PowerShell 7,
+#    on Windows or macOS, regardless of how PowerShell itself was installed.
+($env:PSModulePath -split [IO.Path]::PathSeparator) | ForEach-Object {
+    if (Test-Path $_) {
+        Get-ChildItem -Path $_ -Directory -Filter 'Microsoft.Graph*' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Write-Host "Deleting leftover folder: $($_.FullName)" -ForegroundColor Yellow
+                Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+    }
+}
+
+# 4. Reinstall only what this script needs - CurrentUser scope, no admin/sudo required
+'Microsoft.Graph.Authentication', 'Microsoft.Graph.Users', 'Microsoft.Graph.Reports', 'Microsoft.Graph.Sites' | ForEach-Object {
+    Write-Host "Installing $_..." -ForegroundColor Cyan
+    Install-Module -Name $_ -Scope CurrentUser -Force -AllowClobber
+}
+
+# 5. Verify - should show exactly these 4 modules, one version each, no duplicates
+Get-InstalledModule -Name Microsoft.Graph.Authentication, Microsoft.Graph.Users, Microsoft.Graph.Reports, Microsoft.Graph.Sites |
+    Select-Object Name, Version
+```
+
+If you're also using `-DetailedSizing`, do the same for `ExchangeOnlineManagement` (a separate module family, not touched by the steps above):
+
+```powershell
+Uninstall-Module ExchangeOnlineManagement -AllVersions -Force -ErrorAction SilentlyContinue
+Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
+```
+
+Open a brand-new PowerShell window before running the assessment again.
