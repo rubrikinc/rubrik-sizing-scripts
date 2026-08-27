@@ -5129,7 +5129,6 @@ function New-M365HtmlReport {
             customerLabel                = $CustomerLabel
             period                       = $Period
             generatedAt                  = (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt')
-            mode                         = if ($Groups) { 'FULL + GROUPS' } else { 'FULL' }
             groupsRequested              = [bool]$Groups
             recoveryWindowDays           = $RecoveryWindowDays
             recoveryLicenseTierRequested = $RecoveryLicenseTier
@@ -5202,7 +5201,7 @@ function New-M365HtmlReport {
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 - PREVIEW BUILD (v3.7.2) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 - PREVIEW BUILD (v3.13.0) ===" -ForegroundColor Cyan
 Write-Host "Group 1 will be shown in full; Groups 2/3/4 will be redacted (identity fields + Groups 2/3 ABR timing) before anything is written to disk." -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
@@ -5536,7 +5535,7 @@ $manifestFullRestoreMin  = ([math]::Round($recoveryModel.FullRestoreUnprioritize
 $manifestFullRestoreHr   = ([math]::Round($recoveryModel.FullRestoreUnprioritizedMin / 60, 1)).ToString()
 
 $manifest = @'
-Recovery Assessment - M365 - PREVIEW BUILD - Run Manifest (v3.7.2)
+Recovery Assessment - M365 - PREVIEW BUILD - Run Manifest (v3.13.0)
 Run time (UTC):        __RUN_TIME_UTC__
 Usage report period:   __PERIOD__
 Tier split (Teams only): __TIER_SPLIT__
