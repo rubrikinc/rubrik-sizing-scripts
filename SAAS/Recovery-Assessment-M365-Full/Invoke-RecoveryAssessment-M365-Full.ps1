@@ -5402,7 +5402,6 @@ function New-M365HtmlReport {
             customerLabel                = $CustomerLabel
             period                       = $Period
             generatedAt                  = (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt')
-            mode                         = if ($Groups) { 'FULL + GROUPS' } else { 'FULL' }
             groupsRequested              = [bool]$Groups
             recoveryWindowDays           = $RecoveryWindowDays
             recoveryLicenseTierRequested = $RecoveryLicenseTier
@@ -5727,7 +5726,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.0.0) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.13.0) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6057,7 +6056,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.0.0)
+Recovery Assessment - M365 - Run Manifest (v3.13.0)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
