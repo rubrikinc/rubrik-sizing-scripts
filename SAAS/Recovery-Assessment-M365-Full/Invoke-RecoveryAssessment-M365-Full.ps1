@@ -5214,6 +5214,16 @@ function renderCompareTab() {
     the feedback's request to bold key concepts for scannability - every
     other step's body is a plain string and still runs through esc().
 
+    Second feedback pass on the same Google Doc (picked up 2026-08-28, after
+    the doc was updated post-first-pass): the Recovery Modeling Inputs step
+    now uses the reviewer's suggested customer-facing wording for why the
+    default downtime cost is conservative; "Now try something below" ->
+    "Let's adjust the recovery target below"; the RTO-targets step's wording
+    was rewritten to be less internal/confusing ("you can use our default
+    RTO targets... or fully customize them"); and the closing step's title
+    spells out the ABR acronym in full ("Why Autonomous Business Recovery
+    Matters") since it's never expanded anywhere else in the tour.
+
     Selectors used (added alongside their elements, see each build function):
       #exec-lean .exec-lean-tiles > div:first-child / div.money / .recovery-ladder
       #group1-overview, #attr-filters-mailboxes, #mass-edit-bar-mailboxes
@@ -5250,12 +5260,12 @@ var TOUR_STEPS = [
   { tab: "groups", selector: "#group1-overview", htmlBody: true, title: "Everyone in Group 1, One List", body: "This is your first plane. The names on it are the people your business runs on: <b>the CFO closing the quarter, the legal team mid-litigation, the SharePoint site your field org lives in.</b> Every object that made Group 1's cut, across every workload, lands in one sortable, filterable table - scan it, sort by department or owner, and confirm the right people are on board before anyone else recovers." },
   { tab: "groups", selector: "#attr-filters-mailboxes", title: "Filter to Exactly Who You Want", body: "Slice any workload by department, manager, job title, mailbox type, or Entra ID group. Want to isolate just Legal, one manager's org, or one specific group? Filter here." },
   { tab: "groups", selector: "#mass-edit-bar-mailboxes", title: "Make Adjustments", body: "Once you're filtered down to exactly who you want, mass-reassign everyone in that filtered set to a different tier in one click. A common case: a compliance review team or an e-discovery hold list needs to be Group 1 regardless of what the activity score says - filter to that group, pick Group 1, hit Apply." },
-  { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. Downtime cost per hour is what an outage costs the business - the default shown here is deliberately conservative; most organizations' real M365 downtime costs run well above it, so swap in the customer's actual number whenever you have it." },
+  { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", htmlBody: true, title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. <b>The default downtime cost per hour shown here is a conservative estimate</b> - in reality, downtime costs tend to run much higher. Use this field to apply the customer's own estimated downtime cost and see an accurate picture of the savings." },
   { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, By the Numbers",
     body: function () {
       var snap = getGroup1Snapshot();
       tourState.g1Before = snap;
-      return "Right now, Group 1 has <b>" + fmtNum(snap.count) + " objects</b> queued for fast recovery at today's <b>" + snap.hours + "-hour</b> target. Now try something below.";
+      return "Right now, Group 1 has <b>" + fmtNum(snap.count) + " objects</b> queued for fast recovery at today's <b>" + snap.hours + "-hour</b> target. Let's adjust the recovery target below.";
     }
   },
   { tab: "recovery", selector: "#group1-target-input", title: "Try It Yourself", body: "This is how quickly the business needs Group 1 back up - its recovery time budget. Change this number and watch Group 1's object count update live. A bigger budget lets Group 1 absorb more objects from the leaderboard before it's full; a tighter budget means fewer objects fit and Group 1 stays smaller. Try changing it down, then back up - click Continue whenever you're ready.", manualAdvance: true },
@@ -5273,8 +5283,8 @@ var TOUR_STEPS = [
       return "You just moved Group 1's target from " + before.hours + " hr to " + after.hours + " hr - Group 1 went from <b>" + fmtNum(before.count) + "</b> to <b>" + fmtNum(after.count) + "</b> objects, " + verb + " of <b>" + fmtNum(deltaAbs) + " " + deltaPlural + "</b>. That's the budget-constrained tiering responding live: objects move in and out of Group 1 as the time budget changes, nothing is recomputed from scratch.";
     }
   },
-  { tab: "recovery", selector: ".rt-preset-row", title: "Set the Real Numbers", body: "Downtime cost per hour and the RTO target for each group live here too. Plug in the customer's real figures and everything upstream - the Executive Summary, the cost table, all of it - recomputes instantly." },
-  { tab: "exec", selector: null, htmlBody: true, title: "Why ABR Matters", body: "<b>This is how you answer the question we opened with:</b> the people and processes this business can't function without are back online in hours, not days - because ABR brings back Critical data first, then Important, then Standard, instead of restoring everything at once in random order. Everything else keeps recovering safely in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
+  { tab: "recovery", selector: ".rt-preset-row", htmlBody: true, title: "Set the Real Numbers", body: "You can use our <b>default RTO targets</b>, based on the size of the customer's organization, or <b>fully customize them</b> to fit their business needs - along with the downtime cost per hour above. The calculations throughout this workbook, including the Executive Summary and the cost table, update instantly." },
+  { tab: "exec", selector: null, htmlBody: true, title: "Why Autonomous Business Recovery Matters", body: "<b>This is how you answer the question we opened with:</b> the people and processes this business can't function without are back online in hours, not days - because ABR (Autonomous Business Recovery) brings back Critical data first, then Important, then Standard, instead of restoring everything at once in random order. Everything else keeps recovering safely in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
 ];
 
 var tourState = { active: false, stepIndex: 0, g1Before: null };
@@ -6183,7 +6193,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.2) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.3) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6513,7 +6523,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.2)
+Recovery Assessment - M365 - Run Manifest (v3.16.3)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
