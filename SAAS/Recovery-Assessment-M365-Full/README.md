@@ -8,13 +8,15 @@ Looking for the redacted trade-show/demo build instead? It's distributed as a se
 
 ## Permissions & Prerequisites
 
-| | Always required | Add `-Groups` | Add `-DetailedSizing` |
-|---|---|---|---|
-| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ | same | same |
-| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) | same | + `ExchangeOnlineManagement` 3.0.0 or later |
-| **Directory role** | Reports Reader | same | same, plus a read-only Exchange Online role (e.g. View-Only Recipients) |
-| **Graph/API scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All` | + `Group.Read.All` | same as base, plus a separate, second interactive sign-in to Exchange Online (not a Graph scope) |
-| **Unlocks** | Full tiering, recovery time, and cost modeling for every workload, plus manager/job title/department enrichment, mailbox-type detection, and exact Team-site matching | A "Filter to Entra ID group" bulk-selection tool | Archive Mailbox and Recoverable Items sizing detail on the Sizing tab |
+| | Always required | Add `-DetailedSizing` |
+|---|---|---|
+| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ | same |
+| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) | + `ExchangeOnlineManagement` 3.0.0 or later |
+| **Directory role** | Reports Reader | same, plus a read-only Exchange Online role (e.g. View-Only Recipients) |
+| **Graph/API scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All`, `Group.Read.All` | same as base, plus a separate, second interactive sign-in to Exchange Online (not a Graph scope) |
+| **Unlocks** | Full tiering, recovery time, and cost modeling for every workload, plus manager/job title/department enrichment, mailbox-type detection, exact Team-site matching, and a "Filter to Entra ID group" bulk-selection tool | Archive Mailbox and Recoverable Items sizing detail on the Sizing tab |
+
+**As of v3.14.0, `Group.Read.All` is requested by default** (was opt-in via `-Groups` through v3.13.0) — pass `-NoGroups` if you need to skip it, e.g. a customer's security team hasn't approved that scope yet. See [Command-Line Switches](#command-line-switches) below.
 
 Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
 
@@ -26,16 +28,16 @@ Getting an assembly-load error like `Could not load file or assembly 'Microsoft.
 .\Invoke-RecoveryAssessment-M365-Full.ps1
 ```
 
-Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, $10,000/hour downtime cost (pass `-DowntimeCostPerHour` to override), output to a timestamped folder (`.\M365CriticalityAssessment_yyyyMMdd_HHmmss\`) in the current directory. That single command already covers full tiering, recovery time, cost modeling, and enrichment for every workload — everything below is optional.
+Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, $10,000/hour downtime cost (pass `-DowntimeCostPerHour` to override), output to a timestamped folder (`.\M365CriticalityAssessment_yyyyMMdd_HHmmss\`) in the current directory. That single command already covers full tiering, recovery time, cost modeling, enrichment, and Entra ID group data for every workload — everything below is optional.
 
 ## Command-Line Switches
 
 Every switch below can be combined with any other. All of them are optional — the plain `.\Invoke-RecoveryAssessment-M365-Full.ps1` command above already runs the full assessment.
 
 ```powershell
-.\Invoke-RecoveryAssessment-M365-Full.ps1 -Groups
+.\Invoke-RecoveryAssessment-M365-Full.ps1 -NoGroups
 ```
-Adds a "Filter to Entra ID group" bulk-selection tool to the Criticality Groups tab. Requests one additional Graph scope (`Group.Read.All`) on top of the base permissions — no separate sign-in, no separate module. Group membership rides the same directory pull the base assessment already does.
+Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — rides the same directory pull the base assessment already does, no separate call — and surfaces a "Filter to Entra ID group" bulk-selection tool on the Criticality Groups tab, so you can filter to a specific department/team and mass-reassign everyone in it to a tier in one motion. This requests one additional Graph scope, `Group.Read.All`, on every run. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope) — it drops the extra scope request and the group filter/column disappear for that run.
 
 ```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -DetailedSizing
@@ -90,6 +92,8 @@ A single, self-contained HTML file — no server or installation needed to view 
 Two PDF export options — **One Page Summary** and **Full Report** — both computed fresh from whatever's on screen at export time.
 
 Manual overrides: every row's tier is a dropdown; changing it always wins over the computed tier. `Export overrides` downloads a JSON file — pass it back in via `-OverridesFile` on a later run so overrides persist.
+
+`Export Criticality Groups (CSV)` downloads one CSV listing every object across all four workloads with its final tier — reading the live, on-screen state at the moment you click it, so any manual overrides or mass-reassignments you've made are included, not just what the script originally computed. Meant as a hand-off file for downstream automation (e.g. a script that calls RSC to create or update criticality groups from this list).
 
 **Large tenants:** the Criticality Groups tab's tables render only the top 500 rows per section by score (highest-priority objects first), not every object — a tenant with tens of thousands of objects per workload would otherwise hang the browser building that many table rows at once. A "Show all N rows" button appears whenever a table is capped, for anyone who needs the full list on screen. Search and filters still run against every object regardless of the cap, so searching for one specific person or site always finds it.
 

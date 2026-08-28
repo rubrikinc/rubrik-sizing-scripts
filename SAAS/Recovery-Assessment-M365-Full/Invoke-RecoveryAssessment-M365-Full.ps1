@@ -73,16 +73,16 @@
     PERMISSIONS
     ============================================================================
     BASE (always requested): Entra role "Reports Reader". Delegated scopes
-              Reports.Read.All, User.Read.All, Sites.Read.All. Buys: full
-              tiering, recovery time, and cost modeling for every workload,
-              plus user profile enrichment (Job Title, Department, Employee
-              Type, Manager, manager roll-up chain, mailbox-type heuristic,
-              title-weight scoring) and exact Team<->SharePoint site
-              resolution.
-    GROUPS (-Groups): Adds delegated scope Group.Read.All. Buys: each user's
-              Entra ID group membership (Mailboxes/OneDrive only - same UPN
-              join as the base enrichment pull, resolved from the SAME single
-              directory pull, no extra Graph call), surfaced as a "Filter to
+              Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All.
+              Buys: full tiering, recovery time, and cost modeling for every
+              workload, plus user profile enrichment (Job Title, Department,
+              Employee Type, Manager, manager roll-up chain, mailbox-type
+              heuristic, title-weight scoring), exact Team<->SharePoint site
+              resolution, AND (NEW v3.14.0, was opt-in via -Groups through
+              v3.13.0) each user's Entra ID group membership (Mailboxes/
+              OneDrive only - same UPN join as the rest of base enrichment,
+              resolved from the SAME single directory pull, no extra Graph
+              call beyond the one added scope), surfaced as a "Filter to
               Entra ID group" control next to the manager filter so you can
               bulk-select/mass-tier "everyone in this group" - mirroring how
               RSC Mass Recovery groups users by AD/Entra ID Group for
@@ -90,6 +90,10 @@
               than the strict-minimum GroupMember.Read.All so a future
               per-group detail lookup (type, owners, dynamic membership rule)
               does not require asking the customer for a second consent grant.
+              This is a real widening of the default consent surface, not a
+              free addition - pass -NoGroups to opt back out (e.g. a
+              customer's security team hasn't approved Group.Read.All yet)
+              and revert to the pre-v3.14.0 base scope set.
     DETAILED SIZING (-DetailedSizing): NOT a Graph scope - a SEPARATE
               connection entirely (Connect-ExchangeOnline, via the
               ExchangeOnlineManagement PowerShell module), a SEPARATE
@@ -196,12 +200,21 @@ param(
 
     [switch]$SkipHtmlReport,
 
-    # Entra ID group membership enrichment (Mailboxes/OneDrive only) - rides
-    # the same bulk Get-MgUser directory pull already made for base
-    # enrichment and requests the extra Group.Read.All scope. Lets you
-    # bulk-select/mass-tier "everyone in this group," the same selection
-    # model RSC Mass Recovery uses for AD/Entra ID Groups.
-    [switch]$Groups,
+    # NEW v3.14.0: Entra ID group membership enrichment (Mailboxes/OneDrive
+    # only) is now ON BY DEFAULT - was opt-in via -Groups through v3.13.0,
+    # flipped per repeated customer feedback that "pin this specific
+    # department/group into Group 1 regardless of what the activity score
+    # says" is a common, real ask, and the mass-reassign-a-filtered-group
+    # workflow that answers it was going undiscovered behind an opt-in flag.
+    # This DOES widen the default consent surface - Group.Read.All is now
+    # requested on every run, not just when asked for - so it's called out
+    # explicitly here, in the README, and in the CHANGELOG (not left as a
+    # silent side effect the way the v3.11.0 -Full collapse was). Rides the
+    # same bulk Get-MgUser directory pull already made for base enrichment -
+    # no extra Graph call, just the one extra scope. Pass -NoGroups to opt
+    # back out (e.g. a customer's security team hasn't approved the group
+    # read scope yet) and revert to the pre-v3.14.0 behavior.
+    [switch]$NoGroups,
 
     # Sizing tab detail - Archive Mailbox storage/items and Recoverable
     # Items sizing, ported from the standalone Get-RubrikM365SizingInfo.ps1
@@ -282,6 +295,13 @@ param(
     [string]$ClientId = '',
     [string]$CertificateThumbprint = ''
 )
+
+# Resolved once, here, so every downstream reference to $Groups (scope
+# requests, enrichment, manifest text, meta.groupsRequested, JS gating via
+# hasGroups) keeps working unchanged - $NoGroups is the only new surface,
+# $Groups is still "should group data be collected/shown," just inverted
+# and on-by-default per v3.14.0 (see -NoGroups param comment above).
+$Groups = -not $NoGroups
 
 $ErrorActionPreference = 'Stop'
 
@@ -393,8 +413,7 @@ API permissions > Add a permission > Microsoft Graph > Application permissions:
 - Reports.Read.All
 - User.Read.All
 - Sites.Read.All
-- (Only if you also want -Groups - Entra ID group-based bulk selection:)
-  Group.Read.All
+- Group.Read.All (skip this one only if you'll always run with -NoGroups)
 
 Click "Grant admin consent for <tenant>" - this step requires a Global
 Administrator or Privileged Role Administrator. This is the step that makes
@@ -443,7 +462,7 @@ it tries to connect to Exchange Online - the rest of the report is
 unaffected (see Get-DetailedSizingInfo's error handling).
 
 ## 5. Run the assessment
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-Groups] [-DetailedSizing] [other params]
+    .\Invoke-RecoveryAssessment-M365-Full.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-NoGroups] [-DetailedSizing] [other params]
 
 ## When you're done
 Revoke or delete the app registration (or at minimum rotate/remove the
@@ -465,14 +484,15 @@ function Get-UserEnrichmentIndex {
         from a single Get-MgUser -All call - no extra per-user Graph calls.
         Joined onto Mailboxes/OneDrive by UPN in Add-UserEnrichment.
 
-        -IncludeGroups (needs -Groups, which needs Group.Read.All): expands
-        'MemberOf' on the SAME Get-MgUser -All call (no extra Graph round
-        trip) and keeps only entries that are actual Entra ID groups
-        (filters out directory roles / administrative units, which also
-        come back on memberOf). Without Group.Read.All granted, memberOf
-        still resolves object IDs but displayName comes back null/limited -
-        so this quietly produces an empty Groups list rather than an error
-        if -Groups was passed but the scope wasn't actually consented.
+        -IncludeGroups (on by default as of v3.14.0 - pass -NoGroups at the
+        top level to skip it, which needs Group.Read.All): expands 'MemberOf'
+        on the SAME Get-MgUser -All call (no extra Graph round trip) and
+        keeps only entries that are actual Entra ID groups (filters out
+        directory roles / administrative units, which also come back on
+        memberOf). Without Group.Read.All granted, memberOf still resolves
+        object IDs but displayName comes back null/limited - so this quietly
+        produces an empty Groups list rather than an error if group data was
+        requested but the scope wasn't actually consented.
     #>
     param([switch]$IncludeGroups)
 
@@ -2438,6 +2458,30 @@ footer p { max-width: 900px; }
 .icon-btn svg { width: 17px; height: 17px; }
 .pill-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .5rem .8rem; margin-bottom: 1rem; max-width: 900px; }
 
+/* NEW: guided tour - welcome modal, spotlight overlay, positioned tooltip.
+   No external tour library, consistent with the report's zero-dependency
+   design. See $script:ReportJsTour for the engine. */
+.tour-welcome-backdrop { position: fixed; inset: 0; background: rgba(9,53,101,.65); z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.tour-welcome-card { background: #fff; border-radius: 14px; max-width: 480px; width: 100%; padding: 2rem; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.tour-welcome-title { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin-bottom: .6rem; }
+.tour-welcome-body { font-size: .92rem; color: var(--dark-gray); line-height: 1.55; margin-bottom: 1.3rem; }
+.tour-welcome-actions { display: flex; gap: .7rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.tour-welcome-dontshow { font-size: .78rem; color: var(--dark-gray); display: flex; align-items: center; gap: .45rem; cursor: pointer; }
+.tour-overlay-backdrop { position: fixed; inset: 0; background: transparent; z-index: 9000; pointer-events: none; }
+.tour-spotlight { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(9,53,101,.6); z-index: 9001; pointer-events: none; border: 2px solid var(--cyan); }
+.tour-tooltip { position: fixed; z-index: 9002; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); padding: 1.1rem 1.3rem; max-width: 340px; }
+.tour-tooltip.centered { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); max-width: 460px; width: calc(100% - 2rem); }
+.tour-tooltip-step { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--blue); margin-bottom: .3rem; }
+.tour-tooltip-title { font-size: 1.05rem; font-weight: 700; color: var(--navy); margin-bottom: .5rem; }
+.tour-tooltip-body { font-size: .88rem; color: var(--dark-gray); line-height: 1.5; margin-bottom: 1rem; }
+.tour-tooltip-actions { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.tour-btn { border: none; border-radius: 7px; padding: .5rem 1rem; font-size: .82rem; font-weight: 600; cursor: pointer; }
+.tour-btn-primary { background: var(--navy); color: #fff; }
+.tour-btn-primary:hover { background: var(--navy-dark); }
+.tour-btn-secondary { background: transparent; color: var(--dark-gray); padding: .5rem .4rem; }
+.tour-btn-secondary:hover { text-decoration: underline; }
+.tour-skip { font-size: .76rem; color: var(--dark-gray); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; }
+
 /* Recovery tab - RTO controls, per-group ABR vs Mass Recovery sections,
    exceeds-target shortfall callout, auto-suggest banner. */
 .rt-preset-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .8rem; }
@@ -3750,9 +3794,9 @@ function buildWorkloadSection(wdKey) {
     buildWorkloadTotalsRow(wdKey, null, "All Objects") +
     '<div class="search-box-row">' + searchBox + "</div>" +
     '<div class="filter-chips">' + chips + "</div>" +
-    '<div class="filter-chips">' + attrFilters + "</div>" +
+    '<div class="filter-chips" id="attr-filters-' + wdKey + '">' + attrFilters + "</div>" +
     filteredTotalsHtml +
-    '<div class="mass-edit-bar">' +
+    '<div class="mass-edit-bar" id="mass-edit-bar-' + wdKey + '">' +
       '<span style="font-size:.78rem;color:var(--dark-gray);">Mass-reassign all <b>' + visibleRows.length + '</b> currently-filtered rows to:</span>' +
       '<select id="mass-tier-' + wdKey + '">' + TIER_ORDER.map(function (t) { return '<option value="' + t + '">' + TIER_META[t].short + '</option>'; }).join("") + '</select>' +
       '<button onclick="massReassign(\'' + wdKey + '\')">Apply</button>' +
@@ -4284,8 +4328,8 @@ function buildRecoveryControls() {
   var opts = ["Auto"].concat(SPOD_TIER_TABLE.map(function (t) { return t.Bucket; })).map(function (b) {
     return '<option value="' + b + '"' + (state.recovery.licenseTier === b ? " selected" : "") + ">" + b + "</option>";
   }).join("");
-  var html = '<div class="controls-panel"><h4>Recovery modeling inputs</h4>';
-  html += '<div class="control-row"><label>Recovery window (days)</label><input type="number" min="0" max="7" step="0.5" value="' + state.recovery.windowDays + '" onchange="onRecoveryInputChange(\'windowDays\',this.value)" style="width:80px;"></div>';
+  var html = '<div class="controls-panel" id="recovery-inputs-panel"><h4>Recovery modeling inputs</h4>';
+  html += '<div class="control-row"><label>Recovery window (days)</label><input type="number" id="recovery-window-input" min="0" max="7" step="0.5" value="' + state.recovery.windowDays + '" onchange="onRecoveryInputChange(\'windowDays\',this.value)" style="width:80px;"></div>';
   html += '<div class="pill-note" style="margin-top:-.4rem;">ABR can recover up to the last 7 days of activity - drag this down to model a shorter window (linearly scales the real 7-day activity signal; not a separately measured figure).</div>';
   html += '<div class="control-row"><label>SP/OD throughput tier</label><select onchange="onRecoveryInputChange(\'licenseTier\',this.value)">' + opts + "</select></div>";
   html += '<div class="control-row"><label>Downtime cost ($/hour)</label><input type="number" min="0" step="100" value="' + state.recovery.costPerHour + '" onchange="onRecoveryInputChange(\'costPerHour\',this.value)" style="width:120px;"></div>';
@@ -4300,7 +4344,7 @@ function buildRecoveryControls() {
   });
   html += '<span style="font-size:.78rem;color:var(--dark-gray);">Current: <b>' + esc(state.recovery.rtoPreset) + '</b></span>';
   html += "</div>";
-  html += '<div class="control-row"><label>Group 1 target (hr)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group1Hours + '" onchange="onRtoTargetChange(\'group1Hours\',this.value)" style="width:90px;"></div>';
+  html += '<div class="control-row"><label>Group 1 target (hr)</label><input type="number" id="group1-target-input" min="0.1" step="0.5" value="' + state.recovery.group1Hours + '" onchange="onRtoTargetChange(\'group1Hours\',this.value)" style="width:90px;"></div>';
   html += '<div class="control-row"><label>Group 2 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group2Hours + '" onchange="onRtoTargetChange(\'group2Hours\',this.value)" style="width:90px;"></div>';
   html += '<div class="control-row"><label>Group 3 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group3Hours + '" onchange="onRtoTargetChange(\'group3Hours\',this.value)" style="width:90px;"></div>';
   html += buildAutoSuggestBanner();
@@ -4429,7 +4473,7 @@ function renderRecoveryTab() {
       ? ('<div class="rt-empty-note" style="background:#FDEDEE;color:#A5222B;">Exceeds the ' + g.label + " target (" + targetHoursArr[idx] + " hr) by " + fmtMin(m.targetGapMin) + " - this group's own recent/active data takes longer than the stated window to recover via ABR.</div>")
       : "";
 
-    html += '<div class="rt-group-section' + (isEmpty ? " empty-tier" : "") + (m.exceedsTarget ? " exceeds-target" : "") + '">' +
+    html += '<div class="rt-group-section' + (isEmpty ? " empty-tier" : "") + (m.exceedsTarget ? " exceeds-target" : "") + '"' + (idx === 0 ? ' id="rt-group-1-section"' : "") + '>' +
       "<h3>" + g.label + emptyBadge + exceedsBadge + ' <span style="font-weight:400;color:var(--dark-gray);font-size:.85rem;">- ' + fmtNum(objCount) + " objects</span></h3>" +
       '<div class="rt-subtitle">' + g.subtitle + "</div>" +
       emptyNote + exceedsNote +
@@ -4492,11 +4536,12 @@ function buildGlossaryHtml() {
   html += "<dt>RTO targets and presets</dt><dd>Group 1/2/3 targets (hours, cumulative) are a compliance check against each group's ABR cumulative time - NOT a tiering rule (see above). Standard = 4h / 24h / 72h. Enterprise = 24h / 120h / 240h (Day 1 / 5 days / 10 days). Auto suggests Standard or Enterprise based on this tenant's estimated full recovery time (&ge; 5 days / 7200 min picks Enterprise) and always tells you which it picked and why - it never silently overrides an explicit choice.</dd>";
   html += "<dt>Group 4</dt><dd>Limited activity across every metric in the reporting window - carved out before any scoring/tiering runs, for every workload. Gets no ABR timing at all and is recovered entirely by Mass Recovery, alongside the rest of the tenant. Still protected; just not on the critical path to getting the business running again.</dd>";
   html += "<dt>Manual override</dt><dd>Set via the tier dropdown on any row, or via mass-reassignment on a filtered set. Overrides always win over the computed tier and are flagged with an \"override\" badge. Use Export overrides to save them to a file and pass it back in via -OverridesFile on the next run so they persist.</dd>";
+  html += "<dt>Export Criticality Groups (CSV)</dt><dd>One CSV listing every object in every workload with its final tier - including any manual overrides or mass-reassignments made in this page, since it reads the live, on-screen state at export time, not just what the underlying PowerShell run originally computed. Meant as a hand-off file: identifier, tier, and enrichment (department/manager/Entra ID groups) per row for a downstream automation to consume.</dd>";
   html += "<dt>Job title weight</dt><dd>Job title is matched (case-insensitive substring) against a customer-editable keyword table; the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
   html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
   html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
   html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. Use the \"Filter to org under manager\" box to isolate or mass-tier everyone reporting up through a given leader.</dd>";
-  html += "<dt>Entra ID group filter</dt><dd>Requires -Groups (requests the additional Group.Read.All scope). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
+  html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
   html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
   html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time). Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>";
@@ -5101,6 +5146,273 @@ function renderCompareTab() {
 
 #endregion
 
+#region ---------- HTML report JS: guided tour ----------
+
+<#
+    Self-contained, vanilla JS - no external tour library, consistent with
+    the report's zero-dependency design. Walks a presenter (SE or customer)
+    through Executive Summary -> Criticality Groups -> Recovery, explaining
+    the tiering model (NBA analogy: every object is a player, every player
+    goes on ONE league-wide leaderboard by score, Group 1 fills from the top
+    until its recovery-time budget runs out - not an automatic top-third
+    split) and pausing for one real, hands-on step (change the recovery
+    window, watch Group 1's live object count respond) rather than just
+    narrating past it. Per feedback 2026-08-27: several customers have
+    independently asked for a way to force a specific department/group into
+    Group 1 regardless of activity score - the tour's Criticality Groups
+    steps exist specifically to surface that this already works today
+    (filter to a group, mass-reassign the filtered set) rather than being a
+    missing feature customers keep re-requesting.
+
+    Selectors used (added alongside their elements, see each build function):
+      #exec-lean .exec-lean-tiles > div:first-child / div.money / .recovery-ladder
+      #group1-overview, #attr-filters-mailboxes, #mass-edit-bar-mailboxes
+      #recovery-inputs-panel, #rt-group-1-section, #group1-target-input, .rt-preset-row
+    Two of the recovery-tab steps (Group 1's baseline and post-change object
+    count) supply body as a function rather than a string, computed live via
+    getGroup1Snapshot() (wraps computeRecoveryModel()) so the numbers always
+    match what's actually rendered, and so the "updated" step can show a
+    real before/after delta rather than repeating static copy.
+    A step with selector: null renders as a centered card with no spotlight
+    (used for the intro, the NBA-analogy narrative step, and the closer).
+#>
+$script:ReportJsTour = @'
+// getGroup1Snapshot(): reads the live tiering model (not the DOM) for
+// Group 1's current object count + RTO target, so the two dynamic tour
+// steps below (baseline and "updated") always match whatever
+// computeRecoveryModel() would actually render, regardless of what other
+// controls (recovery window, license tier, filters) are set at the time.
+function getGroup1Snapshot() {
+  var model = computeRecoveryModel();
+  var m = model.milestones["Critical Group 1"];
+  var count = m.sp.objectCount + m.od.objectCount + m.ex.objectCount;
+  return { count: count, hours: state.recovery.group1Hours };
+}
+
+var TOUR_STEPS = [
+  { tab: "exec", selector: null, title: "Welcome to the Recovery Assessment", body: "This report shows which of your mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to the business - and exactly how fast each priority tier comes back online after an outage. Take two minutes for a walkthrough?" },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div:first-child", title: "Time to Critical Data", body: "The headline number: how fast your most critical data is usable again with ABR, compared to a traditional restore that brings everything back at once, in random order." },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div.money", title: "Downtime Cost Avoided", body: "Every hour of downtime has a real dollar cost. This is what recovering Group 1 first - instead of everything at once, in random order - saves, based on the $/hour you set on the Recovery tab." },
+  { tab: "exec", selector: "#exec-lean .recovery-ladder", title: "The Recovery Ladder", body: "The same story on a timeline: Group 1 online, then Groups 1-2, then Groups 1-3, all compared against how long a fully random-order Mass Recovery would take. So how does an object actually end up in Group 1 versus Group 2 or 3? Let's go look." },
+  { tab: "groups", selector: null, title: "How Objects Land in a Group", body: "Think of it like the NBA. Each department is a team. Every player - every mailbox, OneDrive account, SharePoint site, Team - gets rated on real stats: how often it's used, how much data, how recently it was touched. Every player from every department then goes on ONE league-wide leaderboard by that score, not ranked only within their own team. We fill Group 1, the All-Stars, from the top of that leaderboard down, until we run out of the time budget you've set for Group 1 to recover. Whoever's left fills Group 2 against its own budget, then Group 3. It's not an automatic top-third split - a generous budget absorbs more players before Group 1 is full; a tight one absorbs fewer." },
+  { tab: "groups", selector: "#group1-overview", title: "Everyone in Group 1, One List", body: "Here's the result: every object across every workload that made Group 1's cut, combined into one sortable, filterable table - the complete \"who recovers first\" picture." },
+  { tab: "groups", selector: "#attr-filters-mailboxes", title: "Filter to Exactly Who You Want", body: "Slice any workload by department, manager, job title, mailbox type, or Entra ID group. Want to isolate just Legal, one manager's org, or one specific group? Filter here." },
+  { tab: "groups", selector: "#mass-edit-bar-mailboxes", title: "Make Adjustments", body: "Once you're filtered down to exactly who you want, mass-reassign everyone in that filtered set to a different tier in one click. A common case: a compliance review team or an e-discovery hold list needs to be Group 1 regardless of what the activity score says - filter to that group, pick Group 1, hit Apply." },
+  { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. Downtime cost per hour is what an outage costs the business - the default shown here is deliberately conservative; most organizations' real M365 downtime costs run well above it, so swap in the customer's actual number whenever you have it." },
+  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, By the Numbers",
+    body: function () {
+      var snap = getGroup1Snapshot();
+      tourState.g1Before = snap;
+      return "Right now, Group 1 has <b>" + fmtNum(snap.count) + " objects</b> queued for fast recovery at today's <b>" + snap.hours + "-hour</b> target. Now try something below.";
+    }
+  },
+  { tab: "recovery", selector: "#group1-target-input", title: "Try It Yourself", body: "This is how quickly the business needs Group 1 back up - its recovery time budget. Change this number and watch Group 1's object count update live. A bigger budget lets Group 1 absorb more objects from the leaderboard before it's full; a tighter budget means fewer objects fit and Group 1 stays smaller. Try changing it down, then back up - click Continue whenever you're ready.", manualAdvance: true },
+  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, Updated",
+    body: function () {
+      var before = tourState.g1Before;
+      var after = getGroup1Snapshot();
+      if (!before) {
+        return "Group 1 now has <b>" + fmtNum(after.count) + " objects</b> at a " + after.hours + "-hour target.";
+      }
+      var delta = after.count - before.count;
+      var verb = delta > 0 ? "an increase" : (delta < 0 ? "a decrease" : "no change");
+      var deltaAbs = Math.abs(delta);
+      var deltaPlural = deltaAbs === 1 ? "object" : "objects";
+      return "You just moved Group 1's target from " + before.hours + " hr to " + after.hours + " hr - Group 1 went from <b>" + fmtNum(before.count) + "</b> to <b>" + fmtNum(after.count) + "</b> objects, " + verb + " of <b>" + fmtNum(deltaAbs) + " " + deltaPlural + "</b>. That's the budget-constrained tiering responding live: objects move in and out of Group 1 as the time budget changes, nothing is recomputed from scratch.";
+    }
+  },
+  { tab: "recovery", selector: ".rt-preset-row", title: "Set the Real Numbers", body: "Downtime cost per hour and the RTO target for each group live here too. Plug in the customer's real figures and everything upstream - the Executive Summary, the cost table, all of it - recomputes instantly." },
+  { tab: "exec", selector: null, title: "Why ABR Matters", body: "This is the whole point: instead of restoring everything in random order over days, ABR brings back Critical data first, then Important, then Standard - so the parts of the business that matter most are back online in hours, while everything else finishes recovering in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
+];
+
+var tourState = { active: false, stepIndex: 0, g1Before: null };
+
+function tourStorageAvailable() {
+  try {
+    var k = "__m365TourTest__";
+    window.localStorage.setItem(k, "1");
+    window.localStorage.removeItem(k);
+    return true;
+  } catch (e) { return false; }
+}
+
+function tourShouldAutoShowWelcome() {
+  if (!tourStorageAvailable()) { return true; }
+  try { return window.localStorage.getItem("m365TourDontShow") !== "1"; } catch (e) { return true; }
+}
+
+function showTourWelcome() {
+  if (document.getElementById("tour-welcome-backdrop")) { return; }
+  var backdrop = document.createElement("div");
+  backdrop.className = "tour-welcome-backdrop";
+  backdrop.id = "tour-welcome-backdrop";
+  backdrop.innerHTML =
+    '<div class="tour-welcome-card">' +
+      '<div class="tour-welcome-title">Take a 2-minute tour?</div>' +
+      '<div class="tour-welcome-body">We\'ll walk through how this report prioritizes recovery - starting with the Executive Summary, then how objects land in a Criticality Group, then how the recovery window and cost inputs work.</div>' +
+      '<div class="tour-welcome-actions">' +
+        '<button class="tour-btn tour-btn-primary" onclick="closeTourWelcome(); startTour();">Start Tour</button>' +
+        '<button class="tour-btn tour-btn-secondary" onclick="closeTourWelcome();">Skip for now</button>' +
+      "</div>" +
+      '<label class="tour-welcome-dontshow"><input type="checkbox" id="tour-dontshow-checkbox"> Don\'t show this again</label>' +
+    "</div>";
+  document.body.appendChild(backdrop);
+}
+
+function closeTourWelcome() {
+  var cb = document.getElementById("tour-dontshow-checkbox");
+  if (cb && cb.checked) {
+    try { window.localStorage.setItem("m365TourDontShow", "1"); } catch (e) {}
+  }
+  var el = document.getElementById("tour-welcome-backdrop");
+  if (el) { el.parentNode.removeChild(el); }
+}
+
+function startTour() {
+  tourState.active = true;
+  tourState.stepIndex = 0;
+  renderTourStep();
+}
+
+function endTour() {
+  tourState.active = false;
+  ["tour-spotlight", "tour-tooltip", "tour-overlay-backdrop"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.parentNode.removeChild(el); }
+  });
+}
+
+function tourNext() {
+  if (tourState.stepIndex >= TOUR_STEPS.length - 1) { endTour(); return; }
+  tourState.stepIndex++;
+  renderTourStep();
+}
+
+function tourBack() {
+  if (tourState.stepIndex <= 0) { return; }
+  tourState.stepIndex--;
+  renderTourStep();
+}
+
+function renderTourStep() {
+  var step = TOUR_STEPS[tourState.stepIndex];
+  if (!step) { endTour(); return; }
+  if (step.tab) { switchTab(step.tab); }
+  // Give the tab switch (and whatever it re-renders) one tick before
+  // measuring positions, so getBoundingClientRect reflects the new tab's
+  // real layout rather than the previous tab's now-hidden one.
+  setTimeout(function () { paintTourStep(step); }, 60);
+}
+
+function paintTourStep(step) {
+  if (!tourState.active) { return; }
+  var backdrop = document.getElementById("tour-overlay-backdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.className = "tour-overlay-backdrop";
+    backdrop.id = "tour-overlay-backdrop";
+    document.body.appendChild(backdrop);
+  }
+
+  var target = step.selector ? document.querySelector(step.selector) : null;
+  var spotlight = document.getElementById("tour-spotlight");
+  if (target) {
+    target.scrollIntoView({ block: "center" });
+    var rect = target.getBoundingClientRect();
+    if (!spotlight) {
+      spotlight = document.createElement("div");
+      spotlight.id = "tour-spotlight";
+      spotlight.className = "tour-spotlight";
+      document.body.appendChild(spotlight);
+    }
+    var pad = 8;
+    spotlight.style.display = "block";
+    spotlight.style.top = (rect.top - pad) + "px";
+    spotlight.style.left = (rect.left - pad) + "px";
+    spotlight.style.width = (rect.width + pad * 2) + "px";
+    spotlight.style.height = (rect.height + pad * 2) + "px";
+  } else if (spotlight) {
+    spotlight.style.display = "none";
+  }
+
+  var tooltip = document.getElementById("tour-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "tour-tooltip";
+    tooltip.className = "tour-tooltip";
+    document.body.appendChild(tooltip);
+  }
+
+  var isLast = tourState.stepIndex === TOUR_STEPS.length - 1;
+  var nextLabel = step.manualAdvance ? "Continue" : (isLast ? "Done" : "Next");
+  var backBtn = tourState.stepIndex > 0 ? '<button class="tour-btn tour-btn-secondary" onclick="tourBack()">Back</button>' : "<span></span>";
+  // Dynamic steps (Group 1's baseline/updated object count) supply body as a
+  // function that reads live tiering state and returns pre-built HTML (bold
+  // tags around the numbers) - trusted since it's our own generated markup,
+  // not user input, so it skips esc() unlike the hard-coded string steps.
+  var bodyHtml = typeof step.body === "function" ? step.body() : esc(step.body);
+  var restartBtn = step.isFinal ? '<button class="tour-btn tour-btn-secondary" onclick="startTour()">Restart Tour</button>' : "";
+
+  tooltip.innerHTML =
+    '<div class="tour-tooltip-step">Step ' + (tourState.stepIndex + 1) + " of " + TOUR_STEPS.length + '</div>' +
+    '<div class="tour-tooltip-title">' + esc(step.title) + '</div>' +
+    '<div class="tour-tooltip-body">' + bodyHtml + '</div>' +
+    '<div class="tour-tooltip-actions">' +
+      backBtn +
+      '<span style="display:flex;gap:.6rem;align-items:center;">' +
+        restartBtn +
+        '<button class="tour-skip" onclick="endTour()">Skip tour</button>' +
+        '<button class="tour-btn tour-btn-primary" onclick="tourNext()">' + nextLabel + "</button>" +
+      "</span>" +
+    "</div>";
+
+  if (!target) {
+    tooltip.classList.add("centered");
+    tooltip.style.top = "";
+    tooltip.style.left = "";
+  } else if (step.tooltipPlacement === "bottom-fixed") {
+    // A small number of steps spotlight a card that's routinely taller than
+    // the viewport (the recovery inputs panel; the Group 1 card, which is
+    // long enough that its own compare-grid/notes push well past one screen).
+    // The generic below/above/overlap logic three lines down was written
+    // assuming a target roughly the size of the tooltip itself, and for
+    // these taller cards it was landing squarely on top of the exact
+    // number/field the step is explaining. Rather than touch the shared
+    // scroll/positioning path every other step relies on (which was working
+    // fine), these specific steps just pin the tooltip to the bottom of the
+    // screen - it never depends on the target's own height, so it can never
+    // end up sitting over content the target itself is showing near its top.
+    tooltip.classList.remove("centered");
+    var trectBF = target.getBoundingClientRect();
+    var ttRectBF = tooltip.getBoundingClientRect();
+    var marginBF = 12;
+    tooltip.style.top = (window.innerHeight - ttRectBF.height - marginBF) + "px";
+    tooltip.style.left = Math.min(Math.max(marginBF, trectBF.left), window.innerWidth - ttRectBF.width - marginBF) + "px";
+  } else {
+    tooltip.classList.remove("centered");
+    var trect = target.getBoundingClientRect();
+    var ttRect = tooltip.getBoundingClientRect();
+    var top = trect.bottom + 16;
+    if (top + ttRect.height > window.innerHeight - 12) { top = Math.max(12, trect.top - ttRect.height - 16); }
+    var left = Math.min(Math.max(12, trect.left), window.innerWidth - ttRect.width - 12);
+    tooltip.style.top = top + "px";
+    tooltip.style.left = left + "px";
+  }
+}
+
+// Separate DOMContentLoaded listener from the main bootstrap one below -
+// multiple listeners on the same event coexist fine, and this keeps the
+// tour fully independent of (and safely removable from) recomputeAll()'s
+// own startup sequence.
+document.addEventListener("DOMContentLoaded", function () {
+  if (tourShouldAutoShowWelcome()) {
+    setTimeout(showTourWelcome, 500);
+  }
+});
+'@
+
+#endregion
+
 #region ---------- HTML report JS: overrides export/import, tabs, bootstrap ----------
 
 $script:ReportJsBootstrap = @'
@@ -5144,6 +5456,88 @@ function importOverridesFile(input) {
     } catch (err) { alert("Could not parse that file as overrides JSON: " + err.message); }
   };
   reader.readAsText(file);
+}
+
+function csvEscapeCell(val) {
+  var s = (val === null || val === undefined) ? "" : String(val);
+  // RFC 4180 quoting: only wrap in quotes (doubling any internal quotes)
+  // when the value actually contains something that would otherwise break
+  // a naive comma-split - most cells (numbers, tiers, dates) never hit this.
+  if (/[",\r\n]/.test(s)) { return '"' + s.replace(/"/g, '""') + '"'; }
+  return s;
+}
+
+function rowsToCsv(rows, columns) {
+  var lines = [columns.join(",")];
+  rows.forEach(function (row) {
+    lines.push(columns.map(function (c) { return csvEscapeCell(row[c]); }).join(","));
+  });
+  // CRLF - the CSV spec default, and what Excel expects without having to
+  // guess at line-ending/encoding on Windows.
+  return lines.join("\r\n");
+}
+
+// buildCriticalityGroupsCsvText(): the actual list-every-object-in-every-
+// group export. Reads DATA.workloads directly (not the capped/filtered
+// renderedRows a workload's table currently shows), and reads row.Tier -
+// which computeScoresAndTiers() already resolves to the FINAL effective
+// tier (manual override if one is set, otherwise the computed tier, see
+// computeScoresAndTiers) - so this always reflects the live, on-screen
+// state of the report at export time, including anything an SE or customer
+// has manually reassigned via the tier dropdown or a mass-reassignment,
+// not just what the report looked like when the underlying PowerShell
+// script originally ran. Intended as the hand-off point for a downstream
+// script (e.g. one that calls RSC to create/update criticality groups from
+// this list) - kept as a pure string-builder, separate from
+// exportCriticalityGroupsCsv()'s actual file-download side effect, so it's
+// straightforward to unit test.
+function buildCriticalityGroupsCsvText() {
+  var columns = ["Workload", "Tier", "ObjectName", "Identifier", "Overridden", "OverrideReason", "ScorePct", "ItemCount", "ItemType", "StorageAmount", "StorageUnit", "JobTitle", "Department", "Manager", "EntraGroups", "LastActivityDate", "CriteriaTags"];
+  var rows = [];
+  WORKLOAD_DEFS.forEach(function (wd) {
+    var wdRows = DATA.workloads[wd.key] || [];
+    wdRows.forEach(function (row) {
+      var tierMeta = TIER_META[row.Tier];
+      rows.push({
+        _tierIdx: TIER_ORDER.indexOf(row.Tier),
+        Workload: wd.label,
+        Tier: tierMeta ? tierMeta.short : row.Tier,
+        ObjectName: row.ObjectName || "",
+        Identifier: row.Identifier || "",
+        Overridden: row.IsOverride ? "Yes" : "No",
+        OverrideReason: row.IsOverride ? (row.OverrideReason || "") : "",
+        ScorePct: Math.round((row._Score || 0) * 100),
+        ItemCount: (row.metrics && row.metrics[wd.itemField] != null) ? row.metrics[wd.itemField] : "",
+        ItemType: wd.itemLabel,
+        StorageAmount: (wd.storageField && row.metrics) ? (parseFloat(row.metrics[wd.storageField]) || 0).toFixed(2) : "",
+        StorageUnit: wd.storageField ? wd.storageLabel.replace(/^Storage \(|\)$/g, "") : "",
+        JobTitle: row.JobTitle || "",
+        Department: row.Department || "",
+        Manager: row.Manager || "",
+        EntraGroups: (row.Groups || []).join("; "),
+        LastActivityDate: row.LastActivityDate || "",
+        CriteriaTags: row.CriteriaTags || ""
+      });
+    });
+  });
+  // Group 1 first, then 2/3/4, matching how the rest of the report always
+  // orders priority; within a tier, group by workload, then highest score
+  // first (mirrors the per-workload table's own default sort).
+  rows.sort(function (a, b) {
+    if (a._tierIdx !== b._tierIdx) { return a._tierIdx - b._tierIdx; }
+    if (a.Workload !== b.Workload) { return a.Workload < b.Workload ? -1 : 1; }
+    return b.ScorePct - a.ScorePct;
+  });
+  return rowsToCsv(rows, columns);
+}
+
+function exportCriticalityGroupsCsv() {
+  var csv = buildCriticalityGroupsCsvText();
+  var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "CriticalityGroups_" + DATA.meta.runId + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
 function switchTab(tabKey) {
@@ -5286,6 +5680,9 @@ $script:ReportHtmlTemplate = @'
        full label for hover tooltips + accessibility since the text is gone
        from the button face. -->
   <div class="tabbar-actions">
+    <button class="icon-btn" onclick="startTour()" title="Take the Tour" aria-label="Take the Tour">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+    </button>
     <button class="icon-btn" onclick="exportOverrides()" title="Export overrides (for next run)" aria-label="Export overrides (for next run)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 19h16"/></svg>
     </button>
@@ -5293,6 +5690,9 @@ $script:ReportHtmlTemplate = @'
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V7"/><path d="M8 11l4-4 4 4"/><path d="M4 19h16"/></svg>
       <input type="file" accept=".json" style="display:none;" onchange="importOverridesFile(this)">
     </label>
+    <button class="icon-btn" onclick="exportCriticalityGroupsCsv()" title="Export Criticality Groups (CSV)" aria-label="Export Criticality Groups (CSV)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 9v12"/></svg>
+    </button>
     <button class="icon-btn" onclick="exportPdf('summary')" title="Export PDF: One Page Summary" aria-label="Export PDF: One Page Summary">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2h7l4 4v16H7z"/><path d="M14 2v4h4"/><path d="M9.5 13h5"/><path d="M9.5 16.5h5"/></svg>
     </button>
@@ -5461,7 +5861,7 @@ function New-M365HtmlReport {
     $reportDataJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
     Assert-ValidReportJson -Json $reportDataJson -Context 'the embedded HTML report-data blob'
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
-    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsBootstrap) -join "`n"
+    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsTour, $script:ReportJsBootstrap) -join "`n"
 
     $html = $script:ReportHtmlTemplate
     $html = $html.Replace('__TITLE__', (ConvertTo-SafeHtml "Recovery Assessment - M365 - $CustomerLabel"))
@@ -5726,7 +6126,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.13.0) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.0) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -5745,7 +6145,7 @@ Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'Ente
 Assert-GraphModules -Groups:$Groups -DetailedSizing:$DetailedSizing
 Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
 
-$groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { "" }
+$groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { " -NoGroups was passed: Group.Read.All was NOT requested and the group filter/mass-reassign-by-group workflow will be unavailable this run." }
 $sizingNote = if ($DetailedSizing) { " -DetailedSizing is on: Archive Mailbox and Recoverable Items sizing will run last, via a separate Exchange Online connection." } else { "" }
 Write-Host "`nReports.Read.All/User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote$sizingNote" -ForegroundColor Magenta
 
@@ -6056,7 +6456,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.13.0)
+Recovery Assessment - M365 - Run Manifest (v3.16.0)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
