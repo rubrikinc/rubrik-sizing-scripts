@@ -64,6 +64,34 @@
         App / application permissions instead of a delegated sign-in - see
         EnterpriseApp-Setup-Guide.md, written alongside every run.
 
+    Later updates (v3.10.0 through v3.16.0) added, on top of the above:
+      - A Sizing tab (Exchange/OneDrive/SharePoint totals and Archive
+        Mailbox count for free; Archive Mailbox storage/items and
+        Recoverable Items storage/items opt-in via -DetailedSizing, since
+        that per-mailbox loop is the slowest, most timeout-prone part of a
+        run) and a small, static Summary HTML report alongside the main
+        interactive one - a one-page, aggregate-only companion for sharing
+        broadly.
+      - A per-workload filter bar (department, manager roll-up, Entra ID
+        group, mailbox type, hub site) with filter-then-mass-reassign, and
+        an editable title-weight keyword table directly in the Criticality
+        Groups tab.
+      - Entra ID group membership resolved and used BY DEFAULT (see
+        -NoGroups above) rather than opt-in.
+      - A guided, self-paced in-report tour ("Take the Tour" in the
+        toolbar) that walks a presenter through the Executive Summary, how
+        objects land in a Criticality Group (an NBA-style analogy: every
+        object is a player on one league-wide leaderboard, and Group 1
+        fills from the top until its recovery-time budget runs out - not an
+        automatic top-third split), and a live, hands-on step showing how
+        changing Group 1's RTO target moves objects in and out of Group 1.
+      - "Export Criticality Groups (CSV)" in the toolbar - downloads every
+        object across all four workloads with its live, on-screen tier
+        (including any manual overrides or mass-reassignments made in the
+        browser, not just what this script originally computed). Meant as
+        the hand-off point for a downstream script that will create/update
+        criticality groups in RSC from this list.
+
     This is still directional, not exact. Treat tiers, recovery times, and
     costs as a data-driven starting point - the live override system exists
     specifically so the customer can correct anything the data can't see.
@@ -148,6 +176,12 @@
 
 .EXAMPLE
     .\Invoke-RecoveryAssessment-M365-Full.ps1 -CompareTo .\M365CriticalityAssessment_20260615_090000 -OverridesFile .\overrides.json
+
+.EXAMPLE
+    .\Invoke-RecoveryAssessment-M365-Full.ps1 -NoGroups
+    Opts out of the default Entra ID group data collection (drops the
+    Group.Read.All scope request) - use when a customer's security team
+    hasn't approved that scope yet.
 #>
 
 [CmdletBinding()]
@@ -5152,9 +5186,9 @@ function renderCompareTab() {
     Self-contained, vanilla JS - no external tour library, consistent with
     the report's zero-dependency design. Walks a presenter (SE or customer)
     through Executive Summary -> Criticality Groups -> Recovery, explaining
-    the tiering model (NBA analogy: every object is a player, every player
-    goes on ONE league-wide leaderboard by score, Group 1 fills from the top
-    until its recovery-time budget runs out - not an automatic top-third
+    the tiering model (evacuation-airlift analogy: every object goes on ONE
+    tenant-wide manifest ranked by score, Group 1 boards from the top down
+    until its recovery-time budget is full - not an automatic top-third
     split) and pausing for one real, hands-on step (change the recovery
     window, watch Group 1's live object count respond) rather than just
     narrating past it. Per feedback 2026-08-27: several customers have
@@ -5163,6 +5197,22 @@ function renderCompareTab() {
     steps exist specifically to surface that this already works today
     (filter to a group, mass-reassign the filtered set) rather than being a
     missing feature customers keep re-requesting.
+
+    Rewritten per reviewer feedback (Google Doc "Recovery Assessment Tour
+    feedback", 2026-08-28): open with a leader-facing question ("who
+    actually needs to be back up first") to set up stakes before diving into
+    numbers; lead the Executive Summary walkthrough with the dollar-cost
+    tile (most business-relatable) rather than the time-to-recover tile;
+    replaced the NBA analogy with an evacuation-airlift analogy (one
+    manifest ranked by need, not one list per department) and split it into
+    a pure-analogy hook step followed by a mechanics step, rather than one
+    dense paragraph; rewrote the Group 1 overview step with named, human
+    examples (the CFO, the legal team) instead of an abstract "who recovers
+    first" phrase; closed by tying back to the opening question instead of
+    leading with ABR's mechanics. Selected phrases in these steps are
+    hand-authored with inline <b> tags (see the "htmlBody" flag below) per
+    the feedback's request to bold key concepts for scannability - every
+    other step's body is a plain string and still runs through esc().
 
     Selectors used (added alongside their elements, see each build function):
       #exec-lean .exec-lean-tiles > div:first-child / div.money / .recovery-ladder
@@ -5174,7 +5224,8 @@ function renderCompareTab() {
     match what's actually rendered, and so the "updated" step can show a
     real before/after delta rather than repeating static copy.
     A step with selector: null renders as a centered card with no spotlight
-    (used for the intro, the NBA-analogy narrative step, and the closer).
+    (used for the intro, both analogy/mechanics narrative steps, and the
+    closer).
 #>
 $script:ReportJsTour = @'
 // getGroup1Snapshot(): reads the live tiering model (not the DOM) for
@@ -5190,12 +5241,13 @@ function getGroup1Snapshot() {
 }
 
 var TOUR_STEPS = [
-  { tab: "exec", selector: null, title: "Welcome to the Recovery Assessment", body: "This report shows which of your mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to the business - and exactly how fast each priority tier comes back online after an outage. Take two minutes for a walkthrough?" },
-  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div:first-child", title: "Time to Critical Data", body: "The headline number: how fast your most critical data is usable again with ABR, compared to a traditional restore that brings everything back at once, in random order." },
-  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div.money", title: "Downtime Cost Avoided", body: "Every hour of downtime has a real dollar cost. This is what recovering Group 1 first - instead of everything at once, in random order - saves, based on the $/hour you set on the Recovery tab." },
+  { tab: "exec", selector: null, htmlBody: true, title: "Welcome to the Recovery Assessment", body: "<b>If SaaS went down right now, who would shout the loudest - and who actually needs to be back up first?</b> This report answers exactly that: which of your mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to the business, and how fast each priority tier comes back online after an outage. Take two minutes for a walkthrough?" },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div.money", htmlBody: true, title: "Downtime Cost Avoided", body: "<b>What would an hour of downtime actually cost this business?</b> Recovering Group 1 first - instead of everything at once, in random order - is what saves it, based on the $/hour you set on the Recovery tab." },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div:first-child", title: "Time to Critical Data", body: "Now that we know what's at stake, here's how fast you get there: your most critical data is usable again in this time with ABR, instead of a traditional restore that brings everything back at once, in random order." },
   { tab: "exec", selector: "#exec-lean .recovery-ladder", title: "The Recovery Ladder", body: "The same story on a timeline: Group 1 online, then Groups 1-2, then Groups 1-3, all compared against how long a fully random-order Mass Recovery would take. So how does an object actually end up in Group 1 versus Group 2 or 3? Let's go look." },
-  { tab: "groups", selector: null, title: "How Objects Land in a Group", body: "Think of it like the NBA. Each department is a team. Every player - every mailbox, OneDrive account, SharePoint site, Team - gets rated on real stats: how often it's used, how much data, how recently it was touched. Every player from every department then goes on ONE league-wide leaderboard by that score, not ranked only within their own team. We fill Group 1, the All-Stars, from the top of that leaderboard down, until we run out of the time budget you've set for Group 1 to recover. Whoever's left fills Group 2 against its own budget, then Group 3. It's not an automatic top-third split - a generous budget absorbs more players before Group 1 is full; a tight one absorbs fewer." },
-  { tab: "groups", selector: "#group1-overview", title: "Everyone in Group 1, One List", body: "Here's the result: every object across every workload that made Group 1's cut, combined into one sortable, filterable table - the complete \"who recovers first\" picture." },
+  { tab: "groups", selector: null, htmlBody: true, title: "How Objects Land in a Group", body: "<b>Think of an evacuation airlift.</b> One manifest ranked by need - not one list per neighborhood - and the first plane fills to its weight limit before the next one loads. That's exactly how objects land in a Criticality Group." },
+  { tab: "groups", selector: null, htmlBody: true, title: "The Manifest, Explained", body: "Every object in your tenant - mailbox, OneDrive account, SharePoint site, Team - is scored on real usage: how active it is, how much data it holds, how recently it was touched. <b>All objects go on one tenant-wide manifest</b>, not ranked department by department. Group 1 boards from the top down until it hits the recovery time budget you set; whoever's left fills Group 2 against its own budget, then Group 3. So <b>group size follows your budget, not a fixed one-third split</b> - a generous Group 1 budget gets more objects on the first plane, a tight one gets fewer." },
+  { tab: "groups", selector: "#group1-overview", htmlBody: true, title: "Everyone in Group 1, One List", body: "This is your first plane. The names on it are the people your business runs on: <b>the CFO closing the quarter, the legal team mid-litigation, the SharePoint site your field org lives in.</b> Every object that made Group 1's cut, across every workload, lands in one sortable, filterable table - scan it, sort by department or owner, and confirm the right people are on board before anyone else recovers." },
   { tab: "groups", selector: "#attr-filters-mailboxes", title: "Filter to Exactly Who You Want", body: "Slice any workload by department, manager, job title, mailbox type, or Entra ID group. Want to isolate just Legal, one manager's org, or one specific group? Filter here." },
   { tab: "groups", selector: "#mass-edit-bar-mailboxes", title: "Make Adjustments", body: "Once you're filtered down to exactly who you want, mass-reassign everyone in that filtered set to a different tier in one click. A common case: a compliance review team or an e-discovery hold list needs to be Group 1 regardless of what the activity score says - filter to that group, pick Group 1, hit Apply." },
   { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. Downtime cost per hour is what an outage costs the business - the default shown here is deliberately conservative; most organizations' real M365 downtime costs run well above it, so swap in the customer's actual number whenever you have it." },
@@ -5222,7 +5274,7 @@ var TOUR_STEPS = [
     }
   },
   { tab: "recovery", selector: ".rt-preset-row", title: "Set the Real Numbers", body: "Downtime cost per hour and the RTO target for each group live here too. Plug in the customer's real figures and everything upstream - the Executive Summary, the cost table, all of it - recomputes instantly." },
-  { tab: "exec", selector: null, title: "Why ABR Matters", body: "This is the whole point: instead of restoring everything in random order over days, ABR brings back Critical data first, then Important, then Standard - so the parts of the business that matter most are back online in hours, while everything else finishes recovering in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
+  { tab: "exec", selector: null, htmlBody: true, title: "Why ABR Matters", body: "<b>This is how you answer the question we opened with:</b> the people and processes this business can't function without are back online in hours, not days - because ABR brings back Critical data first, then Important, then Standard, instead of restoring everything at once in random order. Everything else keeps recovering safely in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
 ];
 
 var tourState = { active: false, stepIndex: 0, g1Before: null };
@@ -5350,7 +5402,12 @@ function paintTourStep(step) {
   // function that reads live tiering state and returns pre-built HTML (bold
   // tags around the numbers) - trusted since it's our own generated markup,
   // not user input, so it skips esc() unlike the hard-coded string steps.
-  var bodyHtml = typeof step.body === "function" ? step.body() : esc(step.body);
+  // step.htmlBody: true marks a small set of hand-authored static strings
+  // that intentionally include <b> tags around key phrases (reviewer
+  // feedback asked for bolded concepts on the analogy/human-framing steps)
+  // - trusted since it's hardcoded copy we wrote, not user input. Every
+  // other string step is still run through esc() as before.
+  var bodyHtml = typeof step.body === "function" ? step.body() : (step.htmlBody ? step.body : esc(step.body));
   var restartBtn = step.isFinal ? '<button class="tour-btn tour-btn-secondary" onclick="startTour()">Restart Tour</button>' : "";
 
   tooltip.innerHTML =
@@ -6126,7 +6183,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.0) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.2) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6456,7 +6513,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.0)
+Recovery Assessment - M365 - Run Manifest (v3.16.2)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
