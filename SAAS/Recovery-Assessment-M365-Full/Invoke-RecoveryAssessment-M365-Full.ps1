@@ -5224,6 +5224,14 @@ function renderCompareTab() {
     spells out the ABR acronym in full ("Why Autonomous Business Recovery
     Matters") since it's never expanded anywhere else in the tour.
 
+    Third feedback item on the same doc (added 2026-08-31): arrow-key
+    navigation, matching how presenters already click through Storylane/
+    DforD demos - ArrowRight/ArrowLeft call the same tourNext()/tourBack()
+    the click-based Next/Back buttons already call, bound only while
+    tourState.active (see startTour()/endTour()) and skipped when focus is
+    in a form control (see tourKeydownHandler()) so it doesn't hijack the
+    "Try It Yourself" step's #group1-target-input number field.
+
     Selectors used (added alongside their elements, see each build function):
       #exec-lean .exec-lean-tiles > div:first-child / div.money / .recovery-ladder
       #group1-overview, #attr-filters-mailboxes, #mass-edit-bar-mailboxes
@@ -5333,15 +5341,34 @@ function closeTourWelcome() {
 function startTour() {
   tourState.active = true;
   tourState.stepIndex = 0;
+  document.addEventListener("keydown", tourKeydownHandler);
   renderTourStep();
 }
 
 function endTour() {
   tourState.active = false;
+  document.removeEventListener("keydown", tourKeydownHandler);
   ["tour-spotlight", "tour-tooltip", "tour-overlay-backdrop"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) { el.parentNode.removeChild(el); }
   });
+}
+
+// Arrow-key navigation, per feedback 2026-08-31: presenters using Storylane/
+// DforD are used to clicking through with the keyboard, so mirror that here
+// rather than requiring a mouse click on Next/Back every step. Skipped
+// entirely when focus is in a form control (specifically the "Try It
+// Yourself" step's #group1-target-input number field) so arrow keys there
+// still move the cursor/adjust the value instead of being hijacked to
+// advance or rewind the tour. Click-based Next/Back are untouched - both
+// paths call the same tourNext()/tourBack() functions.
+function tourKeydownHandler(e) {
+  if (!tourState.active) { return; }
+  var active = document.activeElement;
+  var tag = active && active.tagName ? active.tagName.toUpperCase() : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (active && active.isContentEditable)) { return; }
+  if (e.key === "ArrowRight") { e.preventDefault(); tourNext(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); tourBack(); }
 }
 
 function tourNext() {
@@ -6193,7 +6220,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.3) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.4) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6523,7 +6550,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.3)
+Recovery Assessment - M365 - Run Manifest (v3.16.4)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')

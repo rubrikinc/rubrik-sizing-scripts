@@ -3245,15 +3245,34 @@ function closeTourWelcome() {
 function startTour() {
   tourState.active = true;
   tourState.stepIndex = 0;
+  document.addEventListener("keydown", tourKeydownHandler);
   renderTourStep();
 }
 
 function endTour() {
   tourState.active = false;
+  document.removeEventListener("keydown", tourKeydownHandler);
   ["tour-spotlight", "tour-tooltip", "tour-overlay-backdrop"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) { el.parentNode.removeChild(el); }
   });
+}
+
+// Arrow-key navigation, per feedback 2026-08-31: presenters using Storylane/
+// DforD are used to clicking through with the keyboard, so mirror that here
+// rather than requiring a mouse click on Next/Back every step. Skipped
+// entirely when focus is in a form control (specifically the "Try It
+// Yourself" step's #group1-target-input number field) so arrow keys there
+// still move the cursor/adjust the value instead of being hijacked to
+// advance or rewind the tour. Click-based Next/Back are untouched - both
+// paths call the same tourNext()/tourBack() functions.
+function tourKeydownHandler(e) {
+  if (!tourState.active) { return; }
+  var active = document.activeElement;
+  var tag = active && active.tagName ? active.tagName.toUpperCase() : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (active && active.isContentEditable)) { return; }
+  if (e.key === "ArrowRight") { e.preventDefault(); tourNext(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); tourBack(); }
 }
 
 function tourNext() {
