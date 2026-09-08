@@ -739,8 +739,58 @@ function Add-HubSiteFlag {
 }
 
 function Get-ExactTeamSiteUrls {
-    <# FULL MODE ONLY (needs Sites.Read.All). See v1.2.1/1.2.2 notes retained below. #>
-    param([Parameter(Mandatory)] [array] $Teams)
+    <#
+    FULL MODE ONLY. Needs Sites.Read.All - AND, despite the comment this
+    replaced saying otherwise, Get-MgGroupSite also needs enough group-read
+    access to resolve each Team's underlying Microsoft 365 Group before it
+    can return that group's site (Group.Read.All in practice). Found
+    2026-09-08 via a real customer (ABC Supply) 403/accessDenied report:
+    running with -NoGroups (which deliberately does NOT request
+    Group.Read.All) made EVERY Get-MgGroupSite call fail, since the group
+    itself can't be read. That was already non-fatal (caught below, one
+    Write-Warning per Team) - but returning a non-null, mostly-empty $keys
+    set in that all-fail scenario was a real correctness bug on top of the
+    noise: Get-SharePointCriticality's $useExactMode goes true whenever
+    $ExactTeamSiteKeys is non-null, so with -NoGroups every team-connected
+    SharePoint site was silently NOT recognized as team-owned (empty set
+    never contains anything) and got double-counted as a standalone site,
+    instead of falling back to the free, no-extra-permission heuristic
+    (RootWebTemplate -in 'Group'/'Team Channel', already used when
+    $ExactTeamSiteKeys is $null). Skipping the whole loop and returning
+    $null up front when -Groups wasn't requested fixes BOTH problems: no
+    doomed per-team API calls/warning spam, and the heuristic fallback
+    actually engages instead of quietly mis-scoping the SharePoint tab. See
+    v1.2.1/1.2.2 notes retained below.
+    #>
+    param(
+        [Parameter(Mandatory)] [array] $Teams,
+        [switch] $Groups
+    )
+
+    if (-not $Groups) {
+        Write-Host "Exact Team-site resolution skipped (-NoGroups was passed - Get-MgGroupSite needs Group.Read.All to resolve each Team's site, which -NoGroups deliberately doesn't request). Falling back to heuristic Team/Group-site matching for SharePoint dedup - no extra permission needed." -ForegroundColor Gray
+        return $null
+    }
+
+    # Circuit breaker: found 2026-09-08 via a second real customer report
+    # (ABC Supply again, same tenant) - even with Group.Read.All AND
+    # Sites.Read.All both actually granted (confirmed via their own
+    # (Get-MgContext).Scopes dump), Get-MgGroupSite still 403'd for every
+    # Team. Root cause is a separate, well-documented Graph limitation from
+    # the missing-scope case above: under DELEGATED (interactive user)
+    # auth, /groups/{id}/sites/root enforces that the signed-in user is
+    # actually a MEMBER of that Microsoft 365 Group - broad admin-consented
+    # scopes don't override that for this specific call. An admin running
+    # this interactively is realistically not a member of most Teams in a
+    # large tenant, so this fails almost every time regardless of scope
+    # breadth. Rather than grinding through every remaining Team making a
+    # doomed API call and printing a warning each time, bail out after the
+    # first few failures (with zero successes so far - a real, occasional
+    # per-team failure would typically be interspersed with successes, not
+    # clustered from the very first attempt) and fall back cleanly to the
+    # free heuristic for everyone, same as the -NoGroups case above.
+    $maxProbeFailuresBeforeBail = 5
+    $failureCount = 0
 
     $keys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $resolvedCount = 0
@@ -760,6 +810,11 @@ function Get-ExactTeamSiteUrls {
             }
         }
         catch {
+            $failureCount++
+            if ($resolvedCount -eq 0 -and $failureCount -ge $maxProbeFailuresBeforeBail) {
+                Write-Warning "Exact Team-site resolution: Get-MgGroupSite failed for the first $failureCount team(s) in a row (most recent error: $($_.Exception.Message)). This usually means either (a) the signed-in session doesn't actually have Sites.Read.All/Group.Read.All granted, or (b) you're connected via delegated/interactive auth and simply aren't a member of most of these Microsoft 365 Groups - Microsoft Graph enforces group membership for this specific call regardless of how broad the consented scopes are. Falling back to heuristic Team/Group-site matching for all $($Teams.Count) teams instead of continuing to retry one at a time."
+                return $null
+            }
             Write-Warning "Could not resolve SharePoint site for Team '$($t.ObjectName)' ($groupId): $($_.Exception.Message)"
         }
     }
@@ -6220,7 +6275,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.4) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.6) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6284,7 +6339,7 @@ $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
 
 Write-Host "Resolving exact Team SharePoint sites..." -ForegroundColor Gray
-$exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams
+$exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams -Groups:$Groups
 
 $sharepointResult = Get-SharePointCriticality -Period $Period -WorkDir $rawDir -IncludeGroupConnectedSites:$IncludeGroupConnectedSites -ExactTeamSiteKeys $exactTeamSiteUrls
 $sharepointRaw = @($sharepointResult.Sites)
@@ -6550,7 +6605,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.4)
+Recovery Assessment - M365 - Run Manifest (v3.16.6)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
