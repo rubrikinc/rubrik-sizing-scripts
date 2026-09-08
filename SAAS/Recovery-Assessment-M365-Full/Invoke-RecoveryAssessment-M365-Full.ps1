@@ -532,13 +532,47 @@ function Get-UserEnrichmentIndex {
 
     $indexByUpn = @{}
     $indexById  = @{}
-    $expand = if ($IncludeGroups) { @('Manager', 'MemberOf') } else { @('Manager') }
+
+    # NEW 2026-09-08: found via a real customer's live 403->new-warning
+    # follow-up report. This USED to be one Get-MgUser -All call with
+    # -ExpandProperty @('Manager','MemberOf') whenever -IncludeGroups was
+    # on (the default since v3.14.0). Microsoft Graph's /users endpoint
+    # only allows ONE navigation property to be expanded per query - asking
+    # for both Manager AND MemberOf in the same request throws
+    # "Request_BadRequest: Only one property can be expanded in a single
+    # query," which the catch below used to treat as a total enrichment
+    # failure, returning the EMPTY $indexByUpn and silently dropping
+    # JobTitle/Department/EmployeeType/Manager/Groups for every single row
+    # in the report - not just group data. Since -IncludeGroups is
+    # default-on, this was breaking title-weight scoring and every
+    # department/manager/group filter for every customer NOT passing
+    # -NoGroups, without the run ever throwing a terminating error (this is
+    # why "the old script doesn't give that warning" - the old script only
+    # ever expanded Manager alone, a single property, which Graph allows).
+    # Fixed by splitting into two separate Get-MgUser -All calls, one per
+    # expand target, merged by Id below - so a failure in the group-
+    # membership call degrades to "no groups" instead of nuking the entire
+    # enrichment index, and the common (non-Groups) path can never trigger
+    # this specific Graph restriction at all.
     try {
-        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled' -ExpandProperty $expand -ErrorAction Stop
+        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled' -ExpandProperty 'Manager' -ErrorAction Stop
     }
     catch {
         Write-Warning "User profile enrichment failed ($($_.Exception.Message)). Continuing without it."
         return $indexByUpn
+    }
+
+    $memberOfById = @{}
+    if ($IncludeGroups) {
+        try {
+            $usersWithGroups = Get-MgUser -All -Property 'Id' -ExpandProperty 'MemberOf' -ErrorAction Stop
+            foreach ($ug in $usersWithGroups) {
+                if ($ug.Id) { $memberOfById[$ug.Id] = $ug.MemberOf }
+            }
+        }
+        catch {
+            Write-Warning "Entra ID group membership enrichment failed ($($_.Exception.Message)). Continuing WITH profile enrichment (title/department/manager) but WITHOUT group data - pass -NoGroups to suppress this warning if group data isn't needed."
+        }
     }
 
     $groupResolvedCount = 0
@@ -553,8 +587,9 @@ function Get-UserEnrichmentIndex {
         }
         $groupNames = @()
         $groupIds   = @()
-        if ($IncludeGroups -and $u.MemberOf) {
-            foreach ($m in $u.MemberOf) {
+        $userMemberOf = if ($u.Id -and $memberOfById.ContainsKey($u.Id)) { $memberOfById[$u.Id] } else { $null }
+        if ($IncludeGroups -and $userMemberOf) {
+            foreach ($m in $userMemberOf) {
                 $odataType = $null
                 if ($m.AdditionalProperties -and $m.AdditionalProperties.ContainsKey('@odata.type')) {
                     $odataType = $m.AdditionalProperties['@odata.type']
@@ -6275,7 +6310,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.6) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.7) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6605,7 +6640,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.6)
+Recovery Assessment - M365 - Run Manifest (v3.16.7)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
