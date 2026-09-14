@@ -662,9 +662,22 @@ function Add-UserEnrichment {
         Add-Member -InputObject $row -NotePropertyName 'Department'     -NotePropertyValue $(if ($enrich) { $enrich.Department } else { '' })     -Force
         Add-Member -InputObject $row -NotePropertyName 'EmployeeType'   -NotePropertyValue $(if ($enrich) { $enrich.EmployeeType } else { '' })   -Force
         Add-Member -InputObject $row -NotePropertyName 'Manager'        -NotePropertyValue $(if ($enrich) { $enrich.Manager } else { '' })        -Force
-        Add-Member -InputObject $row -NotePropertyName 'ManagerChain'   -NotePropertyValue $(if ($enrich) { $enrich.ManagerChain } else { @() })  -Force
-        Add-Member -InputObject $row -NotePropertyName 'Groups'         -NotePropertyValue $(if ($enrich) { $enrich.Groups } else { @() })        -Force
-        Add-Member -InputObject $row -NotePropertyName 'GroupIds'       -NotePropertyValue $(if ($enrich) { $enrich.GroupIds } else { @() })      -Force
+        # NEW 2026-09-11: found via a real customer's (ABC Supply) broken
+        # Interactive report. $(...) around an if/else lets PowerShell's
+        # pipeline auto-unroll a collection written to the output stream -
+        # zero elements becomes $null, exactly one element becomes a bare
+        # scalar (e.g. a single group name as a STRING instead of a
+        # 1-element array), and only two-or-more elements survive as an
+        # actual array. Any mailbox in exactly one Entra ID group (or with
+        # exactly one manager-chain hop) got a bare string here instead of
+        # an array, which the JS array helpers (.forEach/.join) then threw
+        # on at render time. @(...) forces array-context collection
+        # regardless of how many objects were emitted, so 0/1/2+ elements
+        # all come out as a real array. See RECOVERY-MODEL-METHODOLOGY.md /
+        # CHANGELOG for the matching JS-side defensive normalization.
+        Add-Member -InputObject $row -NotePropertyName 'ManagerChain'   -NotePropertyValue @(if ($enrich) { $enrich.ManagerChain } else { @() })  -Force
+        Add-Member -InputObject $row -NotePropertyName 'Groups'         -NotePropertyValue @(if ($enrich) { $enrich.Groups } else { @() })        -Force
+        Add-Member -InputObject $row -NotePropertyName 'GroupIds'       -NotePropertyValue @(if ($enrich) { $enrich.GroupIds } else { @() })      -Force
         Add-Member -InputObject $row -NotePropertyName 'OfficeLocation' -NotePropertyValue $(if ($enrich) { $enrich.OfficeLocation } else { '' }) -Force
         Add-Member -InputObject $row -NotePropertyName 'AccountEnabled' -NotePropertyValue $(if ($enrich) { $enrich.AccountEnabled } else { $null }) -Force
     }
@@ -2699,6 +2712,37 @@ footer p { max-width: 900px; }
 
 $script:ReportJsEngine = @'
 var DATA = JSON.parse(document.getElementById("report-data").textContent);
+// NEW 2026-09-11: defensive normalization for a real customer-found bug
+// (ABC Supply's Interactive report was blank/broken). The PS-side fix
+// (see Get-UserEnrichmentIndex / Add-UserEnrichment @(...) vs $(...)) stops
+// this at the source for NEW runs, but any report ALREADY generated before
+// that fix still has the bad shape baked into its embedded JSON - a row in
+// exactly one Entra ID group (or with exactly one manager-chain hop) has
+// Groups/GroupIds/ManagerChain as a bare STRING instead of a 1-element
+// array. Several JS helpers call .forEach/.join on those fields, which
+// throws on a string and was aborting the entire script (breaking every
+// tab, not just the group/manager filters). Normalizing every row's shape
+// once, right after parsing, means this file works whether it was
+// generated before or after the PS fix, and guards against any other
+// field with the same collapse risk we haven't found yet.
+(function normalizeRowArrayFields() {
+  function toArr(v) {
+    if (Array.isArray(v)) { return v; }
+    if (v === null || v === undefined || v === "") { return []; }
+    return [v];
+  }
+  var arrayFields = ["Groups", "GroupIds", "ManagerChain"];
+  if (!DATA || !DATA.workloads) { return; }
+  Object.keys(DATA.workloads).forEach(function (wKey) {
+    var rows = DATA.workloads[wKey];
+    if (!Array.isArray(rows)) { return; }
+    rows.forEach(function (r) {
+      arrayFields.forEach(function (f) {
+        if (f in r) { r[f] = toArr(r[f]); }
+      });
+    });
+  });
+})();
 // v3.1.0: 4-tier order. All five workloads are tiered the same way
 // (criticality-ranked, see computeScoresAndTiers) - there is no more
 // separate "Beyond Target" bucket. Group 1/2/3's RTO compliance is now a
@@ -6310,7 +6354,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.7) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.8) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6640,7 +6684,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.7)
+Recovery Assessment - M365 - Run Manifest (v3.16.8)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
