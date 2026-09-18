@@ -74,6 +74,11 @@ Prints unattended/Enterprise App setup instructions and exits without running th
 ```
 Connects via an Enterprise App (application permissions, certificate auth) instead of an interactive delegated sign-in, for scheduled/unattended runs. All three parameters are required together — see "Running as an Enterprise App" below.
 
+```powershell
+.\Invoke-RecoveryAssessment-M365-Full.ps1 -GraphTimeoutSeconds 1800
+```
+Raises the Microsoft Graph client timeout beyond the default of 900 seconds (15 minutes). On a very large tenant, the profile-enrichment step (`Get-MgUser -All`) can take long enough that the Graph SDK's own default timeout cancels the request mid-run — this shows up as `WARNING: User profile enrichment failed (...HttpClient.Timeout... elapsing.)` and silently drops JobTitle/Department/Manager/Groups enrichment for every row. 900 seconds comfortably covers every tenant size seen so far; raise it further only if you see that warning.
+
 ## What You Get
 
 - `Mailboxes.csv`, `OneDrive.csv`, `SharePointSites.csv`, `Teams.csv` — full metric detail and tier assignment per object.

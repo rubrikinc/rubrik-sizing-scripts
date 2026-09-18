@@ -327,7 +327,30 @@ param(
     # required together. See EnterpriseApp-Setup-Guide.md.
     [string]$TenantId = '',
     [string]$ClientId = '',
-    [string]$CertificateThumbprint = ''
+    [string]$CertificateThumbprint = '',
+
+    # NEW 2026-09-17: found via a real customer (Johnson Controls - a very
+    # large tenant) whose run logged "User profile enrichment failed (The
+    # request was canceled due to the configured HttpClient.Timeout of 300
+    # seconds elapsing.)". The Microsoft Graph PowerShell SDK's default
+    # HttpClient timeout (100s, commonly reported as 300s once retry/backoff
+    # is factored in) applies per-request - Get-UserEnrichmentIndex's
+    # Get-MgUser -All pull has no way to page itself around that on a tenant
+    # large enough that a single page's worth of work doesn't return in time.
+    # When that call times out, the catch block returns the EMPTY
+    # $indexByUpn - the same silent "every row loses JobTitle/Department/
+    # Manager/Groups enrichment" failure mode fixed once already in
+    # [3.16.7]/[3.15.10] for a DIFFERENT trigger (the multi-property $expand
+    # Graph error). This is that same root symptom via a new trigger: a slow
+    # tenant instead of a bad request shape. Rather than telling every
+    # customer with a large enough tenant to run
+    # `Set-MgRequestContext -ClientTimeout <seconds>` themselves before this
+    # script (a real but easy-to-forget workaround), the script now sets a
+    # generous timeout itself, right after connecting - 900s (15 min) by
+    # default, comfortably above the ~100-300s default and the largest
+    # tenants seen so far, with -GraphTimeoutSeconds available to raise it
+    # further for a tenant too large even for that.
+    [int]$GraphTimeoutSeconds = 900
 )
 
 # Resolved once, here, so every downstream reference to $Groups (scope
@@ -386,7 +409,8 @@ function Connect-Assessment {
         [switch]$Groups,
         [string]$TenantId,
         [string]$ClientId,
-        [string]$CertificateThumbprint
+        [string]$CertificateThumbprint,
+        [int]$GraphTimeoutSeconds = 900
     )
 
     $scopes = @('Reports.Read.All', 'User.Read.All', 'Sites.Read.All')
@@ -406,6 +430,22 @@ function Connect-Assessment {
     if (-not $ctx) { throw "Graph connection failed - Connect-MgGraph returned no context." }
     Write-Host "Connected as $($ctx.Account)" -ForegroundColor Green
     Write-Host "Scopes granted:  $($ctx.Scopes -join ', ')" -ForegroundColor Green
+
+    # NEW 2026-09-17: found via a real customer (Johnson Controls) whose huge
+    # tenant made Get-UserEnrichmentIndex's Get-MgUser -All pull run past the
+    # Graph PowerShell SDK's default HttpClient timeout, which silently wiped
+    # ALL profile enrichment for the run (same failure mode as the
+    # [3.16.7]/[3.15.10] multi-expand bug, different trigger - see that
+    # function's header comment). Set once here, right after connecting, so
+    # every Graph call made for the rest of the run - not just this one -
+    # gets the longer timeout, instead of relying on the customer running
+    # Set-MgRequestContext themselves before this script.
+    try {
+        Set-MgRequestContext -ClientTimeout $GraphTimeoutSeconds -ErrorAction Stop
+        Write-Host "Graph client timeout set to $GraphTimeoutSeconds seconds (large tenants can otherwise time out mid-enrichment)." -ForegroundColor Gray
+    } catch {
+        Write-Warning "Could not raise the Graph client timeout ($($_.Exception.Message)). Continuing with the SDK default - very large tenants may see enrichment fail with an HttpClient.Timeout warning; re-run with a newer Microsoft.Graph.Authentication module if so."
+    }
 
     if (-not $useAppOnly) {
         foreach ($needed in $scopes) {
@@ -6354,7 +6394,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.8) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.9) ===" -ForegroundColor Cyan
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6371,7 +6411,7 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md') -Encoding UTF8
 
 Assert-GraphModules -Groups:$Groups -DetailedSizing:$DetailedSizing
-Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
+Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphTimeoutSeconds $GraphTimeoutSeconds
 
 $groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { " -NoGroups was passed: Group.Read.All was NOT requested and the group filter/mass-reassign-by-group workflow will be unavailable this run." }
 $sizingNote = if ($DetailedSizing) { " -DetailedSizing is on: Archive Mailbox and Recoverable Items sizing will run last, via a separate Exchange Online connection." } else { "" }
@@ -6684,7 +6724,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.8)
+Recovery Assessment - M365 - Run Manifest (v3.16.9)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
