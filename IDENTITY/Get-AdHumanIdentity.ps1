@@ -33,14 +33,15 @@
     - **Group Managed Service Accounts**: Number of Group Managed Service Accounts (gMSA).
     - **Password Never Expires**: Number of enabled accounts with the PasswordNeverExpires flag set.
     - **Pattern Matched Service Accounts**: Number of accounts matching the -UserServiceAccountNamesLike patterns.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Active + not MSA + not gMSA + not pattern-matched service account).
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Active + not MSA + not gMSA + not pattern-matched + filter match + not duplicate).
+    - **Duplicate Identities**: Number of accounts identified as duplicates (same person already counted in another domain/OU).
 
     ### Per-Domain Report (ByDomain)
     Same columns as ByOU, minus the OU column. Values are aggregated across all OUs for each domain.
 
     ### Licensing Report
     - **Domain**: The Active Directory domain name.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Active + not MSA + not gMSA + not pattern-matched.
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Active + not MSA + not gMSA + not pattern-matched + filter match + not duplicate.
 
 .PARAMETER SpecificDomains
     This is an optional parameter that allows you to specify which Active Directory domains to audit. If you do not use this parameter, the script will automatically discover and audit all domains in the current AD forest.
@@ -68,6 +69,21 @@
 
     The default value is 'Full'.
 
+.PARAMETER FilterAttribute
+    The name of a directory attribute to use for filtering users (e.g., "extensionAttribute6"). When specified together with -FilterValue, only users whose attribute value matches the filter are counted as Licensed Identities. Supports dot notation for nested properties.
+
+.PARAMETER FilterValue
+    The value to match against the attribute specified by -FilterAttribute. Must be used together with -FilterAttribute.
+
+.PARAMETER FilterDelimiter
+    A delimiter character used to split the attribute value into segments before matching. Without a delimiter, the match is a case-insensitive substring (contains). With a delimiter, each segment is compared for an exact case-insensitive match.
+
+    Example: -FilterAttribute "extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#"
+    If the attribute value is "Admin#Person#VIP", this splits on "#" and matches "Person" exactly.
+
+.PARAMETER DeduplicateOn
+    An alternative attribute to use as the deduplication key (e.g., "Mail", "EmployeeID"). By default, deduplication uses GivenName + Surname (both must be present). When a user's deduplication key has already been seen (in any domain), the account is marked as a duplicate and not counted as a Licensed Identity. Accounts with a null or empty key are never deduplicated.
+
 .EXAMPLE
     Example 1: Perform a detailed audit of the entire forest and identify service accounts by name.
 
@@ -89,6 +105,26 @@
     - Generate a high-level summary report for that domain.
     - Save the reports in CSV and HTML format in the .\ADReports directory.
 
+.EXAMPLE
+    Example 3: Filter users based on a directory attribute with a delimiter.
+
+    .\Get-AdHumanIdentity.ps1 -FilterAttribute "extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#" -Mode Full
+
+    This command will:
+    - Scan all domains in the current AD forest.
+    - Only count users whose extensionAttribute6 contains the exact segment "Person" (split by "#") as Licensed Identities.
+    - Save the reports in CSV and HTML format in the .\ADReports directory.
+
+.EXAMPLE
+    Example 4: Override the deduplication key with an alternative attribute.
+
+    .\Get-AdHumanIdentity.ps1 -DeduplicateOn "Mail" -Mode Full
+
+    This command will:
+    - Scan all domains in the current AD forest.
+    - Deduplicate users across domains based on their Mail attribute instead of first name + last name.
+    - Save the reports in CSV and HTML format in the .\ADReports directory.
+
 .NOTES
     Author: Aymeric Jaouen
 
@@ -105,8 +141,27 @@ param (
     [string[]]$ExcludeOUs = @(),
     [ValidateSet("Full", "Summary")]
     [string]$Mode = "Full",
-    [int]$DaysInactive = 180
+    [int]$DaysInactive = 180,
+    [string]$FilterAttribute,
+    [string]$FilterValue,
+    [string]$FilterDelimiter,
+    [string]$DeduplicateOn
 )
+
+# === FilterAttribute Validation ===
+if ($FilterAttribute -and -not $FilterValue) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterValue -and -not $FilterAttribute) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterDelimiter -and -not $FilterAttribute) {
+    Write-Error "-FilterDelimiter requires -FilterAttribute and -FilterValue."
+    exit 1
+}
+$useAttributeFilter = [bool]$FilterAttribute
 
 # === Logging Setup ===
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -206,6 +261,7 @@ function Get-ReportHeaders {
                 ServiceAccountsPasswordNeverExpires = 'Password Never Expires'
                 ServiceAccountsPatternMatched       = 'Pattern Matched Service Accounts'
                 LicensedIdentities                  = 'Licensed Identities'
+                DuplicateIdentities                 = 'Duplicate Identities'
             }
         }
 
@@ -221,6 +277,7 @@ function Get-ReportHeaders {
                 ServiceAccountsPasswordNeverExpires = 'Password Never Expires'
                 ServiceAccountsPatternMatched       = 'Pattern Matched Service Accounts'
                 LicensedIdentities                  = 'Licensed Identities'
+                DuplicateIdentities                 = 'Duplicate Identities'
             }
         }
 
@@ -236,6 +293,40 @@ function Get-ReportHeaders {
 #==================================================================================================
 # 2. HELPERS
 #==================================================================================================
+function Get-NestedProperty {
+    param($Object, [string]$Path)
+    $current = $Object
+    foreach ($part in $Path.Split('.')) {
+        if ($null -eq $current) { return $null }
+        $current = $current.$part
+    }
+    return $current
+}
+
+function Test-FilterMatch {
+    param([string]$AttributeValue, [string]$FilterValue, [string]$Delimiter)
+    if ([string]::IsNullOrEmpty($AttributeValue)) { return $false }
+    if ($Delimiter) {
+        $segments = $AttributeValue.Split($Delimiter)
+        return [bool]($segments | Where-Object { $_ -ieq $FilterValue })
+    } else {
+        return $AttributeValue.IndexOf($FilterValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+}
+
+function Get-DeduplicateKey {
+    param($User, [string]$DeduplicateOn, [string]$FirstNameProp, [string]$LastNameProp)
+    if ($DeduplicateOn) {
+        $val = Get-NestedProperty $User $DeduplicateOn
+        if ($val) { return $val.ToString().Trim().ToLowerInvariant() }
+        return $null
+    }
+    $fn = Get-NestedProperty $User $FirstNameProp
+    $ln = Get-NestedProperty $User $LastNameProp
+    if ($fn -and $ln) { return "$($fn.ToString().Trim()) $($ln.ToString().Trim())".ToLowerInvariant() }
+    return $null
+}
+
 function Get-OUFromDN {
     param ([string]$dn)
     $parts = ($dn -split '(?<!\\),')
@@ -292,6 +383,8 @@ function Get-ByOUData {
     )
 
     $summaryMap = @{}
+    $seenKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $duplicateCount = 0
 
     foreach ($domain in $DomainsToAudit) {
         Write-Log "Auditing domain: $domain" "INFO" "Cyan"
@@ -312,8 +405,18 @@ function Get-ByOUData {
             $patternNames = @($PatternMatches | Select-Object -ExpandProperty SamAccountName)
             $PatternSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$patternNames, [System.StringComparer]::OrdinalIgnoreCase)
 
+            $adProperties = @('SamAccountName', 'DistinguishedName', 'LastLogonTimestamp', 'GivenName', 'Surname')
+            if ($DeduplicateOn -and $adProperties -notcontains $DeduplicateOn) {
+                $adProperties += $DeduplicateOn
+            }
+            if ($useAttributeFilter) {
+                $adProperties += $FilterAttribute
+                if ($domain -eq $DomainsToAudit[0]) {
+                    Write-Log "Filter active: attribute '$FilterAttribute' contains '$FilterValue' (delimiter: $(if ($FilterDelimiter) { "'$FilterDelimiter'" } else { 'none' }))" "INFO" "Cyan"
+                }
+            }
             $userAccounts = Get-ADUser -Server $domain -Filter "Enabled -eq `$true" `
-                -Properties SamAccountName, DistinguishedName, LastLogonTimestamp
+                -Properties $adProperties
 
             $serviceAccounts = ($msaObjects + $gmsaObjects) | ForEach-Object {
                 [PSCustomObject]@{
@@ -345,6 +448,7 @@ function Get-ByOUData {
                         ServiceAccountsPasswordNeverExpires = 0
                         ServiceAccountsPatternMatched       = 0
                         LicensedIdentities                  = 0
+                        DuplicateIdentities                 = 0
                     }
                 }
                 $entry = $summaryMap[$key]
@@ -372,8 +476,20 @@ function Get-ByOUData {
                 if ($NoExpireSet.Contains($sam)) { $entry.ServiceAccountsPasswordNeverExpires++ }
                 if ($isPattern)  { $entry.ServiceAccountsPatternMatched++ }
 
-                if ($isActive -and -not $isMSA -and -not $isGMSA -and -not $isPattern) {
-                    $entry.LicensedIdentities++
+                $filterMatch = if ($useAttributeFilter) {
+                    $attrVal = Get-NestedProperty $user $FilterAttribute
+                    Test-FilterMatch -AttributeValue "$attrVal" -FilterValue $FilterValue -Delimiter $FilterDelimiter
+                } else { $true }
+
+                $wouldBeLicensed = $isActive -and -not $isMSA -and -not $isGMSA -and -not $isPattern -and $filterMatch
+                if ($wouldBeLicensed) {
+                    $dedupKey = Get-DeduplicateKey -User $user -DeduplicateOn $DeduplicateOn -FirstNameProp 'GivenName' -LastNameProp 'Surname'
+                    if ($dedupKey -and -not $seenKeys.Add($dedupKey)) {
+                        $entry.DuplicateIdentities++
+                        $duplicateCount++
+                    } else {
+                        $entry.LicensedIdentities++
+                    }
                 }
             }
 
@@ -391,6 +507,8 @@ function Get-ByOUData {
         $totals[$col] = ($summary | Measure-Object -Property $col -Sum).Sum
     }
 
+    $licensedTotal = ($summary | Measure-Object -Property LicensedIdentities -Sum).Sum
+    Write-Log "Deduplication: $($seenKeys.Count) unique identities from $($licensedTotal + $duplicateCount) licensed accounts ($duplicateCount duplicates removed)." "INFO" "Cyan"
     Write-Log "Successfully built $($summary.Count) OU records across all domains." "INFO" "Green"
     return $summary + [PSCustomObject]$totals
 }
@@ -419,6 +537,7 @@ function Get-ByDomainData {
                 ServiceAccountsPasswordNeverExpires = ($_.Group | Measure-Object ServiceAccountsPasswordNeverExpires -Sum).Sum
                 ServiceAccountsPatternMatched       = ($_.Group | Measure-Object ServiceAccountsPatternMatched -Sum).Sum
                 LicensedIdentities                  = ($_.Group | Measure-Object LicensedIdentities -Sum).Sum
+                DuplicateIdentities                 = ($_.Group | Measure-Object DuplicateIdentities -Sum).Sum
             }
         }
 
