@@ -441,7 +441,13 @@ function Connect-Assessment {
     # gets the longer timeout, instead of relying on the customer running
     # Set-MgRequestContext themselves before this script.
     try {
-        Set-MgRequestContext -ClientTimeout $GraphTimeoutSeconds -ErrorAction Stop
+        # NEW 2026-09-22: found via NIQ's console log - Set-MgRequestContext
+        # returns its resulting context object, which was leaking to the
+        # console as an unwanted table (ClientTimeout/RetryDelay/MaxRetry/
+        # RetriesTimeLimit) since the call below wasn't suppressed. Cosmetic
+        # only, unrelated to that run's actual OutOfMemoryException, but a
+        # real bug worth fixing while in this code.
+        Set-MgRequestContext -ClientTimeout $GraphTimeoutSeconds -ErrorAction Stop | Out-Null
         Write-Host "Graph client timeout set to $GraphTimeoutSeconds seconds (large tenants can otherwise time out mid-enrichment)." -ForegroundColor Gray
     } catch {
         Write-Warning "Could not raise the Graph client timeout ($($_.Exception.Message)). Continuing with the SDK default - very large tenants may see enrichment fail with an HttpClient.Timeout warning; re-run with a newer Microsoft.Graph.Authentication module if so."
@@ -6126,6 +6132,16 @@ function New-M365HtmlReport {
         priorRun = $PriorRunData
     }
 
+    # NEW 2026-09-22: found via NIQ's OutOfMemoryException on a ~213,000-
+    # object tenant. ConvertTo-Json on a large nested object graph is one of
+    # the most memory-hungry single operations in this script - it builds a
+    # full string representation of everything in $dataObject at once, on
+    # top of the source PSCustomObjects that are still alive. A GC pass
+    # right before it starts gives it the most possible headroom by
+    # reclaiming anything from earlier stages (raw Import-Csv objects,
+    # intermediate scoring arrays) that's gone out of scope but hasn't been
+    # collected yet.
+    [System.GC]::Collect()
     $reportDataJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
     Assert-ValidReportJson -Json $reportDataJson -Context 'the embedded HTML report-data blob'
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
@@ -6394,7 +6410,28 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.9) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.10) ===" -ForegroundColor Cyan
+
+# NEW 2026-09-22: found via a real customer (NIQ) - a very large tenant
+# (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
+# OneDrive accounts, 32,386 Teams, and a SharePoint pull large enough that
+# its own row count was never reached) crashed with a raw
+# System.OutOfMemoryException partway through the raw-collection phase, with
+# no output files written at all - not even the per-workload CSVs, which
+# are the very first thing written once scoring starts. A 32-bit PowerShell
+# process is capped at roughly 2-4 GB of address space regardless of how
+# much RAM the machine actually has, which is easily exhausted by ~200,000+
+# richly-decorated PSCustomObjects plus a separate whole-tenant user
+# enrichment index held in memory simultaneously (this script deliberately
+# collects all four workloads' raw data before any scoring begins, since
+# -RTOPreset Auto needs an early, whole-tenant estimate from ALL of them -
+# see the "RAW COLLECTION PHASE" comment below). Surfaced here, up front,
+# rather than found only after 15-20 minutes of Graph pulls end in a crash.
+$script:Is64BitProcess = [Environment]::Is64BitProcess
+Write-Host "PowerShell process: $(if ($script:Is64BitProcess) { '64-bit' } else { '32-bit' })" -ForegroundColor Gray
+if (-not $script:Is64BitProcess) {
+    Write-Warning "Running under 32-bit PowerShell, which caps this process at roughly 2-4 GB of memory no matter how much RAM this machine has. On a large tenant (tens of thousands of objects per workload), that is a common cause of a late-run 'System.OutOfMemoryException' with no output files written. Strongly recommend re-running from 64-bit PowerShell (Windows PowerShell's 64-bit host is normally C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe, or use PowerShell 7 / pwsh.exe, which is always 64-bit)."
+}
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -6456,6 +6493,23 @@ Write-Host ("{0,-24} {1,5} rows" -f 'OneDrive', $onedriveRaw.Count) -ForegroundC
 
 $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
+
+# NEW 2026-09-22: found via NIQ - this is the point in a very large tenant's
+# run where a raw OutOfMemoryException was actually thrown (no output files
+# were written at all, meaning it died somewhere in raw collection/scoring,
+# before the SharePoint pull's own row count was ever printed). SharePoint
+# is collected last and is usually the largest workload, so warn HERE, using
+# just the three counts already known, rather than let a customer find out
+# only after also paying for the SharePoint pull. This is advisory, not a
+# hard stop - a real load ceiling has not been pinned down precisely enough
+# to safely predict pass/fail, so this only flags the risk and recommends
+# mitigations rather than aborting a run that might otherwise succeed.
+$rawObjectsSoFar = $mailboxesRaw.Count + $onedriveRaw.Count + $teams.Count
+if ($rawObjectsSoFar -gt 80000) {
+    $riskNote = if (-not $script:Is64BitProcess) { " and this is a 32-bit PowerShell process - see the warning above" } else { '' }
+    Write-Warning "Large tenant detected ($('{0:N0}' -f $rawObjectsSoFar) mailbox/OneDrive/Teams objects before SharePoint is even pulled)$riskNote. Assessments at this scale can need several GB of memory once every workload's raw data and the user-enrichment index are held in memory together (see the 'RAW COLLECTION PHASE' comment above for why all four are collected before scoring starts). If this run ends with a 'System.OutOfMemoryException' and no CSVs were written, that is the most likely cause - re-run from 64-bit PowerShell on a machine with more available RAM, or reach out about a chunked/summary-only mode for tenants this large."
+}
+[System.GC]::Collect()
 
 Write-Host "Resolving exact Team SharePoint sites..." -ForegroundColor Gray
 $exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams -Groups:$Groups
@@ -6724,7 +6778,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.9)
+Recovery Assessment - M365 - Run Manifest (v3.16.10)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')

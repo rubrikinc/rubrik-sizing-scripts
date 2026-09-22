@@ -18,6 +18,8 @@ Looking for the redacted trade-show/demo build instead? It's distributed as a se
 
 **As of v3.14.0, `Group.Read.All` is requested by default** (was opt-in via `-Groups` through v3.13.0) — pass `-NoGroups` if you need to skip it, e.g. a customer's security team hasn't approved that scope yet. See [Command-Line Switches](#command-line-switches) below.
 
+**Very large tenants (100,000+ mailboxes/OneDrive accounts/SharePoint sites/Teams combined):** run this from **64-bit PowerShell** (Windows PowerShell's default `powershell.exe`, or PowerShell 7's `pwsh.exe` — both are 64-bit; a 32-bit host caps the process at roughly 2-4 GB of memory regardless of the machine's actual RAM) with several GB of free memory available. This script collects all four workloads' full data into memory before scoring begins, so a tenant this large held alongside its user-enrichment index is a real memory ceiling — the script warns at startup and again mid-run if it detects this scale, but a run at the very largest end can still end in a `System.OutOfMemoryException` with no output files written. If that happens, re-run from 64-bit PowerShell on a machine with more available RAM.
+
 Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
 
 **Required tenant setting:** in the M365 admin center, go to Settings → Org settings → Reports, and turn on **"Displayed concealed user, group, and site names in all reports."** Without this, usage reports return anonymized identifiers instead of real names, and the assessment won't be usable.
