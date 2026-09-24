@@ -2757,7 +2757,29 @@ footer p { max-width: 900px; }
 #region ---------- HTML report JS: engine (data, scoring, tiering, overrides) ----------
 
 $script:ReportJsEngine = @'
-var DATA = JSON.parse(document.getElementById("report-data").textContent);
+var DATA = JSON.parse(document.getElementById("report-data-meta").textContent);
+// NEW 2026-09-24: large-tenant fix - the embedded payload is split across 5
+// separate <script> tags (meta/weights/etc, then one per workload) instead
+// of one combined blob, because a real customer (Johnson Controls, a
+// ~908,000-object tenant) produced a single JSON string of 539,000,418
+// characters - 2.1MB OVER V8's hard-coded maximum JS string length
+// (536,870,888 characters; this is a fixed engine constant in every
+// Chromium/Node build, not something more RAM works around). JSON.parse()
+// on a string past that ceiling throws immediately, before ANY of this
+// engine runs, leaving the whole report blank - see CHANGELOG 3.16.11 /
+// PRODUCT-ARCHITECTURE-NOTES for the full writeup. Splitting per-workload
+// keeps each individual JSON.parse() call's input comfortably under the
+// limit for every tenant seen to date (JCI's largest single workload,
+// SharePoint, was ~327MB - about 185MB of headroom left). This does NOT
+// eliminate the ceiling - an extreme enough SINGLE workload could still
+// someday exceed it on its own; there is no dynamic chunking within a
+// workload yet.
+DATA.workloads = {
+  mailboxes:  JSON.parse(document.getElementById("report-data-mailboxes").textContent),
+  onedrive:   JSON.parse(document.getElementById("report-data-onedrive").textContent),
+  sharepoint: JSON.parse(document.getElementById("report-data-sharepoint").textContent),
+  teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
+};
 // NEW 2026-09-11: defensive normalization for a real customer-found bug
 // (ABC Supply's Interactive report was blank/broken). The PS-side fix
 // (see Get-UserEnrichmentIndex / Add-UserEnrichment @(...) vs $(...)) stops
@@ -6026,7 +6048,15 @@ $script:ReportHtmlTemplate = @'
      during an actual print (see @media print rules) when body carries
      printing-summary/printing-full, populated on demand by exportPdf(). -->
 <div id="print-root"></div>
-<script type="application/json" id="report-data">__DATA_JSON__</script>
+<!-- NEW 2026-09-24: split into one <script> tag per workload (plus a
+     meta/weights tag) instead of one combined blob - see ReportJsEngine's
+     header comment for why (V8's hard max JS string length, hit by a real
+     ~908,000-object tenant). -->
+<script type="application/json" id="report-data-meta">__DATA_META_JSON__</script>
+<script type="application/json" id="report-data-mailboxes">__DATA_MAILBOXES_JSON__</script>
+<script type="application/json" id="report-data-onedrive">__DATA_ONEDRIVE_JSON__</script>
+<script type="application/json" id="report-data-sharepoint">__DATA_SHAREPOINT_JSON__</script>
+<script type="application/json" id="report-data-teams">__DATA_TEAMS_JSON__</script>
 <script>__JS__</script>
 </body>
 </html>
@@ -6069,6 +6099,27 @@ function New-M365HtmlReport {
         $Sizing = $null,
         $PriorRunData = $null
     )
+
+    # NEW 2026-09-24: each workload's rows are built and serialized to JSON
+    # SEPARATELY from meta/weights/etc (below), instead of nested inside one
+    # combined $dataObject that gets ConvertTo-Json'd as a single blob. A
+    # real customer (Johnson Controls, ~908,000 objects across all four
+    # workloads) produced one combined JSON string of 539,000,418 characters -
+    # 2.1MB OVER V8's hard-coded maximum JS string length (536,870,888
+    # characters - a fixed engine constant in every Chromium/Node build, not
+    # something more RAM works around). JSON.parse() on a string past that
+    # ceiling throws in EVERY browser, before any of the report's JS can run,
+    # leaving the page blank - see ReportJsEngine's header comment and
+    # CHANGELOG 3.16.11. Splitting per-workload keeps each individual
+    # ConvertTo-Json/JSON.parse call's string comfortably under the limit for
+    # every tenant seen to date (JCI's largest single workload, SharePoint,
+    # was ~327MB - about 185MB of headroom left). This does NOT eliminate the
+    # ceiling - an extreme enough SINGLE workload could still someday exceed
+    # it on its own; there is no dynamic chunking within a workload yet.
+    $mailboxesRows  = ConvertTo-ReportRows -Data $Mailboxes  -MetricFields @('SendRecvActivity','ReadActivity','Size','TotalActivity','ItemCount','StorageUsedMB','StorageBytes','SendRecvActivity7d')
+    $onedriveRows   = ConvertTo-ReportRows -Data $OneDrive   -MetricFields @('FileActivity','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ViewedOrEditedCount','ViewedOrEditedCount7d')
+    $sharepointRows = ConvertTo-ReportRows -Data $SharePoint -MetricFields @('PageViews','ActiveFiles','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ActiveFiles7d')
+    $teamsRows      = ConvertTo-ReportRows -Data $Teams      -MetricFields @('ActiveUsers','ChannelMsgs','Meetings','TotalActivity','ActiveUsersCount')
 
     $dataObject = [ordered]@{
         meta = [ordered]@{
@@ -6123,27 +6174,36 @@ function New-M365HtmlReport {
         titleWeightContribution = $TitleWeightContribution
         hubSiteKeywords          = $HubSiteKeywords
         hubSiteBonus             = $HubSiteBonus
-        workloads = [ordered]@{
-            mailboxes  = ConvertTo-ReportRows -Data $Mailboxes      -MetricFields @('SendRecvActivity','ReadActivity','Size','TotalActivity','ItemCount','StorageUsedMB','StorageBytes','SendRecvActivity7d')
-            onedrive   = ConvertTo-ReportRows -Data $OneDrive       -MetricFields @('FileActivity','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ViewedOrEditedCount','ViewedOrEditedCount7d')
-            sharepoint = ConvertTo-ReportRows -Data $SharePoint     -MetricFields @('PageViews','ActiveFiles','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ActiveFiles7d')
-            teams      = ConvertTo-ReportRows -Data $Teams          -MetricFields @('ActiveUsers','ChannelMsgs','Meetings','TotalActivity','ActiveUsersCount')
-        }
         priorRun = $PriorRunData
     }
 
     # NEW 2026-09-22: found via NIQ's OutOfMemoryException on a ~213,000-
     # object tenant. ConvertTo-Json on a large nested object graph is one of
     # the most memory-hungry single operations in this script - it builds a
-    # full string representation of everything in $dataObject at once, on
-    # top of the source PSCustomObjects that are still alive. A GC pass
-    # right before it starts gives it the most possible headroom by
-    # reclaiming anything from earlier stages (raw Import-Csv objects,
-    # intermediate scoring arrays) that's gone out of scope but hasn't been
-    # collected yet.
+    # full string representation of everything passed to it at once, on top
+    # of the source PSCustomObjects that are still alive. A GC pass right
+    # before it starts gives it the most possible headroom by reclaiming
+    # anything from earlier stages (raw Import-Csv objects, intermediate
+    # scoring arrays) that's gone out of scope but hasn't been collected yet.
     [System.GC]::Collect()
-    $reportDataJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
-    Assert-ValidReportJson -Json $reportDataJson -Context 'the embedded HTML report-data blob'
+    $reportMetaJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportMetaJson -Context 'the embedded HTML report-data-meta blob'
+    # NEW: -InputObject (parameter binding), NOT the pipeline - piping a
+    # collection into ConvertTo-Json unrolls it one item at a time, so a
+    # workload with EXACTLY one row would serialize as a bare object instead
+    # of a 1-element JSON array (the same pipe-auto-unroll footgun fixed
+    # elsewhere in this script - see CHANGELOG 3.16.8). -InputObject passes
+    # the whole array as one argument, so ConvertTo-Json always emits an
+    # array regardless of row count.
+    $reportMailboxesJson  = ConvertTo-Json -InputObject $mailboxesRows  -Depth 12 -Compress
+    $reportOnedriveJson   = ConvertTo-Json -InputObject $onedriveRows   -Depth 12 -Compress
+    $reportSharepointJson = ConvertTo-Json -InputObject $sharepointRows -Depth 12 -Compress
+    $reportTeamsJson      = ConvertTo-Json -InputObject $teamsRows      -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportMailboxesJson  -Context 'the embedded HTML report-data-mailboxes blob'
+    Assert-ValidReportJson -Json $reportOnedriveJson   -Context 'the embedded HTML report-data-onedrive blob'
+    Assert-ValidReportJson -Json $reportSharepointJson -Context 'the embedded HTML report-data-sharepoint blob'
+    Assert-ValidReportJson -Json $reportTeamsJson      -Context 'the embedded HTML report-data-teams blob'
+
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
     $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsTour, $script:ReportJsBootstrap) -join "`n"
 
@@ -6156,7 +6216,11 @@ function New-M365HtmlReport {
     $html = $html.Replace('__FAVICON__', $faviconB64)
     $html = $html.Replace('__CSS__', $script:ReportCss)
     $html = $html.Replace('__JS__', $allJs)
-    $html = $html.Replace('__DATA_JSON__', $reportDataJson)
+    $html = $html.Replace('__DATA_META_JSON__', $reportMetaJson)
+    $html = $html.Replace('__DATA_MAILBOXES_JSON__', $reportMailboxesJson)
+    $html = $html.Replace('__DATA_ONEDRIVE_JSON__', $reportOnedriveJson)
+    $html = $html.Replace('__DATA_SHAREPOINT_JSON__', $reportSharepointJson)
+    $html = $html.Replace('__DATA_TEAMS_JSON__', $reportTeamsJson)
 
     Set-Content -Path $OutFile -Value $html -Encoding UTF8
     return $OutFile
@@ -6410,7 +6474,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.10) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.11) ===" -ForegroundColor Cyan
 
 # NEW 2026-09-22: found via a real customer (NIQ) - a very large tenant
 # (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
@@ -6778,7 +6842,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.10)
+Recovery Assessment - M365 - Run Manifest (v3.16.11)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
