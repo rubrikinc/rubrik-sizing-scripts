@@ -2650,7 +2650,15 @@ footer p { max-width: 900px; }
 .tour-welcome-body { font-size: .92rem; color: var(--dark-gray); line-height: 1.55; margin-bottom: 1.3rem; }
 .tour-welcome-actions { display: flex; gap: .7rem; margin-bottom: 1rem; flex-wrap: wrap; }
 .tour-welcome-dontshow { font-size: .78rem; color: var(--dark-gray); display: flex; align-items: center; gap: .45rem; cursor: pointer; }
-.tour-overlay-backdrop { position: fixed; inset: 0; background: transparent; z-index: 9000; pointer-events: none; }
+.tour-overlay-backdrop { position: fixed; inset: 0; background: transparent; z-index: 9000; pointer-events: none; transition: background .15s ease; }
+/* NEW: steps with no specific target (selector: null - the welcome/analogy/
+   closing steps) previously left the whole page fully visible and readable
+   behind the centered tooltip, competing for attention with content that
+   isn't what that step is talking about. Dim + blur the backdrop for these
+   the same way a spotlighted step already dims everything OUTSIDE its
+   target via .tour-spotlight's box-shadow - just applied to the whole page
+   instead of everywhere-but-one-rect. */
+.tour-overlay-backdrop.dimmed { background: rgba(9,53,101,.6); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 .tour-spotlight { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(9,53,101,.6); z-index: 9001; pointer-events: none; border: 2px solid var(--cyan); }
 .tour-tooltip { position: fixed; z-index: 9002; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); padding: 1.1rem 1.3rem; max-width: 340px; }
 .tour-tooltip.centered { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); max-width: 460px; width: calc(100% - 2rem); }
@@ -5608,6 +5616,11 @@ function paintTourStep(step) {
   var target = step.selector ? document.querySelector(step.selector) : null;
   var spotlight = document.getElementById("tour-spotlight");
   if (target) {
+    // A spotlighted step already dims everything OUTSIDE the target via
+    // .tour-spotlight's own box-shadow, so the plain backdrop stays
+    // transparent here - only the no-target ("centered") branch below needs
+    // the whole-page dim+blur.
+    backdrop.classList.remove("dimmed");
     target.scrollIntoView({ block: "center" });
     var rect = target.getBoundingClientRect();
     if (!spotlight) {
@@ -5622,8 +5635,13 @@ function paintTourStep(step) {
     spotlight.style.left = (rect.left - pad) + "px";
     spotlight.style.width = (rect.width + pad * 2) + "px";
     spotlight.style.height = (rect.height + pad * 2) + "px";
-  } else if (spotlight) {
-    spotlight.style.display = "none";
+  } else {
+    if (spotlight) { spotlight.style.display = "none"; }
+    // NEW: no specific target for this step (the welcome/analogy/closing
+    // steps) - dim+blur the whole page behind the centered tooltip instead
+    // of leaving it fully visible, so there's nothing pulling attention away
+    // from text that isn't about what's on screen right now.
+    backdrop.classList.add("dimmed");
   }
 
   var tooltip = document.getElementById("tour-tooltip");
@@ -6474,7 +6492,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.11) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.12) ===" -ForegroundColor Cyan
 
 # NEW 2026-09-22: found via a real customer (NIQ) - a very large tenant
 # (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
@@ -6842,7 +6860,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.11)
+Recovery Assessment - M365 - Run Manifest (v3.16.12)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
