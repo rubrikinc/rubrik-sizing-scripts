@@ -629,8 +629,8 @@ footer p { max-width: 900px; }
 <script>var DATA = JSON.parse(document.getElementById("report-data-meta").textContent);
 // NEW 2026-09-24: large-tenant fix - the embedded payload is split across 5
 // separate <script> tags (meta/weights/etc, then one per workload) instead
-// of one combined blob, because a real customer (Johnson Controls, a
-// ~908,000-object tenant) produced a single JSON string of 539,000,418
+// of one combined blob, because a real customer's
+// ~908,000-object tenant produced a single JSON string of 539,000,418
 // characters - 2.1MB OVER V8's hard-coded maximum JS string length
 // (536,870,888 characters; this is a fixed engine constant in every
 // Chromium/Node build, not something more RAM works around). JSON.parse()
@@ -638,7 +638,7 @@ footer p { max-width: 900px; }
 // engine runs, leaving the whole report blank - see CHANGELOG 3.16.11 /
 // PRODUCT-ARCHITECTURE-NOTES for the full writeup. Splitting per-workload
 // keeps each individual JSON.parse() call's input comfortably under the
-// limit for every tenant seen to date (JCI's largest single workload,
+// limit for every tenant seen to date (the largest single workload seen,
 // SharePoint, was ~327MB - about 185MB of headroom left). This does NOT
 // eliminate the ceiling - an extreme enough SINGLE workload could still
 // someday exceed it on its own; there is no dynamic chunking within a
@@ -650,7 +650,7 @@ DATA.workloads = {
   teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
 };
 // NEW 2026-09-11: defensive normalization for a real customer-found bug
-// (ABC Supply's Interactive report was blank/broken). The PS-side fix
+// (an Interactive report that was blank/broken). The PS-side fix
 // (see Get-UserEnrichmentIndex / Add-UserEnrichment @(...) vs $(...)) stops
 // this at the source for NEW runs, but any report ALREADY generated before
 // that fix still has the bad shape baked into its embedded JSON - a row in
