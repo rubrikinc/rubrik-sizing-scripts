@@ -17,7 +17,12 @@
     frozen (read-only) so Group 1 can never be re-tiered by mistake; downtime
     cost, RTO targets, recovery window, and SP/OD throughput tier stay fully
     live. Run the full Invoke-RecoveryAssessment-M365-Full.ps1 script instead for
-    a tunable, completely unredacted assessment.
+    a tunable, completely unredacted assessment. That script is a separate
+    deliverable and is not included alongside this one - comments below that
+    say "see Full script's matching comment" or "mirrored from the Full
+    script" are provenance notes about where a piece of logic originated,
+    and always carry the full explanation inline as well, so this script
+    reads standalone without needing that other file.
 
 .DESCRIPTION
     A NOTE ON VERSION NUMBERS: this script tracks two independent version
@@ -135,8 +140,9 @@
               (see Protect-PreviewData) - AND (NEW v3.14.0, was opt-in via
               -Groups through v3.13.0) each user's Entra ID group membership
               (Mailboxes/OneDrive only - same UPN join as the rest of base
-              enrichment, resolved from the SAME single directory pull, no
-              extra Graph call beyond the one added scope). Shown as a
+              enrichment, resolved via its own separate Get-MgUser -All pull -
+              one extra bulk Graph call beyond the added scope, not per-user
+              lookups). Shown as a
               read-only "Entra ID Groups" column for Group 1 rows only in
               this preview build (Groups 2/3/4 have it redacted like every
               other identity field); the bulk "filter/mass-tier everyone in
@@ -251,12 +257,16 @@ param(
 
     # NEW v3.14.0: Entra ID group membership enrichment (Mailboxes/OneDrive
     # only) is now ON BY DEFAULT - was opt-in via -Groups through v3.13.0,
-    # flipped per repeated customer feedback that group-based tiering is a
-    # common, real ask (see the Full script's matching comment for the full
-    # rationale). This DOES widen the default consent surface -
+    # flipped per repeated customer feedback that "pin this specific
+    # department/group into Group 1 regardless of what the activity score
+    # says" is a common, real ask, and the bulk group-based selection this
+    # enables (Full-script only) was going undiscovered behind an opt-in
+    # flag. This DOES widen the default consent surface -
     # Group.Read.All is now requested on every run, not just when asked for.
-    # Rides the same bulk Get-MgUser directory pull already made for base
-    # enrichment - no extra Graph call, just the one extra scope. Shown as a
+    # Adds one extra bulk Get-MgUser -All pull alongside the one already made
+    # for base enrichment (Graph only allows one property expanded per query,
+    # so the two can't be combined) - still no per-user Graph calls, just the
+    # one extra scope and one extra bulk call. Shown as a
     # read-only column for Group 1 rows only in this preview build; the bulk
     # group-based selection tool is Full-script only. Pass -NoGroups to opt
     # back out and revert to the pre-v3.14.0 behavior.
@@ -359,8 +369,6 @@ $ProgressPreference = 'SilentlyContinue'
 #region ---------- Setup / connection ----------
 
 function Assert-GraphModules {
-    param([switch]$Groups)
-
     $required = @('Microsoft.Graph.Reports', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Users', 'Microsoft.Graph.Sites')
     foreach ($m in $required) {
         if (-not (Get-Module -ListAvailable -Name $m)) {
@@ -368,10 +376,14 @@ function Assert-GraphModules {
         }
         Import-Module $m -ErrorAction Stop
     }
-    # NOTE: -Groups does NOT require the separate Microsoft.Graph.Groups
-    # module today - group membership is pulled via -ExpandProperty MemberOf
-    # on the same Get-MgUser -All call in Get-UserEnrichmentIndex (already
-    # part of Microsoft.Graph.Users, already required above).
+    # NOTE: Entra ID group membership enrichment (-NoGroups to opt out) does
+    # NOT require the separate Microsoft.Graph.Groups module today - group
+    # membership is pulled via -ExpandProperty MemberOf
+    # on its own separate Get-MgUser -All call in Get-UserEnrichmentIndex
+    # (still part of Microsoft.Graph.Users, already required above; Graph
+    # only allows one navigation property expanded per query, so this can't
+    # be combined with the manager-enrichment call - see that function's
+    # header).
 }
 
 function Connect-Assessment {
@@ -501,12 +513,13 @@ function Get-UserEnrichmentIndex {
         FULL MODE ONLY (needs User.Read.All). Bulk-pulls user profile
         attributes AND resolves each user's manager roll-up chain (a list of
         display names from immediate manager up to the top), entirely offline
-        from a single Get-MgUser -All call - no extra per-user Graph calls.
+        from a single Get-MgUser -All call - no per-user Graph calls.
         Joined onto Mailboxes/OneDrive by UPN in Add-UserEnrichment.
 
         -IncludeGroups (on by default as of v3.14.0 - pass -NoGroups at the
         top level to skip it, which needs Group.Read.All): expands 'MemberOf'
-        on the SAME Get-MgUser -All call (no extra Graph round trip) and
+        via a SECOND, separate Get-MgUser -All call (see the NEW 2026-09-08
+        note below for why this can't be combined with the call above) and
         keeps only entries that are actual Entra ID groups (filters out
         directory roles / administrative units, which also come back on
         memberOf). Without Group.Read.All granted, memberOf still resolves
@@ -773,7 +786,7 @@ function Get-ExactTeamSiteUrls {
     replaced saying otherwise, Get-MgGroupSite also needs enough group-read
     access to resolve each Team's underlying Microsoft 365 Group before it
     can return that group's site (Group.Read.All in practice). Found
-    2026-09-08 via a real customer (ABC Supply) 403/accessDenied report:
+    2026-09-08 via a real customer 403/accessDenied report:
     running with -NoGroups (which deliberately does NOT request
     Group.Read.All) made EVERY Get-MgGroupSite call fail, since the group
     itself can't be read. That was already non-fatal (caught below, one
@@ -801,8 +814,8 @@ function Get-ExactTeamSiteUrls {
         return $null
     }
 
-    # Circuit breaker: found 2026-09-08 via a second real customer report
-    # (ABC Supply again, same tenant) - even with Group.Read.All AND
+    # Circuit breaker: found 2026-09-08 via a second report from the same
+    # customer tenant - even with Group.Read.All AND
     # Sites.Read.All both actually granted (confirmed via their own
     # (Get-MgContext).Scopes dump), Get-MgGroupSite still 403'd for every
     # Team. Root cause is a separate, well-documented Graph limitation from
@@ -2642,7 +2655,7 @@ var DATA = JSON.parse(document.getElementById("report-data-meta").textContent);
 // NEW 2026-09-24: see Full script's matching comment - large-tenant fix.
 // The embedded payload is split across 5 separate <script> tags
 // (meta/weights/etc, then one per workload) instead of one combined blob,
-// because a real customer (Johnson Controls, ~908,000 objects) produced a
+// because a real customer's ~908,000-object tenant produced a
 // single JSON string of 539,000,418 characters - 2.1MB OVER V8's hard-coded
 // maximum JS string length (536,870,888 characters; a fixed engine constant
 // in every Chromium/Node build, not something more RAM works around).
@@ -2659,7 +2672,7 @@ DATA.workloads = {
   teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
 };
 // NEW 2026-09-11: see Full script's matching comment - defensive
-// normalization for a real customer-found bug (ABC Supply). Some rows'
+// normalization for a real customer-found bug. Some rows'
 // Groups/GroupIds/ManagerChain arrive as a bare STRING instead of a
 // 1-element array (PowerShell pipeline unrolling on the PS side, fixed at
 // the source separately) - several JS helpers call .forEach/.join on these
@@ -4476,7 +4489,7 @@ function buildGlossaryHtml() {
   html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
   html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
   html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. The org-based filter/mass-tier tool built on this is only in the full assessment.</dd>";
-  html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Shown here as a read-only column for Group 1 rows only - redacted for Groups 2/3/4 like every other identity field. The bulk group-based filter/mass-tier tool built on this data is only in the full assessment.</dd>";
+  html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved via its own separate directory pull alongside manager enrichment (Microsoft Graph only allows one property to be expanded per user query, so this is one extra bulk call, not per-user lookups). Shown here as a read-only column for Group 1 rows only - redacted for Groups 2/3/4 like every other identity field. The bulk group-based filter/mass-tier tool built on this data is only in the full assessment.</dd>";
   html += "<dt>Preview redaction</dt><dd>This build runs against this tenant's real, live data. Group 1 is shown in full (identity + timing) as the \"here's what you'd actually see\" proof point. Groups 2, 3, and 4 keep their real object counts and Mass Recovery baseline timing - the scale of the problem - but every per-object identity field (name, identifier, job title, department, manager, criteria) is replaced with a placeholder, and ABR-specific timing/savings for Groups 2 and 3 are withheld, before anything is written to disk or shown on screen. The full assessment removes all of this.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
   html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
@@ -5700,8 +5713,8 @@ function New-M365HtmlReport {
     # NEW 2026-09-24: see Full script's matching comment - each workload's
     # rows are built and serialized to JSON SEPARATELY from meta/weights/etc,
     # instead of nested inside one combined $dataObject that gets
-    # ConvertTo-Json'd as a single blob. A real customer (Johnson Controls,
-    # ~908,000 objects) produced one combined JSON string of 539,000,418
+    # ConvertTo-Json'd as a single blob. A real customer tenant
+    # (~908,000 objects) produced one combined JSON string of 539,000,418
     # characters - 2.1MB OVER V8's hard-coded maximum JS string length
     # (536,870,888 characters). Splitting per-workload keeps each individual
     # ConvertTo-Json/JSON.parse call comfortably under the limit for every
@@ -5807,7 +5820,7 @@ Write-Host "=== Recovery Assessment - M365 - PREVIEW BUILD (v3.15.15) ===" -Fore
 Write-Host "Group 1 will be shown in full; Groups 2/3/4 will be redacted (identity fields + Groups 2/3 ABR timing) before anything is written to disk." -ForegroundColor Cyan
 
 # NEW 2026-09-22: see Full script's matching comment - found via a real
-# customer (NIQ) whose very large tenant (~213,000 objects across all four
+# customer whose very large tenant (~213,000 objects across all four
 # workloads) crashed with a raw System.OutOfMemoryException partway through
 # raw collection, with no output files written at all. Surfaced here, up
 # front, rather than found only after 15-20 minutes of Graph pulls.
@@ -5831,7 +5844,7 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 # Always written, no side effects - the guided (not automated) Enterprise App path.
 Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md') -Encoding UTF8
 
-Assert-GraphModules -Groups:$Groups
+Assert-GraphModules
 Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphTimeoutSeconds $GraphTimeoutSeconds
 
 $groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for the Group 1 group-column view." } else { " -NoGroups was passed: Group.Read.All was NOT requested and the Group 1 group-column view will be unavailable this run." }
@@ -5878,7 +5891,7 @@ $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
 
 # NEW 2026-09-22: see Full script's matching comment - this is the point in
-# a very large tenant's run where NIQ's raw OutOfMemoryException was
+# a very large tenant's run where a real customer's raw OutOfMemoryException was
 # actually thrown. Advisory only, not a hard stop.
 $rawObjectsSoFar = $mailboxesRaw.Count + $onedriveRaw.Count + $teams.Count
 if ($rawObjectsSoFar -gt 80000) {

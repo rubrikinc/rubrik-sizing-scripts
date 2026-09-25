@@ -639,7 +639,7 @@ footer p { max-width: 900px; }
 // NEW 2026-09-24: see Full script's matching comment - large-tenant fix.
 // The embedded payload is split across 5 separate <script> tags
 // (meta/weights/etc, then one per workload) instead of one combined blob,
-// because a real customer (Johnson Controls, ~908,000 objects) produced a
+// because a real customer's ~908,000-object tenant produced a
 // single JSON string of 539,000,418 characters - 2.1MB OVER V8's hard-coded
 // maximum JS string length (536,870,888 characters; a fixed engine constant
 // in every Chromium/Node build, not something more RAM works around).
@@ -656,7 +656,7 @@ DATA.workloads = {
   teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
 };
 // NEW 2026-09-11: see Full script's matching comment - defensive
-// normalization for a real customer-found bug (ABC Supply). Some rows'
+// normalization for a real customer-found bug. Some rows'
 // Groups/GroupIds/ManagerChain arrive as a bare STRING instead of a
 // 1-element array (PowerShell pipeline unrolling on the PS side, fixed at
 // the source separately) - several JS helpers call .forEach/.join on these
