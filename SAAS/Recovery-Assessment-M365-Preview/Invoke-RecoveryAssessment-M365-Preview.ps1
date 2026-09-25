@@ -17,7 +17,12 @@
     frozen (read-only) so Group 1 can never be re-tiered by mistake; downtime
     cost, RTO targets, recovery window, and SP/OD throughput tier stay fully
     live. Run the full Invoke-RecoveryAssessment-M365-Full.ps1 script instead for
-    a tunable, completely unredacted assessment.
+    a tunable, completely unredacted assessment. That script is a separate
+    deliverable and is not included alongside this one - comments below that
+    say "see Full script's matching comment" or "mirrored from the Full
+    script" are provenance notes about where a piece of logic originated,
+    and always carry the full explanation inline as well, so this script
+    reads standalone without needing that other file.
 
 .DESCRIPTION
     A NOTE ON VERSION NUMBERS: this script tracks two independent version
@@ -92,47 +97,74 @@
         App / application permissions instead of a delegated sign-in - see
         EnterpriseApp-Setup-Guide.md, written alongside every run.
 
+    Later updates (v3.10.0 through v3.16.0) added, on top of the above:
+      - A Sizing tab (Exchange/OneDrive/SharePoint totals and Archive
+        Mailbox count for free - this build doesn't support the Archive
+        storage/Recoverable Items detail from -DetailedSizing; use
+        Invoke-RecoveryAssessment-M365-Full.ps1 for that) and a small,
+        static Summary HTML report alongside the main interactive one.
+      - A per-workload filter bar (department, manager roll-up, Entra ID
+        group, mailbox type, hub site) for browsing Group 1's real data -
+        filtering works the same as the Full script, but mass-reassignment
+        stays frozen here (see PERMISSIONS above).
+      - Entra ID group membership resolved and used BY DEFAULT (see
+        -NoGroups above) rather than opt-in - shown as a read-only column
+        for Group 1 rows only.
+      - A guided, self-paced in-report tour ("Take the Tour" in the
+        toolbar), adapted for this build's read-only tiering: it still
+        demonstrates the live Group 1 recovery-time-target interaction, but
+        narrates the mass-reassignment capability (an NBA-style analogy for
+        how objects land in a tier) rather than pointing at a control that
+        doesn't exist in this build.
+      - Does NOT get the Full script's "Export Criticality Groups (CSV)"
+        button - this build's non-Group-1 data is redacted at the source
+        (see Protect-PreviewData), so a complete, trustworthy object-list
+        export isn't possible here. Use
+        Invoke-RecoveryAssessment-M365-Full.ps1 for that.
+
     This is still directional, not exact. Treat tiers, recovery times, and
     costs as a data-driven starting point - the live override system exists
     specifically so the customer can correct anything the data can't see.
 
 .NOTES
     ============================================================================
-    PERMISSIONS - PREVIEW (default) vs FULL (-Full)
+    PERMISSIONS
     ============================================================================
-    PREVIEW:    Entra role "Reports Reader". Delegated scope Reports.Read.All
-              only. No directory/user/site read access requested or needed.
-    FULL: Same role. Adds delegated scopes User.Read.All, Sites.Read.All.
+    BASE (always requested): Entra role "Reports Reader". Delegated scopes
+              Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All.
               Buys: user profile enrichment (Job Title, Department, Employee
               Type, Manager, manager roll-up chain, mailbox-type heuristic,
-              title-weight scoring) and exact Team<->SharePoint site
-              resolution. Never requested unless -Full is passed.
-    GROUPS (-Groups, requires -Full): Adds delegated scope Group.Read.All.
-              Buys: each user's Entra ID group membership (Mailboxes/OneDrive
-              only - same UPN join as manager enrichment, resolved from the
-              SAME single directory pull, no extra Graph call). Shown as a
+              title-weight scoring), exact Team<->SharePoint site resolution
+              - all of which feed Group 1's real, unredacted figures; Groups
+              2/3/4 have every per-object identity field redacted regardless
+              (see Protect-PreviewData) - AND (NEW v3.14.0, was opt-in via
+              -Groups through v3.13.0) each user's Entra ID group membership
+              (Mailboxes/OneDrive only - same UPN join as the rest of base
+              enrichment, resolved via its own separate Get-MgUser -All pull -
+              one extra bulk Graph call beyond the added scope, not per-user
+              lookups). Shown as a
               read-only "Entra ID Groups" column for Group 1 rows only in
               this preview build (Groups 2/3/4 have it redacted like every
-              other identity field - see Protect-PreviewData); the bulk
-              "filter/mass-tier everyone in this group" tool built on top of
-              this data is Full-script only, same as the manager roll-up
-              above. Requests the broader Group.Read.All rather than the
-              strict-minimum GroupMember.Read.All so a future per-group
-              detail lookup (type, owners, dynamic membership rule) does not
-              require a second consent grant. Ignored (with a warning) if
-              passed without -Full.
+              other identity field); the bulk "filter/mass-tier everyone in
+              this group" tool built on top of this data is Full-script only,
+              same as the manager roll-up above. Requests the broader
+              Group.Read.All rather than the strict-minimum
+              GroupMember.Read.All so a future per-group detail lookup (type,
+              owners, dynamic membership rule) does not require a second
+              consent grant. This is a real widening of the default consent
+              surface, not a free addition - pass -NoGroups to opt back out
+              (e.g. a customer's security team hasn't approved Group.Read.All
+              yet) and revert to the pre-v3.14.0 base scope set.
 
-    NOTE ON NAMING: "Preview"/"Full" above is the PERMISSION MODE controlled by
-    this switch - it is NOT the same axis as which script file you're running.
-    This file (Invoke-RecoveryAssessment-M365-Preview.ps1) is the separate,
-    redacted webinar/trade-show build; Invoke-RecoveryAssessment-M365-Full.ps1 is
-    the full customer-engagement script. Either script file can be run in
-    either permission mode - "the Preview build run with -Full permissions"
-    is a real, valid combination, not a contradiction.
+    NOTE ON NAMING: this file (Invoke-RecoveryAssessment-M365-Preview.ps1) is
+    the separate, redacted webinar/trade-show build; Invoke-RecoveryAssessment-
+    M365-Full.ps1 is the full customer-engagement script - a different file,
+    not a different permission mode. Both scripts request the same base
+    permissions above.
 
-    Hub-site keyword detection runs in BOTH modes (no extra scope - it reuses
+    Hub-site keyword detection needs no extra scope - it reuses
     already-collected page-view/active-file activity as a breadth proxy, NOT
-    a true group-membership count - see README "Hub site detection").
+    a true group-membership count - see README "Hub site detection".
 
     ============================================================================
     TENANT PREREQUISITE
@@ -162,10 +194,17 @@
     .\Invoke-RecoveryAssessment-M365-Preview.ps1
 
 .EXAMPLE
-    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -Full -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
 
 .EXAMPLE
     .\Invoke-RecoveryAssessment-M365-Preview.ps1 -CompareTo .\M365CriticalityAssessmentPreview_20260615_090000 -OverridesFile .\overrides.json
+
+.EXAMPLE
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -NoGroups
+    Opts out of the default Entra ID group data collection (drops the
+    Group.Read.All scope request) - use when a customer's security team
+    hasn't approved that scope yet, or to keep the live consent prompt as
+    lean as possible during a trade-show/webinar demo.
 #>
 
 [CmdletBinding()]
@@ -181,7 +220,7 @@ param(
     [hashtable]$SharePointWeights    = @{ PageViews        = 0.35; ActiveFiles  = 0.35; Storage  = 0.30 },
     [hashtable]$TeamsWeights         = @{ ActiveUsers      = 0.50; ChannelMsgs  = 0.35; Meetings  = 0.15 },
 
-    # NEW v2.0.0: title-keyword weights (0-1 scale). FULL ONLY (needs JobTitle).
+    # NEW v2.0.0: title-keyword weights (0-1 scale). Needs JobTitle (from base enrichment).
     # First (longest/most specific) match wins by highest weight found, matched as a
     # case-insensitive substring against JobTitle. Fully customer-editable - and
     # editable LIVE in the HTML report without re-running the script.
@@ -201,8 +240,12 @@ param(
     [double]$TitleWeightContribution = 0.15,
 
     # NEW v2.0.0: hub-site keywords for the SharePoint "department one-stop-shop"
-    # heuristic. No extra Graph scope - see NOTES. Editable live in the report.
-    [string[]]$HubSiteKeywords = @('Payroll','HR','Human Resources','Benefits','IT Help','Help Desk','Service Desk','Finance','Legal','Compliance','Onboarding','Policies'),
+    # heuristic. No extra Graph scope - see NOTES. Read-only in this preview
+    # build (see the live report). Blank by default - deliberately no
+    # built-in keyword list; which departments/site names actually matter is
+    # not something this tool should guess at, and varies customer to
+    # customer. Left blank, the hub-site heuristic flags nothing.
+    [string[]]$HubSiteKeywords = @(),
     [double]$HubSiteBonus = 0.15,
 
     # Tier split as fractions of the ACTIVE (non-zero-activity) population.
@@ -212,15 +255,22 @@ param(
 
     [switch]$SkipHtmlReport,
 
-    [switch]$Full,
-
-    # NEW: Entra ID group membership enrichment (Mailboxes/OneDrive only, same
-    # UPN join as manager enrichment) - requires -Full (it rides the same
-    # bulk Get-MgUser directory pull) and requests the extra Group.Read.All
-    # scope. Shown as a read-only column for Group 1 rows only in this
-    # preview build; the bulk group-based selection tool is Full-script only.
-    # If passed without -Full, it is ignored with a warning - see Main below.
-    [switch]$Groups,
+    # NEW v3.14.0: Entra ID group membership enrichment (Mailboxes/OneDrive
+    # only) is now ON BY DEFAULT - was opt-in via -Groups through v3.13.0,
+    # flipped per repeated customer feedback that "pin this specific
+    # department/group into Group 1 regardless of what the activity score
+    # says" is a common, real ask, and the bulk group-based selection this
+    # enables (Full-script only) was going undiscovered behind an opt-in
+    # flag. This DOES widen the default consent surface -
+    # Group.Read.All is now requested on every run, not just when asked for.
+    # Adds one extra bulk Get-MgUser -All pull alongside the one already made
+    # for base enrichment (Graph only allows one property expanded per query,
+    # so the two can't be combined) - still no per-user Graph calls, just the
+    # one extra scope and one extra bulk call. Shown as a
+    # read-only column for Group 1 rows only in this preview build; the bulk
+    # group-based selection tool is Full-script only. Pass -NoGroups to opt
+    # back out and revert to the pre-v3.14.0 behavior.
+    [switch]$NoGroups,
 
     [switch]$IncludeGroupConnectedSites,
 
@@ -288,8 +338,22 @@ param(
     # required together. See EnterpriseApp-Setup-Guide.md.
     [string]$TenantId = '',
     [string]$ClientId = '',
-    [string]$CertificateThumbprint = ''
+    [string]$CertificateThumbprint = '',
+
+    # NEW 2026-09-17: see Full script's matching comment - a real customer's
+    # very large tenant made Get-UserEnrichmentIndex's Get-MgUser -All pull
+    # exceed the Graph PowerShell SDK's default HttpClient timeout, silently
+    # wiping ALL profile enrichment for the run. Set generously here rather
+    # than relying on the customer running Set-MgRequestContext themselves.
+    [int]$GraphTimeoutSeconds = 900
 )
+
+# Resolved once, here, so every downstream reference to $Groups (scope
+# requests, enrichment, manifest text, meta.groupsRequested, JS gating via
+# hasGroups) keeps working unchanged - $NoGroups is the only new surface,
+# $Groups is still "should group data be collected/shown," just inverted
+# and on-by-default per v3.14.0 (see -NoGroups param comment above).
+$Groups = -not $NoGroups
 
 $ErrorActionPreference = 'Stop'
 
@@ -305,41 +369,33 @@ $ProgressPreference = 'SilentlyContinue'
 #region ---------- Setup / connection ----------
 
 function Assert-GraphModules {
-    param([switch]$Full, [switch]$Groups)
-
-    $required = @('Microsoft.Graph.Reports', 'Microsoft.Graph.Authentication')
+    $required = @('Microsoft.Graph.Reports', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Users', 'Microsoft.Graph.Sites')
     foreach ($m in $required) {
         if (-not (Get-Module -ListAvailable -Name $m)) {
             throw "Required module '$m' is not installed. Run: Install-Module $m -Scope CurrentUser"
         }
         Import-Module $m -ErrorAction Stop
     }
-
-    if ($Full) {
-        foreach ($m in @('Microsoft.Graph.Users', 'Microsoft.Graph.Sites')) {
-            if (-not (Get-Module -ListAvailable -Name $m)) {
-                throw "Required module '$m' is not installed for -Full mode. Run: Install-Module $m -Scope CurrentUser"
-            }
-            Import-Module $m -ErrorAction Stop
-        }
-    }
-    # NOTE: -Groups does NOT require the separate Microsoft.Graph.Groups
-    # module today - group membership is pulled via -ExpandProperty MemberOf
-    # on the same Get-MgUser -All call in Get-UserEnrichmentIndex (already
-    # part of Microsoft.Graph.Users, already required above for -Full).
+    # NOTE: Entra ID group membership enrichment (-NoGroups to opt out) does
+    # NOT require the separate Microsoft.Graph.Groups module today - group
+    # membership is pulled via -ExpandProperty MemberOf
+    # on its own separate Get-MgUser -All call in Get-UserEnrichmentIndex
+    # (still part of Microsoft.Graph.Users, already required above; Graph
+    # only allows one navigation property expanded per query, so this can't
+    # be combined with the manager-enrichment call - see that function's
+    # header).
 }
 
 function Connect-Assessment {
     param(
-        [switch]$Full,
         [switch]$Groups,
         [string]$TenantId,
         [string]$ClientId,
-        [string]$CertificateThumbprint
+        [string]$CertificateThumbprint,
+        [int]$GraphTimeoutSeconds = 900
     )
 
-    $scopes = @('Reports.Read.All')
-    if ($Full) { $scopes += @('User.Read.All', 'Sites.Read.All') }
+    $scopes = @('Reports.Read.All', 'User.Read.All', 'Sites.Read.All')
     if ($Groups) { $scopes += @('Group.Read.All') }
 
     $useAppOnly = $TenantId -and $ClientId -and $CertificateThumbprint
@@ -356,6 +412,21 @@ function Connect-Assessment {
     if (-not $ctx) { throw "Graph connection failed - Connect-MgGraph returned no context." }
     Write-Host "Connected as $($ctx.Account)" -ForegroundColor Green
     Write-Host "Scopes granted:  $($ctx.Scopes -join ', ')" -ForegroundColor Green
+
+    # NEW 2026-09-17: see Full script's matching comment - raise the Graph
+    # client timeout right after connecting so a huge tenant's Get-MgUser
+    # -All pull (and any other slow Graph call for the rest of the run)
+    # doesn't silently wipe enrichment via an HttpClient.Timeout.
+    try {
+        # NEW 2026-09-22: see Full script's matching comment - suppress
+        # Set-MgRequestContext's return value so it doesn't leak an unwanted
+        # ClientTimeout/RetryDelay/MaxRetry/RetriesTimeLimit table to the
+        # console.
+        Set-MgRequestContext -ClientTimeout $GraphTimeoutSeconds -ErrorAction Stop | Out-Null
+        Write-Host "Graph client timeout set to $GraphTimeoutSeconds seconds (large tenants can otherwise time out mid-enrichment)." -ForegroundColor Gray
+    } catch {
+        Write-Warning "Could not raise the Graph client timeout ($($_.Exception.Message)). Continuing with the SDK default - very large tenants may see enrichment fail with an HttpClient.Timeout warning; re-run with a newer Microsoft.Graph.Authentication module if so."
+    }
 
     if (-not $useAppOnly) {
         foreach ($needed in $scopes) {
@@ -395,12 +466,9 @@ Entra admin center > Applications > App registrations > New registration.
 ## 2. Add API permissions (APPLICATION permissions, not delegated)
 API permissions > Add a permission > Microsoft Graph > Application permissions:
 - Reports.Read.All
-- (Only if you also want Full-mode enrichment/exact Team-site dedupe:)
-  User.Read.All
-  Sites.Read.All
-- (Only if you also want -Groups - Entra ID group-based bulk selection,
-  requires -Full above:)
-  Group.Read.All
+- User.Read.All
+- Sites.Read.All
+- Group.Read.All (skip this one only if you'll always run with -NoGroups)
 
 Click "Grant admin consent for <tenant>" - this step requires a Global
 Administrator or Privileged Role Administrator. This is the step that makes
@@ -426,7 +494,7 @@ registration's "Certificates & secrets" tab.
   certificate's Details tab in the portal.
 
 ## 5. Run the assessment
-    .\Invoke-RecoveryAssessment-M365-Full.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-Full] [other params]
+    .\Invoke-RecoveryAssessment-M365-Preview.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint> [-NoGroups] [other params]
 
 ## When you're done
 Revoke or delete the app registration (or at minimum rotate/remove the
@@ -445,17 +513,19 @@ function Get-UserEnrichmentIndex {
         FULL MODE ONLY (needs User.Read.All). Bulk-pulls user profile
         attributes AND resolves each user's manager roll-up chain (a list of
         display names from immediate manager up to the top), entirely offline
-        from a single Get-MgUser -All call - no extra per-user Graph calls.
+        from a single Get-MgUser -All call - no per-user Graph calls.
         Joined onto Mailboxes/OneDrive by UPN in Add-UserEnrichment.
 
-        -IncludeGroups (needs -Groups, which needs Group.Read.All): expands
-        'MemberOf' on the SAME Get-MgUser -All call (no extra Graph round
-        trip) and keeps only entries that are actual Entra ID groups
-        (filters out directory roles / administrative units, which also
-        come back on memberOf). Without Group.Read.All granted, memberOf
-        still resolves object IDs but displayName comes back null/limited -
-        so this quietly produces an empty Groups list rather than an error
-        if -Groups was passed but the scope wasn't actually consented.
+        -IncludeGroups (on by default as of v3.14.0 - pass -NoGroups at the
+        top level to skip it, which needs Group.Read.All): expands 'MemberOf'
+        via a SECOND, separate Get-MgUser -All call (see the NEW 2026-09-08
+        note below for why this can't be combined with the call above) and
+        keeps only entries that are actual Entra ID groups (filters out
+        directory roles / administrative units, which also come back on
+        memberOf). Without Group.Read.All granted, memberOf still resolves
+        object IDs but displayName comes back null/limited - so this quietly
+        produces an empty Groups list rather than an error if group data was
+        requested but the scope wasn't actually consented.
         NOTE: this build additionally redacts Groups/GroupIds for every
         non-Group-1 row via Protect-PreviewData below, same as Manager.
     #>
@@ -463,13 +533,47 @@ function Get-UserEnrichmentIndex {
 
     $indexByUpn = @{}
     $indexById  = @{}
-    $expand = if ($IncludeGroups) { @('Manager', 'MemberOf') } else { @('Manager') }
+
+    # NEW 2026-09-08: found via a real customer's live 403->new-warning
+    # follow-up report. This USED to be one Get-MgUser -All call with
+    # -ExpandProperty @('Manager','MemberOf') whenever -IncludeGroups was
+    # on (the default since v3.14.0). Microsoft Graph's /users endpoint
+    # only allows ONE navigation property to be expanded per query - asking
+    # for both Manager AND MemberOf in the same request throws
+    # "Request_BadRequest: Only one property can be expanded in a single
+    # query," which the catch below used to treat as a total enrichment
+    # failure, returning the EMPTY $indexByUpn and silently dropping
+    # JobTitle/Department/EmployeeType/Manager/Groups for every single row
+    # in the report - not just group data. Since -IncludeGroups is
+    # default-on, this was breaking title-weight scoring and every
+    # department/manager/group filter for every customer NOT passing
+    # -NoGroups, without the run ever throwing a terminating error (this is
+    # why "the old script doesn't give that warning" - the old script only
+    # ever expanded Manager alone, a single property, which Graph allows).
+    # Fixed by splitting into two separate Get-MgUser -All calls, one per
+    # expand target, merged by Id below - so a failure in the group-
+    # membership call degrades to "no groups" instead of nuking the entire
+    # enrichment index, and the common (non-Groups) path can never trigger
+    # this specific Graph restriction at all. Mirrored from the Full script.
     try {
-        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled' -ExpandProperty $expand -ErrorAction Stop
+        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled' -ExpandProperty 'Manager' -ErrorAction Stop
     }
     catch {
         Write-Warning "User profile enrichment failed ($($_.Exception.Message)). Continuing without it."
         return $indexByUpn
+    }
+
+    $memberOfById = @{}
+    if ($IncludeGroups) {
+        try {
+            $usersWithGroups = Get-MgUser -All -Property 'Id' -ExpandProperty 'MemberOf' -ErrorAction Stop
+            foreach ($ug in $usersWithGroups) {
+                if ($ug.Id) { $memberOfById[$ug.Id] = $ug.MemberOf }
+            }
+        }
+        catch {
+            Write-Warning "Entra ID group membership enrichment failed ($($_.Exception.Message)). Continuing WITH profile enrichment (title/department/manager) but WITHOUT group data - pass -NoGroups to suppress this warning if group data isn't needed."
+        }
     }
 
     $groupResolvedCount = 0
@@ -484,8 +588,9 @@ function Get-UserEnrichmentIndex {
         }
         $groupNames = @()
         $groupIds   = @()
-        if ($IncludeGroups -and $u.MemberOf) {
-            foreach ($m in $u.MemberOf) {
+        $userMemberOf = if ($u.Id -and $memberOfById.ContainsKey($u.Id)) { $memberOfById[$u.Id] } else { $null }
+        if ($IncludeGroups -and $userMemberOf) {
+            foreach ($m in $userMemberOf) {
                 $odataType = $null
                 if ($m.AdditionalProperties -and $m.AdditionalProperties.ContainsKey('@odata.type')) {
                     $odataType = $m.AdditionalProperties['@odata.type']
@@ -558,9 +663,15 @@ function Add-UserEnrichment {
         Add-Member -InputObject $row -NotePropertyName 'Department'     -NotePropertyValue $(if ($enrich) { $enrich.Department } else { '' })     -Force
         Add-Member -InputObject $row -NotePropertyName 'EmployeeType'   -NotePropertyValue $(if ($enrich) { $enrich.EmployeeType } else { '' })   -Force
         Add-Member -InputObject $row -NotePropertyName 'Manager'        -NotePropertyValue $(if ($enrich) { $enrich.Manager } else { '' })        -Force
-        Add-Member -InputObject $row -NotePropertyName 'ManagerChain'   -NotePropertyValue $(if ($enrich) { $enrich.ManagerChain } else { @() })  -Force
-        Add-Member -InputObject $row -NotePropertyName 'Groups'         -NotePropertyValue $(if ($enrich) { $enrich.Groups } else { @() })        -Force
-        Add-Member -InputObject $row -NotePropertyName 'GroupIds'       -NotePropertyValue $(if ($enrich) { $enrich.GroupIds } else { @() })      -Force
+        # NEW 2026-09-11: see Full script's matching comment - $(...) around
+        # an if/else lets PowerShell auto-unroll a collection written to the
+        # output stream, collapsing exactly-one-element arrays (a single
+        # Entra ID group, a single manager-chain hop) into bare strings
+        # instead of 1-element arrays. @(...) forces array-context
+        # collection regardless of element count.
+        Add-Member -InputObject $row -NotePropertyName 'ManagerChain'   -NotePropertyValue @(if ($enrich) { $enrich.ManagerChain } else { @() })  -Force
+        Add-Member -InputObject $row -NotePropertyName 'Groups'         -NotePropertyValue @(if ($enrich) { $enrich.Groups } else { @() })        -Force
+        Add-Member -InputObject $row -NotePropertyName 'GroupIds'       -NotePropertyValue @(if ($enrich) { $enrich.GroupIds } else { @() })      -Force
         Add-Member -InputObject $row -NotePropertyName 'OfficeLocation' -NotePropertyValue $(if ($enrich) { $enrich.OfficeLocation } else { '' }) -Force
         Add-Member -InputObject $row -NotePropertyName 'AccountEnabled' -NotePropertyValue $(if ($enrich) { $enrich.AccountEnabled } else { $null }) -Force
     }
@@ -570,17 +681,17 @@ function Add-UserEnrichment {
 function Add-MailboxTypeHeuristic {
     <#
         v3.0.0: the mailbox usage report (Get-MgReportMailboxUsageDetail,
-        already pulled in PREVIEW mode - no extra scope) includes a real
-        'Recipient Type' column (e.g. "User Mailbox", "Shared Mailbox",
-        "Room Mailbox", "Equipment Mailbox"). Validated against real customer
-        data: the OLD proxy below (AccountEnabled=$false => "likely
-        Shared/Resource") caught 0 of 2 real Shared mailboxes in that data -
-        both had AccountEnabled=$true - i.e. it was worse than a coin flip.
-        Recipient Type is now the AUTHORITATIVE signal and is populated by
-        Get-MailboxCriticality regardless of -Full. The old
-        AccountEnabled-based guess is kept ONLY as a last-resort fallback for
-        the rare tenant/report export where Recipient Type comes back blank,
-        and only runs in that case.
+        already pulled with no extra scope) includes a real 'Recipient Type'
+        column (e.g. "User Mailbox", "Shared Mailbox", "Room Mailbox",
+        "Equipment Mailbox"). Validated against real customer data: the OLD
+        proxy below (AccountEnabled=$false => "likely Shared/Resource")
+        caught 0 of 2 real Shared mailboxes in that data - both had
+        AccountEnabled=$true - i.e. it was worse than a coin flip. Recipient
+        Type is now the AUTHORITATIVE signal and is populated by
+        Get-MailboxCriticality on every run. The old AccountEnabled-based
+        guess is kept ONLY as a last-resort fallback for the rare tenant/
+        report export where Recipient Type comes back blank, and only runs
+        in that case.
     #>
     param([Parameter(Mandatory)] [array] $Data)
     foreach ($row in $Data) {
@@ -595,7 +706,7 @@ function Add-MailboxTypeHeuristic {
             }
         }
         elseif ($null -eq $row.AccountEnabled -or $row.AccountEnabled -eq '') {
-            'Unknown (Recipient Type blank; run -Full for the AccountEnabled fallback)'
+            'Unknown (Recipient Type and AccountEnabled both blank for this object)'
         }
         elseif ($row.AccountEnabled -eq $false) {
             'Likely Shared/Resource (AccountEnabled fallback - Recipient Type was blank; low confidence, see Methodology tab)'
@@ -609,7 +720,7 @@ function Add-MailboxTypeHeuristic {
 }
 
 function Add-TitleWeightScore {
-    <# FULL ONLY (needs JobTitle). Highest-weight keyword match wins. #>
+    <# Needs JobTitle (from base enrichment). Highest-weight keyword match wins. #>
     param(
         [Parameter(Mandatory)] [array]     $Data,
         [Parameter(Mandatory)] [hashtable] $TitleWeights
@@ -643,7 +754,7 @@ function Add-HubSiteFlag {
     #>
     param(
         [Parameter(Mandatory)] [array]    $Data,
-        [Parameter(Mandatory)] [string[]] $Keywords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Keywords,
         [double] $Bonus = 0.15
     )
     if ($Data.Count -eq 0) { return $Data }
@@ -670,8 +781,59 @@ function Add-HubSiteFlag {
 }
 
 function Get-ExactTeamSiteUrls {
-    <# FULL MODE ONLY (needs Sites.Read.All). See v1.2.1/1.2.2 notes retained below. #>
-    param([Parameter(Mandatory)] [array] $Teams)
+    <#
+    FULL MODE ONLY. Needs Sites.Read.All - AND, despite the comment this
+    replaced saying otherwise, Get-MgGroupSite also needs enough group-read
+    access to resolve each Team's underlying Microsoft 365 Group before it
+    can return that group's site (Group.Read.All in practice). Found
+    2026-09-08 via a real customer 403/accessDenied report:
+    running with -NoGroups (which deliberately does NOT request
+    Group.Read.All) made EVERY Get-MgGroupSite call fail, since the group
+    itself can't be read. That was already non-fatal (caught below, one
+    Write-Warning per Team) - but returning a non-null, mostly-empty $keys
+    set in that all-fail scenario was a real correctness bug on top of the
+    noise: Get-SharePointCriticality's $useExactMode goes true whenever
+    $ExactTeamSiteKeys is non-null, so with -NoGroups every team-connected
+    SharePoint site was silently NOT recognized as team-owned (empty set
+    never contains anything) and got double-counted as a standalone site,
+    instead of falling back to the free, no-extra-permission heuristic
+    (RootWebTemplate -in 'Group'/'Team Channel', already used when
+    $ExactTeamSiteKeys is $null). Skipping the whole loop and returning
+    $null up front when -Groups wasn't requested fixes BOTH problems: no
+    doomed per-team API calls/warning spam, and the heuristic fallback
+    actually engages instead of quietly mis-scoping the SharePoint tab.
+    Mirrored from the Full script. See v1.2.1/1.2.2 notes retained below.
+    #>
+    param(
+        [Parameter(Mandatory)] [array] $Teams,
+        [switch] $Groups
+    )
+
+    if (-not $Groups) {
+        Write-Host "Exact Team-site resolution skipped (-NoGroups was passed - Get-MgGroupSite needs Group.Read.All to resolve each Team's site, which -NoGroups deliberately doesn't request). Falling back to heuristic Team/Group-site matching for SharePoint dedup - no extra permission needed." -ForegroundColor Gray
+        return $null
+    }
+
+    # Circuit breaker: found 2026-09-08 via a second report from the same
+    # customer tenant - even with Group.Read.All AND
+    # Sites.Read.All both actually granted (confirmed via their own
+    # (Get-MgContext).Scopes dump), Get-MgGroupSite still 403'd for every
+    # Team. Root cause is a separate, well-documented Graph limitation from
+    # the missing-scope case above: under DELEGATED (interactive user)
+    # auth, /groups/{id}/sites/root enforces that the signed-in user is
+    # actually a MEMBER of that Microsoft 365 Group - broad admin-consented
+    # scopes don't override that for this specific call. An admin running
+    # this interactively is realistically not a member of most Teams in a
+    # large tenant, so this fails almost every time regardless of scope
+    # breadth. Rather than grinding through every remaining Team making a
+    # doomed API call and printing a warning each time, bail out after the
+    # first few failures (with zero successes so far - a real, occasional
+    # per-team failure would typically be interspersed with successes, not
+    # clustered from the very first attempt) and fall back cleanly to the
+    # free heuristic for everyone, same as the -NoGroups case above.
+    # Mirrored from the Full script.
+    $maxProbeFailuresBeforeBail = 5
+    $failureCount = 0
 
     $keys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $resolvedCount = 0
@@ -691,6 +853,11 @@ function Get-ExactTeamSiteUrls {
             }
         }
         catch {
+            $failureCount++
+            if ($resolvedCount -eq 0 -and $failureCount -ge $maxProbeFailuresBeforeBail) {
+                Write-Warning "Exact Team-site resolution: Get-MgGroupSite failed for the first $failureCount team(s) in a row (most recent error: $($_.Exception.Message)). This usually means either (a) the signed-in session doesn't actually have Sites.Read.All/Group.Read.All granted, or (b) you're connected via delegated/interactive auth and simply aren't a member of most of these Microsoft 365 Groups - Microsoft Graph enforces group membership for this specific call regardless of how broad the consented scopes are. Falling back to heuristic Team/Group-site matching for all $($Teams.Count) teams instead of continuing to retry one at a time."
+                return $null
+            }
             Write-Warning "Could not resolve SharePoint site for Team '$($t.ObjectName)' ($groupId): $($_.Exception.Message)"
         }
     }
@@ -1063,7 +1230,7 @@ $script:SPODTierTable = @(
     @{ Bucket = '1k-5k';   Max = 5000;                       Parallelism = 6  }
     @{ Bucket = '5k-15k';  Max = 15000;                      Parallelism = 9  }
     @{ Bucket = '15k-50k'; Max = 50000;                      Parallelism = 12 }
-    @{ Bucket = '50k+';    Max = [double]::PositiveInfinity;  Parallelism = 15 }
+    @{ Bucket = '50k+';    Max = $null;                       Parallelism = 15 }
 )
 # NEW v3.10.0 (M365 MVC Recovery Time Estimator - RSC M365 Restoration
 # Benchmark, Mar 2025 / M365 Sizing Guidance, Jan 2026 - superseding the
@@ -1667,7 +1834,7 @@ function Get-MailboxCriticality {
         $itemCount    = [double](Get-ColumnValue $u @('Item Count') 0)
         $storageBytes = [double](Get-ColumnValue $u @('Storage Used (Byte)', 'Storage Used (Bytes)') 0)
         # NEW v3.0.0: real Exchange recipient type, straight from the mailbox
-        # usage report - already pulled in PREVIEW mode, no extra scope needed.
+        # usage report - already pulled with no extra scope needed.
         # Authoritative signal for Add-MailboxTypeHeuristic (replaces the old
         # AccountEnabled proxy - see that function's header for why).
         $recipientType = Get-ColumnValue $u @('Recipient Type') ''
@@ -1852,9 +2019,9 @@ function Get-SharePointCriticality {
         }
         elseif ($isTeamSite) {
             $reason = if ($useExactMode) {
-                "Exact match to a Team's SharePoint site (resolved via Get-MgGroupSite, Full mode) - already tiered under Teams."
+                "Exact match to a Team's SharePoint site (resolved via Get-MgGroupSite) - already tiered under Teams."
             } else {
-                "Group/Teams-connected site (RootWebTemplate=$template) - heuristic match, likely already tiered under Teams. Re-run with -IncludeGroupConnectedSites to keep sites like this, or -Full for exact (non-heuristic) matching."
+                "Group/Teams-connected site (RootWebTemplate=$template) - heuristic match, likely already tiered under Teams. Re-run with -IncludeGroupConnectedSites to keep sites like this."
             }
             Add-Member -InputObject $obj -NotePropertyName 'ExclusionReason' -NotePropertyValue $reason -Force
             $excluded.Add($obj)
@@ -1924,6 +2091,34 @@ function ConvertTo-SafeHtml {
     return [System.Net.WebUtility]::HtmlEncode($Text)
 }
 
+<#
+    PowerShell's ConvertTo-Json happily emits the bare words Infinity,
+    -Infinity, and NaN for [double]::PositiveInfinity/NegativeInfinity/NaN
+    values anywhere in the object graph - none of which are valid JSON
+    (the spec has no numeric literal for them). The browser's JSON.parse()
+    on the embedded report-data blob throws on the very first one, which
+    kills DATA entirely and leaves every tab blank - with no error visible
+    anywhere except the browser console, so it looks like a silently broken
+    report rather than a crash. Found live 2026-08-26: the SPOD throughput
+    tier table's uncapped "50k+" bucket was still [double]::PositiveInfinity
+    (fixed to $null, which the JS side already expected), but nothing
+    stopped the NEXT such value - added anywhere in $dataObject by a future
+    change - from doing the exact same thing again, undetected by node
+    --check or a JS-logic vm harness (both operate on an already-parsed JS
+    object, never the raw JSON text a browser's JSON.parse() actually sees).
+    Call this on the compressed JSON string immediately after every
+    ConvertTo-Json call that builds an embedded/exported report-data blob,
+    before it's written anywhere - fails loudly and immediately at
+    generation time instead of shipping a report that only looks broken
+    once a customer opens it.
+#>
+function Assert-ValidReportJson {
+    param([Parameter(Mandatory)][string]$Json, [string]$Context = 'report data')
+    if ($Json -match '(?<=[:,\[])(-?Infinity|NaN)(?=[,\]}])') {
+        throw "Assert-ValidReportJson: found a bare '$($Matches[1])' token in $Context - not valid JSON, will crash JSON.parse() in the browser and leave the report blank. Root cause is almost always a [double]::PositiveInfinity/NegativeInfinity/NaN value somewhere in the object passed to ConvertTo-Json; replace it with `$null` (or a finite sentinel) before this point."
+    }
+}
+
 $script:ReportCss = @'
 :root {
   --teal:#4DD2D2; --cyan:#2FCAFF; --green:#21DDAA; --blue:#0E5BCF;
@@ -1988,6 +2183,7 @@ h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25re
 .exec-hero-card .exec-hero-value { font-size: 1.9rem; font-weight: 800; color: var(--navy); margin: .2rem 0; }
 .exec-hero-card .exec-hero-sub { font-size: .82rem; color: var(--dark-gray); }
 .exec-hero-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .55rem .85rem; margin: -.6rem 0 1.6rem; }
+.exec-hero-caption { font-size: .78rem; color: var(--dark-gray); margin: -.4rem 0 1rem; max-width: 70ch; }
 .exec-hero-linkout { font-size: .78rem; color: var(--blue); cursor: pointer; text-decoration: underline; }
 
 /* NEW: Financial Impact as a before/after comparison, closed with a bold
@@ -2203,6 +2399,15 @@ h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25re
 .bonus-tag { font-size: .62rem; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #fff; background: var(--teal); padding: .15rem .45rem; border-radius: 4px; }
 .bonus-hint { font-size: .72rem; color: var(--dark-gray); margin: -.2rem 0 .7rem; }
 
+/* Read-only title-weight keyword table (see buildTitleWeightTableHtml()). */
+.tw-table { margin: .5rem 0 .9rem; border: 1px solid #D7DCE1; border-radius: 8px; overflow: hidden; }
+.tw-head, .tw-row { display: grid; grid-template-columns: 1fr 74px; gap: .5rem; align-items: center; padding: .35rem .6rem; }
+.tw-head { background: #F0F3F6; font-size: .66rem; font-weight: 700; color: var(--dark-gray); text-transform: uppercase; letter-spacing: .02em; }
+.tw-row { border-top: 1px solid #D7DCE1; }
+.tw-row input[type=text] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .5rem; font-size: .78rem; width: 100%; box-sizing: border-box; }
+.tw-row input[type=number] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .3rem; font-size: .78rem; width: 100%; box-sizing: border-box; text-align: center; }
+.tw-note { font-size: .68rem; color: var(--dark-gray); margin: -.3rem 0 .8rem; }
+
 .preview-card { background: #FAFBFC; border: 1px solid #EBEEF1; border-radius: 10px; padding: 1.1rem 1.3rem 1.3rem; }
 .preview-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .15rem; }
 .preview-head h5 { margin: 0; font-size: .85rem; color: var(--navy); font-weight: 800; }
@@ -2281,6 +2486,11 @@ tbody tr:hover td:first-child { background: #FAFBFC; }
 .table-scroll-shell.has-more-right .scroll-fade-right { opacity: 1; }
 .scroll-hint { font-size: .74rem; font-weight: 700; color: var(--blue); white-space: nowrap; opacity: 1; transition: opacity .25s ease; }
 .scroll-hint.scrolled { opacity: 0; visibility: hidden; }
+/* NEW v3.10.3: MAX_TABLE_ROWS cap notice, shown under a workload table (or
+   the Group 1 overview) once there are more matching rows than are rendered. */
+.table-cap-notice { font-size: .78rem; color: var(--dark-gray); padding: .5rem 0 0; }
+.table-cap-notice button { border: 1px solid #D7DCE1; border-radius: 6px; background: #fff; padding: .15rem .5rem; font-size: .76rem; cursor: pointer; color: var(--blue); }
+.table-cap-notice button:hover { background: #F4F6F8; }
 .badge { display: inline-block; padding: .18rem .6rem; border-radius: 999px; font-size: .7rem; font-weight: 700; white-space: nowrap; }
 .badge.override { background: #093565; color: #fff; margin-left: .35rem; }
 .tier-select { border: 1px solid #D7DCE1; border-radius: 6px; padding: .2rem .4rem; font-size: .76rem; }
@@ -2303,6 +2513,33 @@ footer p { max-width: 900px; }
 .icon-btn { background: var(--navy); color: #fff; border: none; border-radius: 7px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: 0 0 auto; }
 .icon-btn:hover { background: var(--navy-dark); }
 .icon-btn svg { width: 17px; height: 17px; }
+/* NEW: guided tour - welcome modal, spotlight overlay, positioned tooltip.
+   No external tour library, consistent with the report's zero-dependency
+   design. See $script:ReportJsTour for the engine. */
+.tour-welcome-backdrop { position: fixed; inset: 0; background: rgba(9,53,101,.65); z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.tour-welcome-card { background: #fff; border-radius: 14px; max-width: 480px; width: 100%; padding: 2rem; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.tour-welcome-title { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin-bottom: .6rem; }
+.tour-welcome-body { font-size: .92rem; color: var(--dark-gray); line-height: 1.55; margin-bottom: 1.3rem; }
+.tour-welcome-actions { display: flex; gap: .7rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.tour-welcome-dontshow { font-size: .78rem; color: var(--dark-gray); display: flex; align-items: center; gap: .45rem; cursor: pointer; }
+.tour-overlay-backdrop { position: fixed; inset: 0; background: transparent; z-index: 9000; pointer-events: none; transition: background .15s ease; }
+/* NEW: see Full script's matching comment - dim + blur the backdrop for
+   steps with no specific target (selector: null) instead of leaving the
+   whole page fully visible/readable behind the centered tooltip. */
+.tour-overlay-backdrop.dimmed { background: rgba(9,53,101,.6); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.tour-spotlight { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(9,53,101,.6); z-index: 9001; pointer-events: none; border: 2px solid var(--cyan); }
+.tour-tooltip { position: fixed; z-index: 9002; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); padding: 1.1rem 1.3rem; max-width: 340px; }
+.tour-tooltip.centered { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); max-width: 460px; width: calc(100% - 2rem); }
+.tour-tooltip-step { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--blue); margin-bottom: .3rem; }
+.tour-tooltip-title { font-size: 1.05rem; font-weight: 700; color: var(--navy); margin-bottom: .5rem; }
+.tour-tooltip-body { font-size: .88rem; color: var(--dark-gray); line-height: 1.5; margin-bottom: 1rem; }
+.tour-tooltip-actions { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.tour-btn { border: none; border-radius: 7px; padding: .5rem 1rem; font-size: .82rem; font-weight: 600; cursor: pointer; }
+.tour-btn-primary { background: var(--navy); color: #fff; }
+.tour-btn-primary:hover { background: var(--navy-dark); }
+.tour-btn-secondary { background: transparent; color: var(--dark-gray); padding: .5rem .4rem; }
+.tour-btn-secondary:hover { text-decoration: underline; }
+.tour-skip { font-size: .76rem; color: var(--dark-gray); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; }
 .pill-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .5rem .8rem; margin-bottom: 1rem; max-width: 900px; }
 
 /* Recovery tab - RTO controls, per-group ABR vs Mass Recovery sections,
@@ -2414,7 +2651,52 @@ footer p { max-width: 900px; }
 #region ---------- HTML report JS: engine (data, scoring, tiering, overrides) ----------
 
 $script:ReportJsEngine = @'
-var DATA = JSON.parse(document.getElementById("report-data").textContent);
+var DATA = JSON.parse(document.getElementById("report-data-meta").textContent);
+// NEW 2026-09-24: see Full script's matching comment - large-tenant fix.
+// The embedded payload is split across 5 separate <script> tags
+// (meta/weights/etc, then one per workload) instead of one combined blob,
+// because a real customer's ~908,000-object tenant produced a
+// single JSON string of 539,000,418 characters - 2.1MB OVER V8's hard-coded
+// maximum JS string length (536,870,888 characters; a fixed engine constant
+// in every Chromium/Node build, not something more RAM works around).
+// JSON.parse() on a string past that ceiling throws immediately, before ANY
+// of this engine runs, leaving the whole report blank. Splitting per
+// workload keeps each individual JSON.parse() call comfortably under the
+// limit for every tenant seen to date. This does NOT eliminate the ceiling -
+// an extreme enough SINGLE workload could still someday exceed it on its
+// own; there is no dynamic chunking within a workload yet.
+DATA.workloads = {
+  mailboxes:  JSON.parse(document.getElementById("report-data-mailboxes").textContent),
+  onedrive:   JSON.parse(document.getElementById("report-data-onedrive").textContent),
+  sharepoint: JSON.parse(document.getElementById("report-data-sharepoint").textContent),
+  teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
+};
+// NEW 2026-09-11: see Full script's matching comment - defensive
+// normalization for a real customer-found bug. Some rows'
+// Groups/GroupIds/ManagerChain arrive as a bare STRING instead of a
+// 1-element array (PowerShell pipeline unrolling on the PS side, fixed at
+// the source separately) - several JS helpers call .forEach/.join on these
+// fields, which throws on a string and aborts the whole script. Normalize
+// once, right after parsing, so this works regardless of when the report
+// was generated.
+(function normalizeRowArrayFields() {
+  function toArr(v) {
+    if (Array.isArray(v)) { return v; }
+    if (v === null || v === undefined || v === "") { return []; }
+    return [v];
+  }
+  var arrayFields = ["Groups", "GroupIds", "ManagerChain"];
+  if (!DATA || !DATA.workloads) { return; }
+  Object.keys(DATA.workloads).forEach(function (wKey) {
+    var rows = DATA.workloads[wKey];
+    if (!Array.isArray(rows)) { return; }
+    rows.forEach(function (r) {
+      arrayFields.forEach(function (f) {
+        if (f in r) { r[f] = toArr(r[f]); }
+      });
+    });
+  });
+})();
 // v3.1.0: 4-tier order. All four workloads are tiered the same way
 // (criticality-ranked, see computeScoresAndTiers) - there is no more
 // separate "Beyond Target" bucket. Group 1/2/3's RTO compliance is now a
@@ -2424,6 +2706,23 @@ var DATA = JSON.parse(document.getElementById("report-data").textContent);
 // the same Group 1/2/3 naming convention instead of calling it out as its
 // own "dormant" category, and swaps its badge from amber (which read as an
 // alert) to a neutral gray (--mid-gray) so it doesn't draw the eye.
+// NEW v3.10.3: large-tenant render cap. Every workload table (and the Group 1
+// cross-workload overview) used to render one <tr> per object with no limit -
+// fine at demo scale, but a real tenant with tens of thousands of objects per
+// workload turned "click Criticality Groups" into tens of thousands of DOM
+// rows built and laid out synchronously on every recompute (including the
+// very first page load, since recomputeAll() renders every tab up front) -
+// long enough for the browser to flag the page as unresponsive. Tables now
+// render only the top MAX_TABLE_ROWS (by score, so the highest-priority
+// objects are always what you see first) and show a "Show all" toggle per
+// table/section for when someone genuinely needs the full list on screen.
+// Search and filters still run over the FULL underlying dataset first - the
+// cap only limits how many of the matching rows get rendered, so a search for
+// one specific object always finds it even if it's outside the default top
+// slice. Mirrored from the Full script (same fix, same reasoning) - this
+// build's redaction rules are unaffected: which rows are locked/placeholder
+// is decided per-row in buildRowHtml, independent of how many rows render.
+var MAX_TABLE_ROWS = 500;
 var TIER_ORDER = ["Critical Group 1","Critical Group 2","Critical Group 3","Group 4"];
 var TIER_META = {
   "Critical Group 1": {bg:"#0E5BCF", fg:"#FFFFFF", short:"Group 1"},
@@ -2546,6 +2845,12 @@ var state = {
   // (true/undefined = show everything, unchanged default behavior; false =
   // essentials-only view). Persisted the same way overrides are, below.
   columnPrefs: {},
+  // NEW v3.10.3: per-workload/section "render every row, not just the top
+  // MAX_TABLE_ROWS" opt-in. Deliberately NOT persisted to localStorage (unlike
+  // overrides/columnPrefs) - defaults back to the fast, capped view on every
+  // fresh page load rather than silently re-triggering the slow render.
+  showAllRows: {},
+  group1ShowAll: false,
   recovery: {
     windowDays: DATA.meta.recoveryWindowDays, licenseTier: DATA.meta.recoveryLicenseTierRequested, costPerHour: DATA.meta.downtimeCostPerHour,
     // NEW v3.0.0: RTO targets (hours), seeded from the resolved server-side
@@ -3224,6 +3529,7 @@ function renderExecFinancialAndRecoveryTop() {
   var g1Count = g1.sp.objectCount + g1.od.objectCount + g1.ex.objectCount;
 
   var recoveryHtml = '<div class="exec-hero-label">Recovery Times (ABR, sequenced by group)</div>' +
+    '<div class="exec-hero-caption">"Cumulative" = elapsed time from the start of recovery, not added on top of the group before it - Groups 1-2 online already includes Group 1\'s ' + fmtMin(g1.wallClockCumMin) + ' from recovering first.</div>' +
     '<div class="exec-hero-grid">' +
       '<div class="exec-hero-card"><div class="exec-hero-tag">Group 1 online in</div><div class="exec-hero-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="exec-hero-sub">' + fmtNum(g1Count) + " objects - target: " + state.recovery.group1Hours + " hr</div></div>" +
       '<div class="exec-hero-card"><div class="exec-hero-tag">Groups 1-2 online in</div><div class="exec-hero-value">' + pvLocked() + '</div><div class="exec-hero-sub">cumulative - target: ' + state.recovery.group2Hours + " hr</div></div>" +
@@ -3544,7 +3850,7 @@ function buildWorkloadSection(wdKey) {
   // is the primary "find this one thing" control - rerenderWorkloadSection
   // preserves focus/cursor position across the re-render so typing doesn't
   // get interrupted.
-  var searchBox = '<input type="text" class="search-box" id="search-' + wdKey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="setFilter(\'' + wdKey + '\',\'search\',this.value)">';
+  var searchBox = '<input type="text" class="search-box" id="search-' + wdKey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="onSearchInput(\'' + wdKey + '\',this.value)">';
 
   var attrFilters = "";
   if (hasEnrichment) {
@@ -3572,10 +3878,24 @@ function buildWorkloadSection(wdKey) {
     ? buildWorkloadTotalsRow(wdKey, visibleRows, isGroup1Only ? ("Filtered View (" + fmtNum(visibleRows.length) + " shown)") : "Filtered View")
     : "";
 
-  var bodyRows = visibleRows.slice().sort(function (a, b) { return (b._Score || 0) - (a._Score || 0); }).map(function (row) {
+  var sortedVisible = visibleRows.slice().sort(function (a, b) { return (b._Score || 0) - (a._Score || 0); });
+  var showAll = !!state.showAllRows[wdKey];
+  var renderedRows = showAll ? sortedVisible : sortedVisible.slice(0, MAX_TABLE_ROWS);
+  var isCapped = !showAll && sortedVisible.length > MAX_TABLE_ROWS;
+  var bodyRows = renderedRows.map(function (row) {
     return buildRowHtml(row, wd, wdKey, hasEnrichment, hasMailboxType, hasGroups);
   }).join("");
   if (!bodyRows) { bodyRows = '<tr><td colspan="12" style="text-align:center;color:var(--dark-gray);padding:2rem;white-space:normal;">No rows match the current filters.</td></tr>'; }
+  // PREVIEW-ONLY: the cap notice always states a REAL total row count (unlike
+  // the chip counts/headerCount above, which lock to bullets for non-Group-1
+  // context) - that's fine, since "how many rows matched" is not the same
+  // secret as "what those rows' identity/timing are," and buildRowHtml below
+  // still fully redacts every non-Group-1 row regardless of the cap.
+  var capNoticeHtml = isCapped
+    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(sortedVisible.length) + ' rows, sorted by score - search or filter above to narrow, or <button onclick="setShowAllRows(\'' + wdKey + '\')">show all ' + fmtNum(sortedVisible.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    : (showAll && sortedVisible.length > MAX_TABLE_ROWS
+      ? '<div class="table-cap-notice">Showing all ' + fmtNum(sortedVisible.length) + ' rows. <button onclick="setShowAllRows(\'' + wdKey + '\', true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
+      : "");
 
   var extraHeaders = "";
   if (hasEnrichment) { extraHeaders += '<th class="col-detail">Job Title</th><th class="col-detail">Department</th><th class="col-detail">Manager</th>'; }
@@ -3605,7 +3925,7 @@ function buildWorkloadSection(wdKey) {
     buildWorkloadTotalsRow(wdKey, null, "All Objects") +
     '<div class="search-box-row">' + searchBox + "</div>" +
     '<div class="filter-chips">' + chips + "</div>" +
-    '<div class="filter-chips">' + attrFilters + "</div>" +
+    '<div class="filter-chips" id="attr-filters-' + wdKey + '">' + attrFilters + "</div>" +
     filteredTotalsHtml +
     toolbar +
     '<div class="table-scroll-shell" id="shell-' + wdKey + '">' +
@@ -3614,6 +3934,7 @@ function buildWorkloadSection(wdKey) {
       "</tr></thead><tbody>" + bodyRows + "</tbody></table></div>" +
       '<div class="scroll-fade-right" aria-hidden="true"></div>' +
     "</div>" +
+    capNoticeHtml +
     "</section>";
 }
 
@@ -3679,6 +4000,35 @@ function setFilter(wdKey, field, value) {
   var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
   f[field] = value;
   rerenderWorkloadSection(wdKey);
+}
+
+// NEW v3.10.3: see MAX_TABLE_ROWS above. reset=true flips back to the fast,
+// capped view; omitted/false renders every row currently passing filters.
+function setShowAllRows(wdKey, reset) {
+  state.showAllRows[wdKey] = !reset;
+  rerenderWorkloadSection(wdKey);
+}
+
+// Same idea as setShowAllRows, for the standalone Group 1 cross-workload
+// overview table (buildGroup1Overview) rather than a per-workload section.
+// PREVIEW-ONLY: no refreshGroupsBody()/recomputeTiersLive() split here (see
+// renderGroupsTab's comment above) - everything on this tab is frozen except
+// this toggle, so a full renderGroupsTab() re-render is cheap and correct.
+function setGroup1ShowAll(reset) {
+  state.group1ShowAll = !reset;
+  renderGroupsTab();
+}
+
+// NEW v3.10.3: debounces the live search box so a fast typist on a large
+// tenant doesn't trigger a full filter+sort+render on every keystroke - only
+// once input has paused for SEARCH_DEBOUNCE_MS. The <input> itself is never
+// re-created mid-type (rerenderWorkloadSection already preserves focus/cursor
+// position), this just delays how often that rebuild actually fires.
+var SEARCH_DEBOUNCE_MS = 250;
+var searchDebounceTimers = {};
+function onSearchInput(wdKey, value) {
+  clearTimeout(searchDebounceTimers[wdKey]);
+  searchDebounceTimers[wdKey] = setTimeout(function () { setFilter(wdKey, "search", value); }, SEARCH_DEBOUNCE_MS);
 }
 
 function onTierDropdownChange(wdKey, identifier, newTier) {
@@ -3778,6 +4128,27 @@ $script:ReportJsRenderB = @'
 // intentionally NOT ported here. This keeps the "Groups 2/3/4 are never
 // real in Preview" guarantee simple: weights literally cannot change, so
 // there is no live-recompute path to lock down in the first place.
+// Read-only mirror of the Full script's editable title-weight keyword table
+// - frozen here like every other tiering control in this preview build, but
+// shown so a viewer can see which keywords/weights are driving the
+// Title-weight bonus above (state.titleWeights, unedited from -TitleWeights).
+function buildTitleWeightTableHtml() {
+  var keys = Object.keys(state.titleWeights);
+  var rows = keys.map(function (kw) {
+    return '<div class="tw-row">' +
+      '<input type="text" value="' + esc(kw) + '" disabled>' +
+      '<input type="number" min="0" max="1" step="0.05" value="' + state.titleWeights[kw] + '" disabled>' +
+      "</div>";
+  }).join("");
+  var tableHtml = '<div class="tw-table"><div class="tw-head"><span>Title keyword</span><span>Weight</span></div>' + rows + "</div>" +
+    '<div class="tw-note">Matches are a case-insensitive substring against Job Title - fully editable in the full assessment, fixed here.</div>';
+  // Collapsed by default, same rt-toggle/rt-detail pattern as the Full
+  // script - nothing in this read-only table ever triggers a re-render, so
+  // (unlike Full) a plain DOM-only toggle is enough, no state needed.
+  return '<div class="rt-toggle" onclick="this.nextElementSibling.classList.toggle(\'open\'); this.innerHTML = (this.nextElementSibling.classList.contains(\'open\') ? \'&minus; Hide\' : \'+ Show\') + \' title keywords (' + keys.length + ')\';">+ Show title keywords (' + keys.length + ')</div>' +
+    '<div class="rt-detail">' + tableHtml + "</div>";
+}
+
 function buildControlsSliders() {
   var html = '<div class="controls-panel"><h4 class="panel-title">Scoring weights (fixed in this preview)</h4>' +
     '<p class="panel-sub">Shown as a share of <b>100%</b> for transparency, but locked here so Group 1 always reflects this tenant\'s real data. The full assessment lets you tune every weight live and see all four groups recompute instantly.</p>';
@@ -3796,9 +4167,10 @@ function buildControlsSliders() {
   var twPct = Math.round(state.titleWeightContribution * 100);
   var hsPct = Math.round(state.hubSiteBonus * 100);
   html += '<div class="control-row"><label>Title-weight bonus</label><input type="range" min="0" max="100" step="5" value="' + twPct + '" disabled><span class="valdisp">' + twPct + '%</span></div>';
+  html += buildTitleWeightTableHtml();
   html += '<div class="control-row"><label>Hub-site bonus</label><input type="range" min="0" max="100" step="5" value="' + hsPct + '" disabled><span class="valdisp">' + hsPct + '%</span></div>';
   html += "</div>";
-  html += '<div class="control-row" style="margin-top:.9rem;"><label>Hub-site keywords</label><input type="text" style="flex:1;max-width:400px;" value="' + esc(state.hubSiteKeywords.join(", ")) + '" disabled></div>';
+  html += '<div class="control-row" style="margin-top:.9rem;"><label>Hub-site keywords</label><input type="text" style="flex:1;max-width:400px;" placeholder="e.g. Payroll, HR, Finance, IT Help Desk (blank = no hub-site matching)" value="' + esc(state.hubSiteKeywords.join(", ")) + '" disabled></div>';
   html += "</div>";
   return html;
 }
@@ -3851,12 +4223,21 @@ function buildGroup1Overview() {
     });
   });
   combined.sort(function (a, b) { return b.score - a.score; });
-  var rows = combined.map(function (c) {
+  var g1ShowAll = !!state.group1ShowAll;
+  var g1Rendered = g1ShowAll ? combined : combined.slice(0, MAX_TABLE_ROWS);
+  var g1Capped = !g1ShowAll && combined.length > MAX_TABLE_ROWS;
+  var rows = g1Rendered.map(function (c) {
     return "<tr><td>" + esc(c.workload) + "</td><td>" + esc(c.objectName) + "</td><td>" + esc(c.identifier) + "</td><td>" + Math.round(c.score * 100) + '%</td><td class="criteria-tags">' + esc(c.tags) + "</td><td>" + esc(c.lastActivity) + "</td></tr>";
   }).join("") || '<tr><td colspan="6" style="text-align:center;color:var(--dark-gray);padding:2rem;">No Critical Group 1 objects.</td></tr>';
+  var g1CapNoticeHtml = g1Capped
+    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(combined.length) + ' rows, sorted by score - <button onclick="setGroup1ShowAll()">show all ' + fmtNum(combined.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    : (g1ShowAll && combined.length > MAX_TABLE_ROWS
+      ? '<div class="table-cap-notice">Showing all ' + fmtNum(combined.length) + ' rows. <button onclick="setGroup1ShowAll(true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
+      : "");
   return '<section class="workload" id="group1-overview"><h3>Critical Group 1 - All Workloads <span style="font-weight:400;font-size:.9rem;color:var(--dark-gray);">(' + combined.length + ')</span></h3>' +
     '<p class="pill-note">Every object tiered Critical Group 1, across all four workloads, in one place - the full recover-first picture. Recomputes live with the controls above.</p>' +
-    '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Score</th><th>Why</th><th>Last Activity</th></tr></thead><tbody>' + rows + "</tbody></table></div></section>";
+    '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Score</th><th>Why</th><th>Last Activity</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+    g1CapNoticeHtml + "</section>";
 }
 
 // Same controls-grid layout as the Full assessment for visual consistency,
@@ -3884,7 +4265,7 @@ function buildRecoveryControls() {
   var opts = ["Auto"].concat(SPOD_TIER_TABLE.map(function (t) { return t.Bucket; })).map(function (b) {
     return '<option value="' + b + '"' + (state.recovery.licenseTier === b ? " selected" : "") + ">" + b + "</option>";
   }).join("");
-  var html = '<div class="controls-panel"><h4>Recovery modeling inputs</h4>';
+  var html = '<div class="controls-panel" id="recovery-inputs-panel"><h4>Recovery modeling inputs</h4>';
   html += '<div class="control-row"><label>Recovery window (days)</label><input type="number" min="0" max="7" step="0.5" value="' + state.recovery.windowDays + '" onchange="onRecoveryInputChange(\'windowDays\',this.value)" style="width:80px;"></div>';
   html += '<div class="pill-note" style="margin-top:-.4rem;">ABR can recover up to the last 7 days of activity - drag this down to model a shorter window (linearly scales the real 7-day activity signal; not a separately measured figure).</div>';
   html += '<div class="control-row"><label>SP/OD throughput tier</label><select onchange="onRecoveryInputChange(\'licenseTier\',this.value)">' + opts + "</select></div>";
@@ -3900,7 +4281,7 @@ function buildRecoveryControls() {
   });
   html += '<span style="font-size:.78rem;color:var(--dark-gray);">Current: <b>' + esc(state.recovery.rtoPreset) + '</b></span>';
   html += "</div>";
-  html += '<div class="control-row"><label>Group 1 target (hr)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group1Hours + '" onchange="onRtoTargetChange(\'group1Hours\',this.value)" style="width:90px;"></div>';
+  html += '<div class="control-row"><label>Group 1 target (hr)</label><input type="number" id="group1-target-input" min="0.1" step="0.5" value="' + state.recovery.group1Hours + '" onchange="onRtoTargetChange(\'group1Hours\',this.value)" style="width:90px;"></div>';
   html += '<div class="control-row"><label>Group 2 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group2Hours + '" onchange="onRtoTargetChange(\'group2Hours\',this.value)" style="width:90px;"></div>';
   html += '<div class="control-row"><label>Group 3 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group3Hours + '" onchange="onRtoTargetChange(\'group3Hours\',this.value)" style="width:90px;"></div>';
   html += buildAutoSuggestBanner();
@@ -4041,7 +4422,7 @@ function renderRecoveryTab() {
       "</div>" +
       '<div class="rt-empty-note" style="background:#F0F3F6;">Object counts, timing, and downtime-cost detail for ' + g.label + ' are available in the full assessment - connect with your Rubrik team to see them for this tenant.</div>';
 
-    html += '<div class="rt-group-section' + (isEmpty && idx === 0 ? " empty-tier" : "") + (m.exceedsTarget && idx === 0 ? " exceeds-target" : "") + '">' +
+    html += '<div class="rt-group-section' + (isEmpty && idx === 0 ? " empty-tier" : "") + (m.exceedsTarget && idx === 0 ? " exceeds-target" : "") + '"' + (idx === 0 ? ' id="rt-group-1-section"' : "") + '>' +
       "<h3>" + g.label + emptyBadge + exceedsBadge + ' <span style="font-weight:400;color:var(--dark-gray);font-size:.85rem;">- ' + (idx === 0 ? (fmtNum(objCount) + " objects") : pvLocked()) + "</span></h3>" +
       '<div class="rt-subtitle">' + g.subtitle + "</div>" +
       emptyNote + exceedsNote +
@@ -4104,15 +4485,15 @@ function buildGlossaryHtml() {
   html += "<dt>RTO targets and presets</dt><dd>Group 1/2/3 targets (hours, cumulative) are a compliance check against each group's ABR cumulative time - NOT a tiering rule (see above). Standard = 4h / 24h / 72h. Enterprise = 24h / 120h / 240h (Day 1 / 5 days / 10 days). Auto suggests Standard or Enterprise based on this tenant's estimated full recovery time (&ge; 5 days / 7200 min picks Enterprise) and always tells you which it picked and why - it never silently overrides an explicit choice.</dd>";
   html += "<dt>Group 4</dt><dd>Limited activity across every metric in the reporting window - carved out before any scoring/tiering runs, for every workload. Gets no ABR timing at all and is recovered entirely by Mass Recovery, alongside the rest of the tenant. Still protected; just not on the critical path to getting the business running again.</dd>";
   html += "<dt>Manual override</dt><dd>Disabled in this preview build - overrides change which group an object lands in, so they're frozen here alongside the weight sliders (see \"Scoring weights\" above). Live in the full assessment: set via the tier dropdown on any row, or via mass-reassignment on a filtered set, exportable to a file via -OverridesFile so they persist across re-runs.</dd>";
-  html += "<dt>Job title weight</dt><dd>Full mode only. Job title is matched (case-insensitive substring) against a keyword table shown read-only above (customer-editable in the full assessment); the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
+  html += "<dt>Job title weight</dt><dd>Job title is matched (case-insensitive substring) against a keyword table shown read-only above (customer-editable in the full assessment); the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
   html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
-  html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (already pulled in PREVIEW mode, no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
-  html += "<dt>Manager roll-up</dt><dd>Full mode only. Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. The org-based filter/mass-tier tool built on this is only in the full assessment.</dd>";
-  html += "<dt>Entra ID group filter</dt><dd>Full mode + -Groups only (requests the additional Group.Read.All scope). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved from the SAME directory pull as manager enrichment - no extra Graph call. Shown here as a read-only column for Group 1 rows only - redacted for Groups 2/3/4 like every other identity field. The bulk group-based filter/mass-tier tool built on this data is only in the full assessment.</dd>";
+  html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
+  html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. The org-based filter/mass-tier tool built on this is only in the full assessment.</dd>";
+  html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved via its own separate directory pull alongside manager enrichment (Microsoft Graph only allows one property to be expanded per user query, so this is one extra bulk call, not per-user lookups). Shown here as a read-only column for Group 1 rows only - redacted for Groups 2/3/4 like every other identity field. The bulk group-based filter/mass-tier tool built on this data is only in the full assessment.</dd>";
   html += "<dt>Preview redaction</dt><dd>This build runs against this tenant's real, live data. Group 1 is shown in full (identity + timing) as the \"here's what you'd actually see\" proof point. Groups 2, 3, and 4 keep their real object counts and Mass Recovery baseline timing - the scale of the problem - but every per-object identity field (name, identifier, job title, department, manager, criteria) is replaced with a placeholder, and ABR-specific timing/savings for Groups 2 and 3 are withheld, before anything is written to disk or shown on screen. The full assessment removes all of this.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
   html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
-  html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time).</dd>";
+  html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time). Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>";
   html += "</dl>";
   return html;
 }
@@ -4284,7 +4665,6 @@ function buildPrintHeaderHtml(subtitle) {
     '<div class="pr-meta">' +
       '<span>Usage window: <b>' + esc(DATA.meta.period) + '</b></span>' +
       '<span>Generated: <b>' + esc(DATA.meta.generatedAt) + '</b></span>' +
-      '<span>Permission mode: <b>' + esc(DATA.meta.mode) + '</b></span>' +
     "</div>" +
   "</div>";
 }
@@ -4659,8 +5039,6 @@ function buildPrintFullHtml() {
   html += '<div class="pr-page-break"></div>';
   html += buildSizingPdfHtml();
 
-  html += '<div class="pr-footer">Generated by the Recovery Assessment - M365 script. Internal Rubrik SE tooling - verify before sharing externally. Every figure in this report is computed live from the embedded raw metrics; nothing is sent anywhere.</div>';
-
   return html;
 }
 
@@ -4705,6 +5083,328 @@ function renderCompareTab() {
   document.getElementById("panel-compare").innerHTML = '<h2>Changes Since ' + esc(DATA.priorRun.meta.generatedAt || "prior run") + "</h2>" +
     '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Previously</th><th>Now</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
 }
+'@
+
+#endregion
+
+#region ---------- HTML report JS: guided tour ----------
+
+<#
+    Self-contained, vanilla JS - no external tour library, consistent with
+    the report's zero-dependency design. Ported from the Full script's tour
+    with one adaptation: this Preview build has no mass-edit-bar (bulk tier
+    reassignment is frozen/read-only here, see buildWorkloadSection/buildRowHtml),
+    so the "Make Adjustments" step is centered narration rather than a
+    spotlight on a control that doesn't exist in this build.
+
+    Rewritten per reviewer feedback (Google Doc "Recovery Assessment Tour
+    feedback", 2026-08-28), mirrored from the Full script: open with a
+    leader-facing question ("who actually needs to be back up first") to set
+    up stakes before diving into numbers; lead the Executive Summary
+    walkthrough with the dollar-cost tile rather than the time-to-recover
+    tile; replaced the NBA analogy with an evacuation-airlift analogy (one
+    manifest ranked by need, not one list per department) split into a
+    pure-analogy hook step followed by a mechanics step; rewrote the Group 1
+    overview step with named, human examples (the CFO, the legal team)
+    while keeping this build's real/unredacted-Group-1 callout; closed by
+    tying back to the opening question. Selected phrases use inline <b> tags
+    via the "htmlBody" flag below (trusted hand-authored copy, not user
+    input) - every other step's body is a plain string still run through
+    esc().
+
+    Second feedback pass on the same Google Doc (picked up 2026-08-28, after
+    the doc was updated post-first-pass), mirrored from the Full script: the
+    Recovery Modeling Inputs step now uses the reviewer's suggested
+    customer-facing wording for why the default downtime cost is
+    conservative; "Now try something below" -> "Let's adjust the recovery
+    target below"; the RTO-targets step's wording was rewritten to be less
+    internal/confusing ("you can use our default RTO targets... or fully
+    customize them"); and the closing step's title spells out the ABR
+    acronym in full ("Why Autonomous Business Recovery Matters") since it's
+    never expanded anywhere else in the tour.
+
+    Third feedback item on the same doc (added 2026-08-31): arrow-key
+    navigation, matching how presenters already click through Storylane/
+    DforD demos - ArrowRight/ArrowLeft call the same tourNext()/tourBack()
+    the click-based Next/Back buttons already call, bound only while
+    tourState.active (see startTour()/endTour()) and skipped when focus is
+    in a form control (see tourKeydownHandler()) so it doesn't hijack the
+    "Try It Yourself" step's #group1-target-input number field.
+
+    Two of the recovery-tab steps (Group 1's baseline and post-change object
+    count) supply body as a function rather than a string, computed live via
+    getGroup1Snapshot() (wraps computeRecoveryModel()) so the numbers always
+    match what's actually rendered, and so the "updated" step can show a
+    real before/after delta rather than repeating static copy.
+#>
+$script:ReportJsTour = @'
+// getGroup1Snapshot(): reads the live tiering model (not the DOM) for
+// Group 1's current object count + RTO target, so the two dynamic tour
+// steps below (baseline and "updated") always match whatever
+// computeRecoveryModel() would actually render, regardless of what other
+// controls (recovery window, license tier, filters) are set at the time.
+function getGroup1Snapshot() {
+  var model = computeRecoveryModel();
+  var m = model.milestones["Critical Group 1"];
+  var count = m.sp.objectCount + m.od.objectCount + m.ex.objectCount;
+  return { count: count, hours: state.recovery.group1Hours };
+}
+
+var TOUR_STEPS = [
+  { tab: "exec", selector: null, htmlBody: true, title: "Welcome to the Recovery Assessment", body: "<b>If SaaS went down right now, who would shout the loudest - and who actually needs to be back up first?</b> This report answers exactly that: which of your mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to the business, and how fast each priority tier comes back online after an outage. This is a live Preview build, so Group 1 is shown in full while everything else stays redacted. Take two minutes for a walkthrough?" },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div.money", htmlBody: true, title: "Downtime Cost Avoided", body: "<b>What would an hour of downtime actually cost this business?</b> Recovering Group 1 first - instead of everything at once, in random order - is what saves it, based on the $/hour you set on the Recovery tab." },
+  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div:first-child", title: "Time to Critical Data", body: "Now that we know what's at stake, here's how fast you get there: your most critical data is usable again in this time with ABR, instead of a traditional restore that brings everything back at once, in random order." },
+  { tab: "exec", selector: "#exec-lean .recovery-ladder", title: "The Recovery Ladder", body: "The same story on a timeline: Group 1 online, then Groups 1-2, then Groups 1-3, all compared against how long a fully random-order Mass Recovery would take. So how does an object actually end up in Group 1 versus Group 2 or 3? Let's go look." },
+  { tab: "groups", selector: null, htmlBody: true, title: "How Objects Land in a Group", body: "<b>Think of an evacuation airlift.</b> One manifest ranked by need - not one list per neighborhood - and the first plane fills to its weight limit before the next one loads. That's exactly how objects land in a Criticality Group." },
+  { tab: "groups", selector: null, htmlBody: true, title: "The Manifest, Explained", body: "Every object in your tenant - mailbox, OneDrive account, SharePoint site, Team - is scored on real usage: how active it is, how much data it holds, how recently it was touched. <b>All objects go on one tenant-wide manifest</b>, not ranked department by department. Group 1 boards from the top down until it hits the recovery time budget you set; whoever's left fills Group 2 against its own budget, then Group 3. So <b>group size follows your budget, not a fixed one-third split</b> - a generous Group 1 budget gets more objects on the first plane, a tight one gets fewer." },
+  { tab: "groups", selector: "#group1-overview", htmlBody: true, title: "Everyone in Group 1, One List", body: "This is your first plane. The names on it are the people your business runs on: <b>the CFO closing the quarter, the legal team mid-litigation, the SharePoint site your field org lives in.</b> Every object that made Group 1's cut, across every workload, lands in one sortable, filterable table - shown in full, unredacted, since Group 1 is real identity data by design in this Preview build." },
+  { tab: "groups", selector: "#attr-filters-mailboxes", title: "Filter to Exactly Who You Want", body: "Slice any workload by department, manager, job title, mailbox type, or Entra ID group. Want to isolate just Legal, one manager's org, or one specific group? Filter here - this works identically in the full assessment." },
+  { tab: "groups", selector: null, title: "Making Adjustments", body: "In your full assessment, once you've filtered down to exactly who you want, you can mass-reassign everyone in that filtered set to a different tier in one click - a common case is a compliance review team or an e-discovery hold list that needs to be Group 1 regardless of what the activity score says. That control is turned off in this live Preview build to keep the redacted data protected, but it's a core part of the full engagement." },
+  { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", htmlBody: true, title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. <b>The default downtime cost per hour shown here is a conservative estimate</b> - in reality, downtime costs tend to run much higher. Use this field to apply the customer's own estimated downtime cost and see an accurate picture of the savings." },
+  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, By the Numbers",
+    body: function () {
+      var snap = getGroup1Snapshot();
+      tourState.g1Before = snap;
+      return "Right now, Group 1 has <b>" + fmtNum(snap.count) + " objects</b> queued for fast recovery at today's <b>" + snap.hours + "-hour</b> target. Let's adjust the recovery target below.";
+    }
+  },
+  { tab: "recovery", selector: "#group1-target-input", title: "Try It Yourself", body: "This is how quickly the business needs Group 1 back up - its recovery time budget. Change this number and watch Group 1's object count update live. A bigger budget lets Group 1 absorb more objects from the leaderboard before it's full; a tighter budget means fewer objects fit and Group 1 stays smaller. Try changing it down, then back up - click Continue whenever you're ready.", manualAdvance: true },
+  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, Updated",
+    body: function () {
+      var before = tourState.g1Before;
+      var after = getGroup1Snapshot();
+      if (!before) {
+        return "Group 1 now has <b>" + fmtNum(after.count) + " objects</b> at a " + after.hours + "-hour target.";
+      }
+      var delta = after.count - before.count;
+      var verb = delta > 0 ? "an increase" : (delta < 0 ? "a decrease" : "no change");
+      var deltaAbs = Math.abs(delta);
+      var deltaPlural = deltaAbs === 1 ? "object" : "objects";
+      return "You just moved Group 1's target from " + before.hours + " hr to " + after.hours + " hr - Group 1 went from <b>" + fmtNum(before.count) + "</b> to <b>" + fmtNum(after.count) + "</b> objects, " + verb + " of <b>" + fmtNum(deltaAbs) + " " + deltaPlural + "</b>. That's the budget-constrained tiering responding live: objects move in and out of Group 1 as the time budget changes, nothing is recomputed from scratch.";
+    }
+  },
+  { tab: "recovery", selector: ".rt-preset-row", htmlBody: true, title: "Set the Real Numbers", body: "You can use our <b>default RTO targets</b>, based on the size of the customer's organization, or <b>fully customize them</b> to fit their business needs - along with the downtime cost per hour above. The calculations throughout this workbook, including the Executive Summary and the cost table, update instantly." },
+  { tab: "exec", selector: null, htmlBody: true, title: "Why Autonomous Business Recovery Matters", body: "<b>This is how you answer the question we opened with:</b> the people and processes this business can't function without are back online in hours, not days - because ABR (Autonomous Business Recovery) brings back Critical data first, then Important, then Standard, instead of restoring everything at once in random order. Everything else keeps recovering safely in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
+];
+
+var tourState = { active: false, stepIndex: 0, g1Before: null };
+
+function tourStorageAvailable() {
+  try {
+    var k = "__m365TourTest__";
+    window.localStorage.setItem(k, "1");
+    window.localStorage.removeItem(k);
+    return true;
+  } catch (e) { return false; }
+}
+
+function tourShouldAutoShowWelcome() {
+  if (!tourStorageAvailable()) { return true; }
+  try { return window.localStorage.getItem("m365TourDontShow") !== "1"; } catch (e) { return true; }
+}
+
+function showTourWelcome() {
+  if (document.getElementById("tour-welcome-backdrop")) { return; }
+  var backdrop = document.createElement("div");
+  backdrop.className = "tour-welcome-backdrop";
+  backdrop.id = "tour-welcome-backdrop";
+  backdrop.innerHTML =
+    '<div class="tour-welcome-card">' +
+      '<div class="tour-welcome-title">Take a 2-minute tour?</div>' +
+      '<div class="tour-welcome-body">We\'ll walk through how this report prioritizes recovery - starting with the Executive Summary, then how objects land in a Criticality Group, then how the recovery window and cost inputs work.</div>' +
+      '<div class="tour-welcome-actions">' +
+        '<button class="tour-btn tour-btn-primary" onclick="closeTourWelcome(); startTour();">Start Tour</button>' +
+        '<button class="tour-btn tour-btn-secondary" onclick="closeTourWelcome();">Skip for now</button>' +
+      "</div>" +
+      '<label class="tour-welcome-dontshow"><input type="checkbox" id="tour-dontshow-checkbox"> Don\'t show this again</label>' +
+    "</div>";
+  document.body.appendChild(backdrop);
+}
+
+function closeTourWelcome() {
+  var cb = document.getElementById("tour-dontshow-checkbox");
+  if (cb && cb.checked) {
+    try { window.localStorage.setItem("m365TourDontShow", "1"); } catch (e) {}
+  }
+  var el = document.getElementById("tour-welcome-backdrop");
+  if (el) { el.parentNode.removeChild(el); }
+}
+
+function startTour() {
+  tourState.active = true;
+  tourState.stepIndex = 0;
+  document.addEventListener("keydown", tourKeydownHandler);
+  renderTourStep();
+}
+
+function endTour() {
+  tourState.active = false;
+  document.removeEventListener("keydown", tourKeydownHandler);
+  ["tour-spotlight", "tour-tooltip", "tour-overlay-backdrop"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.parentNode.removeChild(el); }
+  });
+}
+
+// Arrow-key navigation, per feedback 2026-08-31: presenters using Storylane/
+// DforD are used to clicking through with the keyboard, so mirror that here
+// rather than requiring a mouse click on Next/Back every step. Skipped
+// entirely when focus is in a form control (specifically the "Try It
+// Yourself" step's #group1-target-input number field) so arrow keys there
+// still move the cursor/adjust the value instead of being hijacked to
+// advance or rewind the tour. Click-based Next/Back are untouched - both
+// paths call the same tourNext()/tourBack() functions.
+function tourKeydownHandler(e) {
+  if (!tourState.active) { return; }
+  var active = document.activeElement;
+  var tag = active && active.tagName ? active.tagName.toUpperCase() : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (active && active.isContentEditable)) { return; }
+  if (e.key === "ArrowRight") { e.preventDefault(); tourNext(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); tourBack(); }
+}
+
+function tourNext() {
+  if (tourState.stepIndex >= TOUR_STEPS.length - 1) { endTour(); return; }
+  tourState.stepIndex++;
+  renderTourStep();
+}
+
+function tourBack() {
+  if (tourState.stepIndex <= 0) { return; }
+  tourState.stepIndex--;
+  renderTourStep();
+}
+
+function renderTourStep() {
+  var step = TOUR_STEPS[tourState.stepIndex];
+  if (!step) { endTour(); return; }
+  if (step.tab) { switchTab(step.tab); }
+  // Give the tab switch (and whatever it re-renders) one tick before
+  // measuring positions, so getBoundingClientRect reflects the new tab's
+  // real layout rather than the previous tab's now-hidden one.
+  setTimeout(function () { paintTourStep(step); }, 60);
+}
+
+function paintTourStep(step) {
+  if (!tourState.active) { return; }
+  var backdrop = document.getElementById("tour-overlay-backdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.className = "tour-overlay-backdrop";
+    backdrop.id = "tour-overlay-backdrop";
+    document.body.appendChild(backdrop);
+  }
+
+  var target = step.selector ? document.querySelector(step.selector) : null;
+  var spotlight = document.getElementById("tour-spotlight");
+  if (target) {
+    // A spotlighted step already dims everything OUTSIDE the target via
+    // .tour-spotlight's own box-shadow, so the plain backdrop stays
+    // transparent here - only the no-target ("centered") branch below needs
+    // the whole-page dim+blur.
+    backdrop.classList.remove("dimmed");
+    target.scrollIntoView({ block: "center" });
+    var rect = target.getBoundingClientRect();
+    if (!spotlight) {
+      spotlight = document.createElement("div");
+      spotlight.id = "tour-spotlight";
+      spotlight.className = "tour-spotlight";
+      document.body.appendChild(spotlight);
+    }
+    var pad = 8;
+    spotlight.style.display = "block";
+    spotlight.style.top = (rect.top - pad) + "px";
+    spotlight.style.left = (rect.left - pad) + "px";
+    spotlight.style.width = (rect.width + pad * 2) + "px";
+    spotlight.style.height = (rect.height + pad * 2) + "px";
+  } else {
+    if (spotlight) { spotlight.style.display = "none"; }
+    // NEW: no specific target for this step (the welcome/analogy/closing
+    // steps) - dim+blur the whole page behind the centered tooltip instead
+    // of leaving it fully visible, so there's nothing pulling attention away
+    // from text that isn't about what's on screen right now.
+    backdrop.classList.add("dimmed");
+  }
+
+  var tooltip = document.getElementById("tour-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "tour-tooltip";
+    tooltip.className = "tour-tooltip";
+    document.body.appendChild(tooltip);
+  }
+
+  var isLast = tourState.stepIndex === TOUR_STEPS.length - 1;
+  var nextLabel = step.manualAdvance ? "Continue" : (isLast ? "Done" : "Next");
+  var backBtn = tourState.stepIndex > 0 ? '<button class="tour-btn tour-btn-secondary" onclick="tourBack()">Back</button>' : "<span></span>";
+  // Dynamic steps (Group 1's baseline/updated object count) supply body as a
+  // function that reads live tiering state and returns pre-built HTML (bold
+  // tags around the numbers) - trusted since it's our own generated markup,
+  // not user input, so it skips esc() unlike the hard-coded string steps.
+  // step.htmlBody: true marks a small set of hand-authored static strings
+  // that intentionally include <b> tags around key phrases (reviewer
+  // feedback asked for bolded concepts on the analogy/human-framing steps)
+  // - trusted since it's hardcoded copy we wrote, not user input. Every
+  // other string step is still run through esc() as before.
+  var bodyHtml = typeof step.body === "function" ? step.body() : (step.htmlBody ? step.body : esc(step.body));
+  var restartBtn = step.isFinal ? '<button class="tour-btn tour-btn-secondary" onclick="startTour()">Restart Tour</button>' : "";
+
+  tooltip.innerHTML =
+    '<div class="tour-tooltip-step">Step ' + (tourState.stepIndex + 1) + " of " + TOUR_STEPS.length + '</div>' +
+    '<div class="tour-tooltip-title">' + esc(step.title) + '</div>' +
+    '<div class="tour-tooltip-body">' + bodyHtml + '</div>' +
+    '<div class="tour-tooltip-actions">' +
+      backBtn +
+      '<span style="display:flex;gap:.6rem;align-items:center;">' +
+        restartBtn +
+        '<button class="tour-skip" onclick="endTour()">Skip tour</button>' +
+        '<button class="tour-btn tour-btn-primary" onclick="tourNext()">' + nextLabel + "</button>" +
+      "</span>" +
+    "</div>";
+
+  if (!target) {
+    tooltip.classList.add("centered");
+    tooltip.style.top = "";
+    tooltip.style.left = "";
+  } else if (step.tooltipPlacement === "bottom-fixed") {
+    // A small number of steps spotlight a card that's routinely taller than
+    // the viewport (the recovery inputs panel; the Group 1 card, which is
+    // long enough that its own compare-grid/notes push well past one screen).
+    // The generic below/above logic just below was written assuming a
+    // target roughly the size of the tooltip itself, and for these taller
+    // cards it was landing squarely on top of the exact number/field the
+    // step is explaining. Rather than touch the shared scroll/positioning
+    // path every other step relies on (which was working fine), these
+    // specific steps just pin the tooltip to the bottom of the screen - it
+    // never depends on the target's own height, so it can never end up
+    // sitting over content the target itself is showing near its top.
+    tooltip.classList.remove("centered");
+    var trectBF = target.getBoundingClientRect();
+    var ttRectBF = tooltip.getBoundingClientRect();
+    var marginBF = 12;
+    tooltip.style.top = (window.innerHeight - ttRectBF.height - marginBF) + "px";
+    tooltip.style.left = Math.min(Math.max(marginBF, trectBF.left), window.innerWidth - ttRectBF.width - marginBF) + "px";
+  } else {
+    tooltip.classList.remove("centered");
+    var trect = target.getBoundingClientRect();
+    var ttRect = tooltip.getBoundingClientRect();
+    var top = trect.bottom + 16;
+    if (top + ttRect.height > window.innerHeight - 12) { top = Math.max(12, trect.top - ttRect.height - 16); }
+    var left = Math.min(Math.max(12, trect.left), window.innerWidth - ttRect.width - 12);
+    tooltip.style.top = top + "px";
+    tooltip.style.left = left + "px";
+  }
+}
+
+// Separate DOMContentLoaded listener from the main bootstrap one below -
+// multiple listeners on the same event coexist fine, and this keeps the
+// tour fully independent of (and safely removable from) recomputeAll()'s
+// own startup sequence.
+document.addEventListener("DOMContentLoaded", function () {
+  if (tourShouldAutoShowWelcome()) {
+    setTimeout(showTourWelcome, 500);
+  }
+});
 '@
 
 #endregion
@@ -4877,7 +5577,6 @@ $script:ReportHtmlTemplate = @'
   <div class="meta">
     <span>Usage window: <b>__PERIOD__</b></span>
     <span>Generated: <b>__GENERATED__</b></span>
-    <span>Permission mode: <b>__MODE__</b></span>
   </div>
   <!-- PREVIEW-ONLY (v3.7.2): visible banner so nobody mistakes this for the
        full assessment - Group 1 is this tenant's real data end to end;
@@ -4899,6 +5598,9 @@ $script:ReportHtmlTemplate = @'
        full label for hover tooltips + accessibility since the text is gone
        from the button face. -->
   <div class="tabbar-actions">
+    <button class="icon-btn" onclick="startTour()" title="Take the Tour" aria-label="Take the Tour">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+    </button>
     <!-- PREVIEW-ONLY (v3.7.2): Export/Import overrides removed - overrides
          are a tiering-affecting control, frozen in this build (see
          buildControlsPanel/buildRowHtml). PDF export stays available. -->
@@ -4932,10 +5634,17 @@ $script:ReportHtmlTemplate = @'
          (previously the only thing on this tab). -->
     <div id="exec-financial"></div>
     <div id="exec-recovery-times"></div>
-    <div id="exec-cost-table"></div>
+    <!-- NEW: reordered again 2026-08-24 per feedback - Totals Across All
+         Workloads (exec-totals, which renders its own "Totals Across All
+         Workloads" <h2>) now leads the group breakdown, ahead of the
+         per-workload Group Overview cards, which in turn now comes before
+         the Downtime Cost Avoided table. Pure DOM reorder - each section
+         still renders into its own div by id from the same render
+         functions, regardless of where that div sits in this template. -->
+    <div id="exec-totals"></div>
     <h2 style="margin-top:2rem;">Group Overview</h2>
     <div class="summary-grid" id="exec-summary-cards"></div>
-    <div id="exec-totals"></div>
+    <div id="exec-cost-table"></div>
     <!-- NEW v3.6.0: Dormant Data moved to the very bottom of the Report tab
          and collapsed by default, per feedback 2026-07-22 - see
          renderExecFinancialAndRecoveryTop's dormantHtml block. -->
@@ -4949,13 +5658,20 @@ $script:ReportHtmlTemplate = @'
 </main>
 <footer>
   <p>This is a PREVIEW build: scoring weights and manual overrides are fixed so Group 1 always reflects this tenant's real data untouched. Downtime cost, RTO targets, recovery window, and SP/OD throughput tier are still live - adjust them above and the numbers recompute instantly. Nothing you change here is sent anywhere. The full assessment adds live weight/override tuning and complete, unredacted detail for every group.</p>
-  <p>Generated by the Recovery Assessment - M365 script (Preview build, v3.7.2). Internal Rubrik SE tooling - verify before sharing externally.</p>
 </footer>
 <!-- NEW v3.6.0: PDF export target. Hidden on screen always; only shown
      during an actual print (see @media print rules) when body carries
      printing-summary/printing-full, populated on demand by exportPdf(). -->
 <div id="print-root"></div>
-<script type="application/json" id="report-data">__DATA_JSON__</script>
+<!-- NEW 2026-09-24: split into one <script> tag per workload (plus a
+     meta/weights tag) instead of one combined blob - see ReportJsEngine's
+     header comment for why (V8's hard max JS string length, hit by a real
+     ~908,000-object tenant). -->
+<script type="application/json" id="report-data-meta">__DATA_META_JSON__</script>
+<script type="application/json" id="report-data-mailboxes">__DATA_MAILBOXES_JSON__</script>
+<script type="application/json" id="report-data-onedrive">__DATA_ONEDRIVE_JSON__</script>
+<script type="application/json" id="report-data-sharepoint">__DATA_SHAREPOINT_JSON__</script>
+<script type="application/json" id="report-data-teams">__DATA_TEAMS_JSON__</script>
 <script>__JS__</script>
 </body>
 </html>
@@ -4971,7 +5687,6 @@ function New-M365HtmlReport {
         [Parameter(Mandatory)] [string] $Period,
         [Parameter(Mandatory)] [string] $OutFile,
         [Parameter(Mandatory)] [string] $RunId,
-        [switch]    $Full,
         [switch]    $Groups,
         [hashtable] $MailboxWeights,
         [hashtable] $OneDriveWeights,
@@ -4995,13 +5710,27 @@ function New-M365HtmlReport {
         $PriorRunData = $null
     )
 
+    # NEW 2026-09-24: see Full script's matching comment - each workload's
+    # rows are built and serialized to JSON SEPARATELY from meta/weights/etc,
+    # instead of nested inside one combined $dataObject that gets
+    # ConvertTo-Json'd as a single blob. A real customer tenant
+    # (~908,000 objects) produced one combined JSON string of 539,000,418
+    # characters - 2.1MB OVER V8's hard-coded maximum JS string length
+    # (536,870,888 characters). Splitting per-workload keeps each individual
+    # ConvertTo-Json/JSON.parse call comfortably under the limit for every
+    # tenant seen to date. This does NOT eliminate the ceiling - an extreme
+    # enough SINGLE workload could still someday exceed it on its own.
+    $mailboxesRows  = ConvertTo-ReportRows -Data $Mailboxes  -MetricFields @('SendRecvActivity','ReadActivity','Size','TotalActivity','ItemCount','StorageUsedMB','StorageBytes','SendRecvActivity7d')
+    $onedriveRows   = ConvertTo-ReportRows -Data $OneDrive   -MetricFields @('FileActivity','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ViewedOrEditedCount','ViewedOrEditedCount7d')
+    $sharepointRows = ConvertTo-ReportRows -Data $SharePoint -MetricFields @('PageViews','ActiveFiles','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ActiveFiles7d')
+    $teamsRows      = ConvertTo-ReportRows -Data $Teams      -MetricFields @('ActiveUsers','ChannelMsgs','Meetings','TotalActivity','ActiveUsersCount')
+
     $dataObject = [ordered]@{
         meta = [ordered]@{
             runId                        = $RunId
             customerLabel                = $CustomerLabel
             period                       = $Period
             generatedAt                  = (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt')
-            mode                         = if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' }
             groupsRequested              = [bool]$Groups
             recoveryWindowDays           = $RecoveryWindowDays
             recoveryLicenseTierRequested = $RecoveryLicenseTier
@@ -5041,18 +5770,28 @@ function New-M365HtmlReport {
         titleWeightContribution = $TitleWeightContribution
         hubSiteKeywords          = $HubSiteKeywords
         hubSiteBonus             = $HubSiteBonus
-        workloads = [ordered]@{
-            mailboxes  = ConvertTo-ReportRows -Data $Mailboxes      -MetricFields @('SendRecvActivity','ReadActivity','Size','TotalActivity','ItemCount','StorageUsedMB','StorageBytes','SendRecvActivity7d')
-            onedrive   = ConvertTo-ReportRows -Data $OneDrive       -MetricFields @('FileActivity','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ViewedOrEditedCount','ViewedOrEditedCount7d')
-            sharepoint = ConvertTo-ReportRows -Data $SharePoint     -MetricFields @('PageViews','ActiveFiles','Storage','TotalActivity','FileCount','StorageUsedGB','StorageBytes','ActiveFiles7d')
-            teams      = ConvertTo-ReportRows -Data $Teams          -MetricFields @('ActiveUsers','ChannelMsgs','Meetings','TotalActivity','ActiveUsersCount')
-        }
         priorRun = $PriorRunData
     }
 
-    $reportDataJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
+    # NEW 2026-09-22: see Full script's matching comment - GC pass right
+    # before the most memory-hungry single operation in this script.
+    [System.GC]::Collect()
+    $reportMetaJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportMetaJson -Context 'the embedded HTML report-data-meta blob'
+    # NEW: -InputObject (parameter binding), NOT the pipeline - see Full
+    # script's matching comment (avoids the pipe-auto-unroll-a-single-item
+    # footgun for a workload with exactly one row).
+    $reportMailboxesJson  = ConvertTo-Json -InputObject $mailboxesRows  -Depth 12 -Compress
+    $reportOnedriveJson   = ConvertTo-Json -InputObject $onedriveRows   -Depth 12 -Compress
+    $reportSharepointJson = ConvertTo-Json -InputObject $sharepointRows -Depth 12 -Compress
+    $reportTeamsJson      = ConvertTo-Json -InputObject $teamsRows      -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportMailboxesJson  -Context 'the embedded HTML report-data-mailboxes blob'
+    Assert-ValidReportJson -Json $reportOnedriveJson   -Context 'the embedded HTML report-data-onedrive blob'
+    Assert-ValidReportJson -Json $reportSharepointJson -Context 'the embedded HTML report-data-sharepoint blob'
+    Assert-ValidReportJson -Json $reportTeamsJson      -Context 'the embedded HTML report-data-teams blob'
+
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
-    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsBootstrap) -join "`n"
+    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsTour, $script:ReportJsBootstrap) -join "`n"
 
     $html = $script:ReportHtmlTemplate
     $html = $html.Replace('__TITLE__', (ConvertTo-SafeHtml "Recovery Assessment - M365 - $CustomerLabel"))
@@ -5060,11 +5799,14 @@ function New-M365HtmlReport {
     $html = $html.Replace('__CUSTOMER__', (ConvertTo-SafeHtml $CustomerLabel))
     $html = $html.Replace('__PERIOD__', (ConvertTo-SafeHtml $Period))
     $html = $html.Replace('__GENERATED__', $dataObject.meta.generatedAt)
-    $html = $html.Replace('__MODE__', $dataObject.meta.mode)
     $html = $html.Replace('__FAVICON__', $faviconB64)
     $html = $html.Replace('__CSS__', $script:ReportCss)
     $html = $html.Replace('__JS__', $allJs)
-    $html = $html.Replace('__DATA_JSON__', $reportDataJson)
+    $html = $html.Replace('__DATA_META_JSON__', $reportMetaJson)
+    $html = $html.Replace('__DATA_MAILBOXES_JSON__', $reportMailboxesJson)
+    $html = $html.Replace('__DATA_ONEDRIVE_JSON__', $reportOnedriveJson)
+    $html = $html.Replace('__DATA_SHAREPOINT_JSON__', $reportSharepointJson)
+    $html = $html.Replace('__DATA_TEAMS_JSON__', $reportTeamsJson)
 
     Set-Content -Path $OutFile -Value $html -Encoding UTF8
     return $OutFile
@@ -5074,8 +5816,19 @@ function New-M365HtmlReport {
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 - PREVIEW BUILD (v3.7.2) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 - PREVIEW BUILD (v3.15.15) ===" -ForegroundColor Cyan
 Write-Host "Group 1 will be shown in full; Groups 2/3/4 will be redacted (identity fields + Groups 2/3 ABR timing) before anything is written to disk." -ForegroundColor Cyan
+
+# NEW 2026-09-22: see Full script's matching comment - found via a real
+# customer whose very large tenant (~213,000 objects across all four
+# workloads) crashed with a raw System.OutOfMemoryException partway through
+# raw collection, with no output files written at all. Surfaced here, up
+# front, rather than found only after 15-20 minutes of Graph pulls.
+$script:Is64BitProcess = [Environment]::Is64BitProcess
+Write-Host "PowerShell process: $(if ($script:Is64BitProcess) { '64-bit' } else { '32-bit' })" -ForegroundColor Gray
+if (-not $script:Is64BitProcess) {
+    Write-Warning "Running under 32-bit PowerShell, which caps this process at roughly 2-4 GB of memory no matter how much RAM this machine has. On a large tenant (tens of thousands of objects per workload), that is a common cause of a late-run 'System.OutOfMemoryException' with no output files written. Strongly recommend re-running from 64-bit PowerShell (Windows PowerShell's 64-bit host is normally C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe, or use PowerShell 7 / pwsh.exe, which is always 64-bit)."
+}
 
 if ($ShowEnterpriseAppGuide) {
     Get-EnterpriseAppSetupGuideText | Write-Host
@@ -5091,24 +5844,11 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 # Always written, no side effects - the guided (not automated) Enterprise App path.
 Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md') -Encoding UTF8
 
-# -Groups rides the SAME bulk Get-MgUser directory pull -Full already makes
-# (see Get-UserEnrichmentIndex) - there is nothing to expand group membership
-# onto without it, so it's a no-op (not a silent scope request) if -Full
-# wasn't also passed.
-if ($Groups -and -not $Full) {
-    Write-Warning "-Groups requires -Full (Entra ID group membership is resolved as part of the same directory pull as manager enrichment). Ignoring -Groups this run - re-run with both -Full -Groups."
-    $Groups = $false
-}
+Assert-GraphModules
+Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphTimeoutSeconds $GraphTimeoutSeconds
 
-Assert-GraphModules -Full:$Full -Groups:$Groups
-Connect-Assessment -Full:$Full -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
-
-if ($Full) {
-    $groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for the Group 1 group-column view." } else { "" }
-    Write-Host "`nRunning in FULL mode - User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote" -ForegroundColor Magenta
-} else {
-    Write-Host "`nRunning in PREVIEW mode (default) - Reports.Read.All only. Pass -Full for enrichment." -ForegroundColor DarkGray
-}
+$groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for the Group 1 group-column view." } else { " -NoGroups was passed: Group.Read.All was NOT requested and the Group 1 group-column view will be unavailable this run." }
+Write-Host "`nReports.Read.All/User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote" -ForegroundColor Magenta
 
 $overridesIndex = Import-Overrides -Path $OverridesFile
 
@@ -5129,11 +5869,8 @@ if ($CompareTo) {
     }
 }
 
-$userEnrichment = @{}
-if ($Full) {
-    Write-Host "`n--- User profile enrichment (Full) ---" -ForegroundColor Yellow
-    $userEnrichment = Get-UserEnrichmentIndex -IncludeGroups:$Groups
-}
+Write-Host "`n--- User profile enrichment ---" -ForegroundColor Yellow
+$userEnrichment = Get-UserEnrichmentIndex -IncludeGroups:$Groups
 
 $results = @{}
 
@@ -5142,7 +5879,7 @@ $results = @{}
 # any scoring/tiering, because -RTOPreset Auto needs an early, whole-tenant
 # recovery-time estimate from their RAW totals to pick Standard-vs-Enterprise
 # targets. Teams is still collected before SharePoint so exact Team-site
-# exclusion (Full) works exactly as before.
+# exclusion works exactly as before.
 # ---------------------------------------------------------------------------
 Write-Host "`n--- Collecting raw usage data ---" -ForegroundColor Yellow
 $mailboxesRaw = @(Get-MailboxCriticality -Period $Period -WorkDir $rawDir)
@@ -5153,11 +5890,18 @@ Write-Host ("{0,-24} {1,5} rows" -f 'OneDrive', $onedriveRaw.Count) -ForegroundC
 $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
 
-$exactTeamSiteUrls = $null
-if ($Full) {
-    Write-Host "Resolving exact Team SharePoint sites (Full)..." -ForegroundColor Gray
-    $exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams
+# NEW 2026-09-22: see Full script's matching comment - this is the point in
+# a very large tenant's run where a real customer's raw OutOfMemoryException was
+# actually thrown. Advisory only, not a hard stop.
+$rawObjectsSoFar = $mailboxesRaw.Count + $onedriveRaw.Count + $teams.Count
+if ($rawObjectsSoFar -gt 80000) {
+    $riskNote = if (-not $script:Is64BitProcess) { " and this is a 32-bit PowerShell process - see the warning above" } else { '' }
+    Write-Warning "Large tenant detected ($('{0:N0}' -f $rawObjectsSoFar) mailbox/OneDrive/Teams objects before SharePoint is even pulled)$riskNote. Assessments at this scale can need several GB of memory once every workload's raw data and the user-enrichment index are held in memory together. If this run ends with a 'System.OutOfMemoryException' and no CSVs were written, that is the most likely cause - re-run from 64-bit PowerShell on a machine with more available RAM, or reach out about a chunked/summary-only mode for tenants this large."
 }
+[System.GC]::Collect()
+
+Write-Host "Resolving exact Team SharePoint sites..." -ForegroundColor Gray
+$exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams -Groups:$Groups
 
 $sharepointResult = Get-SharePointCriticality -Period $Period -WorkDir $rawDir -IncludeGroupConnectedSites:$IncludeGroupConnectedSites -ExactTeamSiteKeys $exactTeamSiteUrls
 $sharepointRaw = @($sharepointResult.Sites)
@@ -5267,14 +6011,12 @@ Write-Host ("Reason: {0}" -f $presetReason) -ForegroundColor Gray
 
 Write-Host "`n--- Mailboxes ---" -ForegroundColor Yellow
 $mailboxes = $mailboxesRaw
-if ($Full) {
-    $mailboxes = @(Add-UserEnrichment -Data $mailboxes -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
-    $mailboxes = @(Add-TitleWeightScore -Data $mailboxes -TitleWeights $TitleWeights)
-    $MailboxWeights = $MailboxWeights + @{ TitleWeight = $TitleWeightContribution }
-}
+$mailboxes = @(Add-UserEnrichment -Data $mailboxes -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
+$mailboxes = @(Add-TitleWeightScore -Data $mailboxes -TitleWeights $TitleWeights)
+$MailboxWeights = $MailboxWeights + @{ TitleWeight = $TitleWeightContribution }
 # Recipient Type (authoritative, from the mailbox usage report) runs
-# regardless of -Full; the AccountEnabled fallback inside only has data
-# to fall back to when -Full enrichment ran above.
+# regardless; the AccountEnabled fallback inside only has data to fall
+# back to when the enrichment lookup above didn't find this user.
 $mailboxes = @(Add-MailboxTypeHeuristic -Data $mailboxes)
 $mailboxes = @(Add-RecentDataEstimate -Data $mailboxes -TotalItemField 'ItemCount' -TotalStorageField 'StorageUsedMB' -RecentItemField 'SendRecvActivity7d')
 $mailboxes = @(Add-CompositeScore -Data $mailboxes -MetricWeights $MailboxWeights)
@@ -5288,11 +6030,9 @@ $results['Mailboxes'] = Export-WorkloadResult -Data $mailboxes -Name 'Mailboxes'
 
 Write-Host "`n--- OneDrive ---" -ForegroundColor Yellow
 $onedrive = $onedriveRaw
-if ($Full) {
-    $onedrive = @(Add-UserEnrichment -Data $onedrive -EnrichmentIndex $userEnrichment -UpnField 'OwnerUpn')
-    $onedrive = @(Add-TitleWeightScore -Data $onedrive -TitleWeights $TitleWeights)
-    $OneDriveWeights = $OneDriveWeights + @{ TitleWeight = $TitleWeightContribution }
-}
+$onedrive = @(Add-UserEnrichment -Data $onedrive -EnrichmentIndex $userEnrichment -UpnField 'OwnerUpn')
+$onedrive = @(Add-TitleWeightScore -Data $onedrive -TitleWeights $TitleWeights)
+$OneDriveWeights = $OneDriveWeights + @{ TitleWeight = $TitleWeightContribution }
 $onedrive = @(Add-RecentDataEstimate -Data $onedrive -TotalItemField 'FileCount' -TotalStorageField 'StorageBytes' -RecentItemField 'ViewedOrEditedCount7d')
 $onedrive = @(Add-CompositeScore -Data $onedrive -MetricWeights $OneDriveWeights)
 $onedrive = @(Add-CriteriaTags -Data $onedrive -MetricWeights $OneDriveWeights)
@@ -5383,7 +6123,7 @@ if (-not $SkipHtmlReport) {
         if ($acct -and $acct.Contains('@')) { $acct.Split('@')[1] } else { 'Customer Tenant' }
     }
     $htmlReportPath = New-M365HtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        -CustomerLabel $resolvedCustomerLabel -Period $Period -RunId $runId -Full:$Full -Groups:$Groups `
+        -CustomerLabel $resolvedCustomerLabel -Period $Period -RunId $runId -Groups:$Groups `
         -MailboxWeights $MailboxWeights -OneDriveWeights $OneDriveWeights -SharePointWeights $SharePointWeights -TeamsWeights $TeamsWeights `
         -TierSplit $TierSplit -TitleWeights $TitleWeights -TitleWeightContribution $TitleWeightContribution -HubSiteKeywords $HubSiteKeywords -HubSiteBonus $HubSiteBonus `
         -RecoveryWindowDays $RecoveryWindowDays -RecoveryLicenseTier $RecoveryLicenseTier -DowntimeCostPerHour $DowntimeCostPerHour -PriorRunData $priorRunData `
@@ -5400,7 +6140,9 @@ if (-not $SkipHtmlReport) {
             teams      = ConvertTo-ReportRows -Data $teams          -MetricFields @('TotalActivity')
         }
     }
-    $reportDataForCompare | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path (Join-Path $OutputPath '_ReportData.json') -Encoding UTF8
+    $reportDataForCompareJson = $reportDataForCompare | ConvertTo-Json -Depth 12 -Compress
+    Assert-ValidReportJson -Json $reportDataForCompareJson -Context '_ReportData.json (for a future -CompareTo run)'
+    $reportDataForCompareJson | Set-Content -Path (Join-Path $OutputPath '_ReportData.json') -Encoding UTF8
     Write-Host "HTML report              ->  $htmlReportPath" -ForegroundColor Gray
 }
 
@@ -5413,8 +6155,7 @@ if (-not $SkipHtmlReport) {
 # syntax, however unlikely that is in practice today.
 $manifestRunTimeUtc      = (Get-Date).ToUniversalTime().ToString()
 $manifestTierSplit       = $TierSplit -join ' / '
-$manifestPermissionMode  = if ($Full) { if ($Groups) { 'FULL + GROUPS' } else { 'FULL' } } else { 'PREVIEW (default)' }
-$manifestGraphScopes     = if ($Full) { if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' } } else { 'Reports.Read.All' }
+$manifestGraphScopes     = if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' }
 $manifestSignedInAs      = (Get-MgContext).Account
 $manifestOverridesFile   = if ($OverridesFile) { $OverridesFile } else { '(none)' }
 $manifestComparedAgainst = if ($CompareTo) { $CompareTo } else { '(none)' }
@@ -5422,21 +6163,18 @@ $manifestExceedsLines    = ( @('Critical Group 1', 'Critical Group 2', 'Critical
         $m = $recoveryModel.Milestones[$_]
         if ($m.ExceedsTarget) { "  $_ exceeds its target by: $([math]::Round($m.TargetGapMin / 60, 1)) hr" }
     } ) -join "`n"
-$manifestFullEnrichment  = if ($Full) {
-    $groupsLine = if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" } else { '' }
-    "`nFull-mode enrichment:`n  Users profile-enriched: $($userEnrichment.Count)`n  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$groupsLine"
-} else { '' }
+$manifestGroupsLine      = if ($Groups) { "`n  Users with >=1 Entra ID group resolved: $((@($userEnrichment.Values) | Where-Object { $_.Groups -and $_.Groups.Count -gt 0 }).Count) of $($userEnrichment.Count)" } else { '' }
+$manifestFullEnrichment  = "`nUser profile enrichment:`n  Users profile-enriched: $($userEnrichment.Count)`n  Team sites exactly resolved: $($exactTeamSiteUrls.Count) of $($teams.Count)$manifestGroupsLine"
 $manifestGroup1CumMin    = ([math]::Round($group1CumMin, 1)).ToString()
 $manifestGroup1CumHr     = ([math]::Round($group1CumMin / 60, 1)).ToString()
 $manifestFullRestoreMin  = ([math]::Round($recoveryModel.FullRestoreUnprioritizedMin, 1)).ToString()
 $manifestFullRestoreHr   = ([math]::Round($recoveryModel.FullRestoreUnprioritizedMin / 60, 1)).ToString()
 
 $manifest = @'
-Recovery Assessment - M365 - PREVIEW BUILD - Run Manifest (v3.7.2)
+Recovery Assessment - M365 - PREVIEW BUILD - Run Manifest (v3.15.15)
 Run time (UTC):        __RUN_TIME_UTC__
 Usage report period:   __PERIOD__
 Tier split (Teams only): __TIER_SPLIT__
-Permission mode:       __PERMISSION_MODE__
 Graph scopes used:     __GRAPH_SCOPES__
 Signed in as:          __SIGNED_IN_AS__
 Overrides file used:   __OVERRIDES_FILE__
@@ -5477,7 +6215,6 @@ $manifest = $manifest.
     Replace('__RUN_TIME_UTC__', $manifestRunTimeUtc).
     Replace('__PERIOD__', $Period).
     Replace('__TIER_SPLIT__', $manifestTierSplit).
-    Replace('__PERMISSION_MODE__', $manifestPermissionMode).
     Replace('__GRAPH_SCOPES__', $manifestGraphScopes).
     Replace('__SIGNED_IN_AS__', $manifestSignedInAs).
     Replace('__OVERRIDES_FILE__', $manifestOverridesFile).

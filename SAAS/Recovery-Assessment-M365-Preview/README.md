@@ -8,15 +8,23 @@ A separate, complete, unredacted build of this assessment exists for real custom
 
 ## Permissions & Prerequisites
 
-| | Base (default) | Add `-Full` | Add `-Full -Groups` |
-|---|---|---|---|
-| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ | same | same |
-| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication` | + `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` | same as `-Full` |
-| **Directory role** | Reports Reader | same | same |
-| **Graph scopes** | `Reports.Read.All` | + `User.Read.All`, `Sites.Read.All` | + `Group.Read.All` |
-| **Unlocks** | Everything described below | Deeper scoring inputs (job title, department) — still only shown for real on the top-priority tier | A read-only Entra ID group column, shown only on the top-priority tier |
+| | Required |
+|---|---|
+| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ |
+| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) |
+| **Directory role** | Reports Reader |
+| **Graph scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All`, `Group.Read.All` |
+| **Unlocks** | Everything described below, including deeper scoring inputs (job title, department) and a read-only Entra ID group column — shown for real only on the top-priority tier |
 
-**Required tenant setting, either way:** in the M365 admin center, go to Settings → Org settings → Reports, and turn on **"Displayed concealed user, group, and site names in all reports."** Without this, usage reports return anonymized identifiers instead of real names, and the redaction contrast won't render meaningfully.
+**As of v3.14.0, `Group.Read.All` is requested by default** (was opt-in via `-Groups` through v3.13.0) — pass `-NoGroups` if you need to skip it, e.g. a customer's security team hasn't approved that scope yet, or you're running this live at a trade show/webinar and want the leanest possible consent prompt on screen. See [Command-Line Switches](#command-line-switches) below.
+
+**Very large tenants (100,000+ mailboxes/OneDrive accounts/SharePoint sites/Teams combined):** run this from **64-bit PowerShell** (Windows PowerShell's default `powershell.exe`, or PowerShell 7's `pwsh.exe` — both are 64-bit; a 32-bit host caps the process at roughly 2-4 GB of memory regardless of the machine's actual RAM) with several GB of free memory available. This script collects all four workloads' full data into memory before scoring begins, so a tenant this large held alongside its user-enrichment index is a real memory ceiling — the script warns at startup and again mid-run if it detects this scale, but a run at the very largest end can still end in a `System.OutOfMemoryException` with no output files written. If that happens, re-run from 64-bit PowerShell on a machine with more available RAM. `-NoGroups` also helps here: group-membership enrichment is a second, separate bulk `Get-MgUser -All` pull on top of the one already made for base enrichment (Graph only allows one property expanded per query), so skipping it removes an entire extra full-tenant enumeration.
+
+**Extremely large tenants (~900,000+ mailbox/OneDrive/SharePoint/Teams objects combined) and the Interactive report:** the Interactive report embeds each workload's row data as its own block inside the HTML file, and every browser (Chrome, Edge, and every other Chromium/V8-based browser) has a hard-coded ~512 MiB limit on how long a single piece of that data can be — a limit no amount of RAM works around. As of v3.15.14, each workload is embedded separately, comfortably covering every tenant seen to date (largest so far: ~327MB for one workload). A tenant with a single workload significantly larger than that (very roughly, 1,000,000+ objects in one workload alone) could still hit this ceiling and show a blank/broken Interactive report; if that happens, reach out — a further chunking fix would be needed. The Summary report never carries this risk (it has no per-object data at all).
+
+Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
+
+**Required tenant setting:** in the M365 admin center, go to Settings → Org settings → Reports, and turn on **"Displayed concealed user, group, and site names in all reports."** Without this, usage reports return anonymized identifiers instead of real names, and the redaction contrast won't render meaningfully.
 
 This build does not support `-DetailedSizing` — use the full script if you need Archive Mailbox or Recoverable Items sizing detail.
 
@@ -30,21 +38,59 @@ This script runs the same data collection, scoring, and tiering as the full scri
 - **Editing controls are disabled.** Scoring weights and keyword tables are visible but read-only; per-row tier changes and bulk actions are removed.
 - **Inputs you'd adjust live** — downtime cost, RTO targets, recovery window — stay fully interactive and recompute in real time.
 - **PDF exports match what's on screen** — nothing is revealed on export that wasn't already visible live.
+- **Large tenants:** the Criticality Groups tab's tables render only the top 500 rows per section by score, not every object, with a "Show all N rows" button when a table is capped — same reasoning and mechanism as the full script, unrelated to redaction (which row count renders doesn't change which rows are locked).
 
 ## Quick Start
 
 ```powershell
-# Base permissions (most common for a live demo)
 .\Invoke-RecoveryAssessment-M365-Preview.ps1
-
-# With deeper scoring inputs
-.\Invoke-RecoveryAssessment-M365-Preview.ps1 -Full
-
-# With a downtime cost input
-.\Invoke-RecoveryAssessment-M365-Preview.ps1 -DowntimeCostPerHour 25000
 ```
 
-Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, output to a timestamped folder (`.\M365CriticalityAssessmentPreview_yyyyMMdd_HHmmss\`) in the current directory.
+Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, $10,000/hour downtime cost (pass `-DowntimeCostPerHour` to override), output to a timestamped folder (`.\M365CriticalityAssessmentPreview_yyyyMMdd_HHmmss\`) in the current directory. That single command already covers everything described in this README — everything below is optional.
+
+## Command-Line Switches
+
+Every switch below can be combined with any other. All of them are optional — the plain `.\Invoke-RecoveryAssessment-M365-Preview.ps1` command above already runs the full demo.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -NoGroups
+```
+Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — no separate sign-in, no separate module, but via its own separate bulk directory pull alongside the one the base assessment already does (Microsoft Graph only allows one property expanded per user query, so the two can't be combined) — and shows a read-only Entra ID group column, shown only on the top-priority tier (Group 1). This requests one additional Graph scope, `Group.Read.All`, on every run, plus that extra directory pull. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope), or to cut collection time/memory on a very large tenant — it drops the extra scope request, the extra pull, and the group column disappears for that run.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -DowntimeCostPerHour 25000
+```
+Sets the $/hour used for every downtime-cost figure in the report. Defaults to $10,000/hour; always override with the customer's real number when known.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -OverridesFile .\overrides.json
+```
+Seeds manual tier overrides from a JSON file exported by a prior run — has no visible effect in this build since override controls are frozen/read-only here, but the value still passes through to the underlying tiering so Group 1's figures stay consistent with a full-assessment run using the same file.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -CompareTo .\M365CriticalityAssessmentPreview_20260615_090000
+```
+Diffs this run against a prior run's output folder and adds a "Changes Since Last Run" tab to the report.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -SkipHtmlReport
+```
+Writes the CSVs and manifest but skips generating the HTML report.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -ShowEnterpriseAppGuide
+```
+Prints unattended/Enterprise App setup instructions and exits without running the assessment.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint>
+```
+Connects via an Enterprise App (application permissions, certificate auth) instead of an interactive delegated sign-in, for scheduled/unattended runs. All three parameters are required together.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -GraphTimeoutSeconds 1800
+```
+Raises the Microsoft Graph client timeout beyond the default of 900 seconds (15 minutes). On a very large tenant, the profile-enrichment step (`Get-MgUser -All`) can take long enough that the Graph SDK's own default timeout cancels the request mid-run — this shows up as `WARNING: User profile enrichment failed (...HttpClient.Timeout... elapsing.)` and silently drops JobTitle/Department/Manager/Groups enrichment for every row. 900 seconds comfortably covers every tenant size seen so far; raise it further only if you see that warning.
 
 ## What You Get
 
@@ -82,3 +128,54 @@ Scoring weights are visible (read-only) in the report's Methodology & Glossary t
 - SharePoint "broad access across the org" is an activity proxy (page views + active files), not a true unique-accessor count.
 - The mailbox-type classifier and hub-site detection use heuristics, not authoritative directory reads.
 - Recovery-time modeling assumes flat throughput caps regardless of slice size, matching the underlying recovery-time calculator's own formulas.
+
+## Updating PowerShell Modules
+
+**Minimum versions:** `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Reports`, and `Microsoft.Graph.Sites` all ship together as one family and must be **the same version as each other** — 2.38.0 or later.
+
+By far the most common real-world failure isn't a module being too old — it's the four Graph modules being **mismatched versions of each other** (e.g. `Microsoft.Graph.Users` updated but `Microsoft.Graph.Authentication` didn't), which throws an assembly-load error that names a specific version it can't find, like:
+
+```
+Could not load file or assembly 'Microsoft.Graph.Authentication, Version=2.39.0.0, Culture=neutral,
+PublicKeyToken=31bf3856ad364e35' or one of its dependencies. The system cannot find the file specified.
+```
+
+That happens when a partial `Update-Module`, multiple side-by-side installs, or a manually-copied module left the four Graph submodules out of sync. The fix is a clean uninstall of every installed version of every `Microsoft.Graph.*` module, followed by a fresh install of just the four this script needs — **run this in a brand-new PowerShell window**, not the one that hit the error (a session that already loaded a mismatched assembly can't unload it mid-run):
+
+```powershell
+# 1. See what's currently installed (useful to save/screenshot if the issue persists after this)
+Get-InstalledModule -Name Microsoft.Graph* | Select-Object Name, Version | Sort-Object Name, Version
+
+# 2. Uninstall every installed version of every Microsoft.Graph* module
+Get-InstalledModule -Name Microsoft.Graph* | ForEach-Object {
+    Write-Host "Removing $($_.Name) $($_.Version)..." -ForegroundColor Yellow
+    Uninstall-Module -Name $_.Name -AllVersions -Force -ErrorAction SilentlyContinue
+}
+
+# 3. Filesystem sweep - catches leftover module folders PowerShellGet's own uninstall
+#    sometimes can't clean up (partial installs, or a module that was manually copied
+#    in rather than installed via Install-Module). Reads $env:PSModulePath directly
+#    instead of guessing paths, so this works on Windows PowerShell or PowerShell 7,
+#    on Windows or macOS, regardless of how PowerShell itself was installed.
+($env:PSModulePath -split [IO.Path]::PathSeparator) | ForEach-Object {
+    if (Test-Path $_) {
+        Get-ChildItem -Path $_ -Directory -Filter 'Microsoft.Graph*' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Write-Host "Deleting leftover folder: $($_.FullName)" -ForegroundColor Yellow
+                Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+    }
+}
+
+# 4. Reinstall only what this script needs - CurrentUser scope, no admin/sudo required
+'Microsoft.Graph.Authentication', 'Microsoft.Graph.Users', 'Microsoft.Graph.Reports', 'Microsoft.Graph.Sites' | ForEach-Object {
+    Write-Host "Installing $_..." -ForegroundColor Cyan
+    Install-Module -Name $_ -Scope CurrentUser -Force -AllowClobber
+}
+
+# 5. Verify - should show exactly these 4 modules, one version each, no duplicates
+Get-InstalledModule -Name Microsoft.Graph.Authentication, Microsoft.Graph.Users, Microsoft.Graph.Reports, Microsoft.Graph.Sites |
+    Select-Object Name, Version
+```
+
+Open a brand-new PowerShell window before running the assessment again. (This build doesn't use `ExchangeOnlineManagement` - that's only needed for `-DetailedSizing` in the full script.)
