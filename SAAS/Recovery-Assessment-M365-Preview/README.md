@@ -8,13 +8,19 @@ A separate, complete, unredacted build of this assessment exists for real custom
 
 ## Permissions & Prerequisites
 
-| | Always required | Add `-Groups` |
-|---|---|---|
-| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ | same |
-| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) | same |
-| **Directory role** | Reports Reader | same |
-| **Graph scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All` | + `Group.Read.All` |
-| **Unlocks** | Everything described below, including deeper scoring inputs (job title, department) — shown for real only on the top-priority tier | A read-only Entra ID group column, shown only on the top-priority tier |
+| | Required |
+|---|---|
+| **PowerShell** | Windows PowerShell 5.1, or PowerShell 7+ |
+| **PowerShell modules** | `Microsoft.Graph.Reports`, `Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Sites` — **all four must be the same version as each other** (2.38.0 or later; see [Updating PowerShell Modules](#updating-powershell-modules)) |
+| **Directory role** | Reports Reader |
+| **Graph scopes** | `Reports.Read.All`, `User.Read.All`, `Sites.Read.All`, `Group.Read.All` |
+| **Unlocks** | Everything described below, including deeper scoring inputs (job title, department) and a read-only Entra ID group column — shown for real only on the top-priority tier |
+
+**As of v3.14.0, `Group.Read.All` is requested by default** (was opt-in via `-Groups` through v3.13.0) — pass `-NoGroups` if you need to skip it, e.g. a customer's security team hasn't approved that scope yet, or you're running this live at a trade show/webinar and want the leanest possible consent prompt on screen. See [Command-Line Switches](#command-line-switches) below.
+
+**Very large tenants (100,000+ mailboxes/OneDrive accounts/SharePoint sites/Teams combined):** run this from **64-bit PowerShell** (Windows PowerShell's default `powershell.exe`, or PowerShell 7's `pwsh.exe` — both are 64-bit; a 32-bit host caps the process at roughly 2-4 GB of memory regardless of the machine's actual RAM) with several GB of free memory available. This script collects all four workloads' full data into memory before scoring begins, so a tenant this large held alongside its user-enrichment index is a real memory ceiling — the script warns at startup and again mid-run if it detects this scale, but a run at the very largest end can still end in a `System.OutOfMemoryException` with no output files written. If that happens, re-run from 64-bit PowerShell on a machine with more available RAM.
+
+**Extremely large tenants (~900,000+ mailbox/OneDrive/SharePoint/Teams objects combined) and the Interactive report:** the Interactive report embeds each workload's row data as its own block inside the HTML file, and every browser (Chrome, Edge, and every other Chromium/V8-based browser) has a hard-coded ~512 MiB limit on how long a single piece of that data can be — a limit no amount of RAM works around. As of v3.15.14, each workload is embedded separately, comfortably covering every tenant seen to date (largest so far: ~327MB for one workload). A tenant with a single workload significantly larger than that (very roughly, 1,000,000+ objects in one workload alone) could still hit this ceiling and show a blank/broken Interactive report; if that happens, reach out — a further chunking fix would be needed. The Summary report never carries this risk (it has no per-object data at all).
 
 Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
 
@@ -47,9 +53,9 @@ Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, 
 Every switch below can be combined with any other. All of them are optional — the plain `.\Invoke-RecoveryAssessment-M365-Preview.ps1` command above already runs the full demo.
 
 ```powershell
-.\Invoke-RecoveryAssessment-M365-Preview.ps1 -Groups
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -NoGroups
 ```
-Adds a read-only Entra ID group column, shown only on the top-priority tier (Group 1). Requests one additional Graph scope (`Group.Read.All`) on top of the base permissions — no separate sign-in, no separate module.
+Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — no separate sign-in, no separate module, rides the same directory pull the base assessment already does — and shows a read-only Entra ID group column, shown only on the top-priority tier (Group 1). This requests one additional Graph scope, `Group.Read.All`, on every run. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope) — it drops the extra scope request and the group column disappears for that run.
 
 ```powershell
 .\Invoke-RecoveryAssessment-M365-Preview.ps1 -DowntimeCostPerHour 25000
@@ -80,6 +86,11 @@ Prints unattended/Enterprise App setup instructions and exits without running th
 .\Invoke-RecoveryAssessment-M365-Preview.ps1 -TenantId <tenant-id> -ClientId <client-id> -CertificateThumbprint <thumbprint>
 ```
 Connects via an Enterprise App (application permissions, certificate auth) instead of an interactive delegated sign-in, for scheduled/unattended runs. All three parameters are required together.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Preview.ps1 -GraphTimeoutSeconds 1800
+```
+Raises the Microsoft Graph client timeout beyond the default of 900 seconds (15 minutes). On a very large tenant, the profile-enrichment step (`Get-MgUser -All`) can take long enough that the Graph SDK's own default timeout cancels the request mid-run — this shows up as `WARNING: User profile enrichment failed (...HttpClient.Timeout... elapsing.)` and silently drops JobTitle/Department/Manager/Groups enrichment for every row. 900 seconds comfortably covers every tenant size seen so far; raise it further only if you see that warning.
 
 ## What You Get
 
