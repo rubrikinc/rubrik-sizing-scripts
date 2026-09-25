@@ -1,5 +1,5 @@
 #requires -Version 7.0
-<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.ElasticLoadBalancing, AWS.Tools.ElasticLoadBalancingV2, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.Route53, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control, AWS.Tools.Redshift
+<#requires -Modules AWS.Tools.Common, AWS.Tools.EC2, AWS.Tools.S3, AWS.Tools.RDS, AWS.Tools.SecurityToken, AWS.Tools.Organizations, AWS.Tools.IdentityManagement, AWS.Tools.CloudWatch, AWS.Tools.ElasticFileSystem, AWS.Tools.ElasticLoadBalancing, AWS.Tools.ElasticLoadBalancingV2, AWS.Tools.SSO, AWS.Tools.SSOOIDC, AWS.Tools.FSX, AWS.Tools.Backup, AWS.Tools.CostExplorer, AWS.Tools.DynamoDBv2, AWS.Tools.Route53, AWS.Tools.SQS, AWS.Tools.SecretsManager, AWS.Tools.KeyManagementService, AWS.Tools.EKS, AWS.Tools.S3Control, AWS.Tools.Redshift, AWS.Tools.Glue
 #>
 # https://build.rubrik.com
 
@@ -28,7 +28,7 @@
     If this script will be run from a system with PowerShell, it requires several Powershell Modules. 
     Install these modules prior to running this script locally by issuing the commands:
 
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift,AWS.Tools.Glue
 
     For both cases the source/default AWS credentials that the script will use to query AWS can be set 
     by using  using the 'Set-AWSCredential' command. For the AWS CloudShell this usually won't be required
@@ -78,10 +78,14 @@
                     "fsx:DescribeBackups",
                     "fsx:DescribeFileSystems",
                     "fsx:DescribeVolumes",
+                    "glue:GetDatabases",
+                    "glue:GetResourceTags",
+                    "glue:GetTables",
                     "iam:ListAccountAliases",
                     "iam:ListPolicies",
                     "iam:ListRoles",
                     "iam:ListUsers",
+                    "kms:Decrypt",
                     "kms:DescribeKey",
                     "kms:ListAliases",
                     "kms:ListKeys",
@@ -95,18 +99,47 @@
                     "route53:ListHostedZones",
                     "s3:GetBucketLocation",
                     "s3:GetBucketTagging",
+                    "s3:GetObject",
                     "s3:ListAllMyBuckets",
                     "s3:GetStorageLensConfiguration",
                     "s3:ListStorageLensConfigurations",
                     "secretsmanager:ListSecrets",
                     "sts:AssumeRole",
+                    "s3tables:GetTableData",
+                    "s3tables:GetTableMaintenanceConfiguration",
+                    "s3tables:GetTableMetadataLocation",
                     "sqs:ListQueues"
                 ],
                 "Resource": "*"
             }
         ]
     }
-    
+
+    Known Limitations (Glue Iceberg inventory):
+
+    - Lake Formation governance: GetTables returns only tables for which the calling
+      IAM principal has Lake Formation SELECT grants. Customers must grant the sizing
+      role SELECT on governed databases/tables via Lake Formation before running.
+      Tables without grants are silently absent from output. No IAM action can fix
+      this. A zero-table warning is emitted per database.
+    - SSE-KMS encryption: s3:GetObject on SSE-KMS objects also requires kms:Decrypt
+      on the CMK. Both are added to the policy/CFT. Without kms:Decrypt, HeadObject
+      succeeds (no decryption) but GetObject fails with AccessDenied.
+    - Cross-region S3 data: If metadata_location points to a bucket in a different
+      region from the Glue table, HeadObject returns PermanentRedirect. The catch
+      block detects this via ErrorCode = "PermanentRedirect" and emits a warning.
+    - Requester-pays buckets: Both S3 calls include -RequestPayer "requester" — for
+      non-requester-pays buckets AWS ignores the header; for requester-pays buckets
+      this makes the call succeed without customer action.
+    - Cross-account S3 data (data mesh): If metadata_location URIs reference S3 in a
+      different AWS account, the bucket owner must add a bucket policy granting
+      s3:GetObject to the sizing role ARN — IAM policy alone is insufficient for
+      cross-account S3 access.
+    - Performance at scale: Run the script from an EC2 instance or CloudShell in the
+      same region as the data for large table counts. A laptop over VPN can make
+      9.9 MB metadata reads take 20 s/table; at 5,000 tables that is 27+ hours.
+      A Write-Progress call every 50 tables shows the operator the script is alive.
+
   .NOTES
     Written by Steven Tong for community usage
     GitHub: stevenctong
@@ -442,6 +475,12 @@ if ($cwModule) {
   $useUTCPrefix = $false
 }
 
+# Detect whether Read-S3Object supports -RequestPayer (added in a later AWS.Tools.S3 release).
+# When supported, both HeadObject and GetObject calls include it so requester-pays S3 buckets
+# (used in shared data lake / cross-team chargeback architectures) are accessible without
+# customer action. For buckets that are NOT requester-pays, AWS ignores the header.
+$s3ReadObjectSupportsRequestPayer = (Get-Command Read-S3Object -ErrorAction SilentlyContinue).Parameters.ContainsKey('RequestPayer')
+
 $output_log = "output_aws_$date_string.log"
 
 if (Test-Path "./$output_log") {
@@ -501,6 +540,8 @@ $outputRDSSnapshots = "aws_rds_snapshot_info-$date_string.csv"
 $outputRedshiftClusters = "aws_redshift_info-$date_string.csv"
 # S3 Tables (managed Apache Iceberg table buckets) per-table inventory.
 $outputS3Tables = "aws_s3_tables_info-$date_string.csv"
+# Glue Data Catalog Iceberg tables (catalog-registered Iceberg on regular S3).
+$outputGlueIceberg = "aws_glue_iceberg_info-$date_string.csv"
 # Snapshot-storage USAGE_TYPE cost CSV. Captures EBS/EC2/RDS/Aurora/DocDB/Neptune/
 # FSx-non-OpenZFS/StorageGateway/Redshift/DDB-standard-PITR -- the resources that
 # bill snapshot storage to the source service rather than the AWS Backup service.
@@ -534,6 +575,7 @@ $outputFiles = @(
     $outputRDSSnapshots,
     $outputRedshiftClusters,
     $outputS3Tables,
+    $outputGlueIceberg,
     $outputSnapshotStorageCosts,
     $outputBackupPlansJSON,
     $output_log
@@ -2201,19 +2243,6 @@ function Get-AWSS3TablesInventory {
     }
 
     foreach ($bucket in $tableBuckets) {
-        # Initialize to empty hashtable BEFORE the try so GetEnumerator() is safe if
-        # the tag call fails. AWS Tools AOS selects the Tags Dictionary<string,string>
-        # directly (verified: default Select = 'Tags' on GetS3TResourceTagCmdlet), so no
-        # .Tags sub-property is needed; a hashtable and a Dictionary both expose GetEnumerator().
-        $bucketTags = @{}
-        try {
-            $tagsResult = Get-S3TResourceTag -ResourceArn $bucket.Arn `
-                -Credential $Credential -Region $Region -ErrorAction Stop
-            if ($null -ne $tagsResult) { $bucketTags = $tagsResult }
-        } catch {
-            Write-Host "Failed to get tags for S3 Tables bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
-            Write-Host "Error: $_" -ForegroundColor Yellow
-        }
 
         $tables = New-Object collections.arraylist
         try {
@@ -2236,37 +2265,178 @@ function Get-AWSS3TablesInventory {
 
         foreach ($table in $tables) {
             $tableNamespace = $table.Namespace -join "/"
+
+            # GetTable — WarehouseLocation + StorageClass (free from the same call)
             $warehouseLocation = ""
+            $storageClass      = ""
             try {
                 $tableDetail = Get-S3TTable -TableBucketARN $bucket.Arn `
                     -Namespace $tableNamespace -Name $table.Name `
                     -Credential $Credential -Region $Region -ErrorAction Stop
                 $warehouseLocation = $tableDetail.WarehouseLocation
+                # StorageClass is on the GetTable response; Standard-class objects omit the
+                # field (SDK returns $null) — normalise to "".
+                # StorageClass: use API value if present; default to STANDARD when absent.
+                # Get-S3TTable does not currently expose StorageClass (S3 Tables only
+                # supports Standard today). If AWS adds it later, the API value takes precedence.
+                $storageClass = if ($null -ne $tableDetail.StorageClass -and
+                                    $tableDetail.StorageClass -ne "") {
+                    [string]$tableDetail.StorageClass
+                } else { "STANDARD" }
             } catch {
                 Write-Host "Failed to get details for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
                 Write-Host "Error: $_" -ForegroundColor Yellow
             }
 
-            $s3tObj = [PSCustomObject] @{
-                "AwsAccountId"      = $AccountInfo.Account
-                "AwsAccountAlias"   = $AccountAlias
-                "Region"            = $Region
-                "TableBucketName"   = $bucket.Name
-                "TableBucketArn"    = $bucket.Arn
-                "Namespace"         = $tableNamespace
-                "TableName"         = $table.Name
-                "TableArn"          = $table.TableARN
-                "ResourceArn"       = $table.TableARN
-                "WarehouseLocation" = $warehouseLocation
-                "TableType"         = $table.Type
-                "CreatedAt"         = $table.CreatedAt
-                "ModifiedAt"        = $table.ModifiedAt
-                "BackupPlans"       = ""
-                "InBackupPlan"      = $false
+            # GetTableMetadataLocation → Read-IcebergMetadataJson for exact Iceberg stats.
+            # Requires s3tables:GetTableMetadataLocation + s3tables:GetTableData.
+            # Falls back gracefully — CloudWatch remains the size/count source when this fails.
+            $metadataLoc = ""
+            try {
+                $metaLocResult = Get-S3TTableMetadataLocation `
+                    -TableBucketARN $bucket.Arn `
+                    -Namespace $tableNamespace -Name $table.Name `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                $metadataLoc = $metaLocResult.MetadataLocation
+            } catch {
+                Write-Host "Failed to get metadata location for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
             }
-            Add-BackupColumnsToRow -Row $s3tObj -ResourceArn $table.TableARN
 
-            foreach ($tag in $bucketTags.GetEnumerator()) {
+            $s3tEnrichment = $null
+            if (![string]::IsNullOrWhiteSpace($metadataLoc)) {
+                $s3tEnrichment = Read-IcebergMetadataJson `
+                    -MetadataLocation $metadataLoc `
+                    -Credential $Credential -Region $Region -TableName $table.Name
+            }
+
+            # Maintenance configuration — compaction + snapshot management settings
+            # $null = unknown (GetTableMaintenanceConfiguration denied/failed); $false = confirmed off
+            $compactionEnabled         = $null
+            $snapshotManagementEnabled = $null
+            try {
+                $maint = Get-S3TTableMaintenanceConfiguration `
+                    -TableBucketARN $bucket.Arn `
+                    -Namespace $tableNamespace -Name $table.Name `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                $compaction = $maint.Configuration.IcebergCompaction
+                if ($null -ne $compaction) {
+                    $compactionEnabled = ($compaction.Status -eq 'ENABLED')
+                }
+                $manifestMgmt = $maint.Configuration.IcebergSnapshotManagement
+                if ($null -ne $manifestMgmt) {
+                    $snapshotManagementEnabled = ($manifestMgmt.Status -eq 'ENABLED')
+                }
+            } catch {
+                Write-Host "Failed to get maintenance config for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
+            }
+
+            # CloudWatch — table-level storage size and file count (daily metrics, 7-day max)
+            $totalFileSizeBytes = $null
+            $totalFileCount     = $null
+            try {
+                # Dimensions: TableBucketName + Namespace + TableName + StorageType.
+                # StorageType is required for GetMetricStatistics exact-dimension match.
+                # TablesStandardStorage covers the default and most common S3 Tables storage class.
+                $cwDimensions = @(
+                    @{ Name = "TableBucketName"; Value = $bucket.Name },
+                    @{ Name = "Namespace";       Value = $tableNamespace },
+                    @{ Name = "TableName";       Value = $table.Name },
+                    @{ Name = "StorageType";     Value = "TablesStandardStorage" }
+                ) | ForEach-Object { New-Object Amazon.CloudWatch.Model.Dimension -Property $_ }
+
+                $cwEnd   = (Get-Date).ToUniversalTime()
+                $cwStart = $cwEnd.AddDays(-7)
+
+                $sizeStats = Get-CWMetricStatisticsForAllVersion `
+                    -Namespace "AWS/S3/Tables" -MetricName "TableSizeBytes" `
+                    -Dimension $cwDimensions -StartTime $cwStart -EndTime $cwEnd `
+                    -Period 86400 -Statistic Maximum `
+                    -Region $Region -Credential $Credential
+                if ($sizeStats -and $sizeStats.Datapoints -and $sizeStats.Datapoints.Count -gt 0) {
+                    $totalFileSizeBytes = [long]($sizeStats.Datapoints | Measure-Object Maximum -Maximum).Maximum
+                }
+
+                $fileStats = Get-CWMetricStatisticsForAllVersion `
+                    -Namespace "AWS/S3/Tables" -MetricName "TableNumberOfObjects" `
+                    -Dimension $cwDimensions -StartTime $cwStart -EndTime $cwEnd `
+                    -Period 86400 -Statistic Maximum `
+                    -Region $Region -Credential $Credential
+                if ($fileStats -and $fileStats.Datapoints -and $fileStats.Datapoints.Count -gt 0) {
+                    $totalFileCount = [long]($fileStats.Datapoints | Measure-Object Maximum -Maximum).Maximum
+                }
+            } catch {
+                Write-Host "Failed to get CloudWatch metrics for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
+            }
+
+            # Prefer exact metadata.json values over CloudWatch approximations.
+            # CloudWatch is daily-lag and combines data+manifest files; metadata.json is exact.
+            $effectiveFileSizeBytes = if ($null -ne $s3tEnrichment -and $null -ne $s3tEnrichment.TotalFileSizeBytes) {
+                $s3tEnrichment.TotalFileSizeBytes
+            } else { $totalFileSizeBytes }
+
+            # CompactionEnabled: maintenance config is the authoritative source (configured setting);
+            # metadata snapshot history is a fallback (has it run) when maintenance config is unavailable.
+            $effectiveCompactionEnabled = if ($null -ne $compactionEnabled) {
+                $compactionEnabled
+            } elseif ($null -ne $s3tEnrichment) {
+                $s3tEnrichment.CompactionEnabled
+            } else { $null }
+
+            $fileSizes = if ($null -ne $effectiveFileSizeBytes) {
+                ConvertTo-SizeUnits -Value $effectiveFileSizeBytes -Prefix "TotalFileSize" -InputUnit Bytes
+            } else {
+                @{ TotalFileSizeGiB = $null; TotalFileSizeTiB = $null; TotalFileSizeGB = $null; TotalFileSizeTB = $null }
+            }
+
+            $s3tObj = [PSCustomObject] @{
+                "AwsAccountId"             = $AccountInfo.Account
+                "AwsAccountAlias"          = $AccountAlias
+                "Region"                   = $Region
+                "CatalogType"              = "S3Tables"
+                "DatabaseName"             = $tableNamespace
+                "TableName"                = $table.Name
+                "TableBucketName"          = $bucket.Name
+                "TableBucketArn"           = $bucket.Arn
+                "Namespace"                = $tableNamespace
+                "TableArn"                 = $table.TableARN
+                "ResourceArn"              = $table.TableARN
+                "WarehouseLocation"        = $warehouseLocation
+                "MetadataLocation"         = $metadataLoc
+                "TableType"                = $table.Type
+                "CreatedAt"                = $table.CreatedAt
+                "ModifiedAt"               = $table.ModifiedAt
+                "FormatVersion"            = if ($s3tEnrichment) { $s3tEnrichment.FormatVersion } else { $null }
+                "StorageClass"             = $storageClass
+                "MetadataFileStorageClass" = if ($s3tEnrichment) { $s3tEnrichment.MetadataFileStorageClass } else { "" }
+                "TotalFileSizeGiB"             = $fileSizes["TotalFileSizeGiB"]
+                "TotalFileSizeTiB"             = $fileSizes["TotalFileSizeTiB"]
+                "TotalFileSizeGB"              = $fileSizes["TotalFileSizeGB"]
+                "TotalFileSizeTB"              = $fileSizes["TotalFileSizeTB"]
+                "TotalFileCount"               = $totalFileCount
+                "DataFileCount"                = if ($s3tEnrichment) { $s3tEnrichment.DataFileCount } else { $null }
+                "TotalDeleteFileCount"         = if ($s3tEnrichment) { $s3tEnrichment.TotalDeleteFileCount } else { $null }
+                "ManifestCount"                = if ($s3tEnrichment) { $s3tEnrichment.ManifestCount } else { $null }
+                "TargetManifestSizeBytes"      = if ($s3tEnrichment) { $s3tEnrichment.TargetManifestSizeBytes } else { $null }
+                "ManifestBytesEstimate"        = if ($s3tEnrichment) { $s3tEnrichment.ManifestBytesEstimate } else { $null }
+                "CompactionEnabled"            = $effectiveCompactionEnabled
+                "SnapshotManagementEnabled"    = $snapshotManagementEnabled
+                "BackupPlans"                  = ""
+                "InBackupPlan"                 = $false
+            }
+
+            $tableTags = @{}
+            try {
+                $tagsResult = Get-S3TResourceTag -ResourceArn $table.TableARN `
+                    -Credential $Credential -Region $Region -ErrorAction Stop
+                if ($null -ne $tagsResult) { $tableTags = $tagsResult }
+            } catch {
+                Write-Host "Failed to get tags for S3 Tables table $($table.Name) in bucket $($bucket.Name) in region $Region" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
+            }
+            foreach ($tag in $tableTags.GetEnumerator()) {
                 $sanitizedKey = $tag.Key -replace '[^a-zA-Z0-9]', '_'
                 $s3tObj | Add-Member -MemberType NoteProperty -Name "Tag: $sanitizedKey" `
                                      -Value $tag.Value -Force
@@ -2276,6 +2446,492 @@ function Get-AWSS3TablesInventory {
         }
     }
 
+    return ,$result
+}
+
+function Read-IcebergManifestList {
+    # Reads the current snapshot's Avro manifest-list and returns the exact manifest count.
+    # Uses block-header-only parsing — no record field parsing, no Avro library needed.
+    #
+    # Avro container layout:
+    #   [Magic 4B "Obj\x01"] [File-metadata map blocks] [Sync 16B]
+    #   [Data block: count(zigzag) | byteCount(zigzag) | data | sync 16B] ...
+    #   [Terminal block: count=0]
+    #
+    # Summing the count field from each data block header gives the exact entry count,
+    # which equals the exact manifest count for this snapshot.
+    param(
+        [string]$ManifestListPath,  # s3://bucket/path/snap-xxx.avro
+        $Credential,
+        [string]$Region,
+        [string]$TableName          # for diagnostic log messages only
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ManifestListPath) -or
+        $ManifestListPath -notmatch '^s3://([^/]+)/(.+)$') {
+        return $null
+    }
+    $bucket        = $Matches[1]
+    $key           = $Matches[2]
+    $safeTableName = $TableName  -replace '[^\x20-\x7E]', '?'
+    $safeBucket    = $bucket     -replace '[^\x20-\x7E]', '?'
+
+    $tmpFile = $null
+    try {
+        $headParams = @{ BucketName = $bucket; Key = $key; Credential = $Credential
+                         Region = $Region; ErrorAction = 'Stop' }
+        if ($s3ReadObjectSupportsRequestPayer) { $headParams.RequestPayer = 'requester' }
+        $mlHead = Invoke-AWSWithRetry -Context "ManifestList-Head $safeBucket" -ScriptBlock {
+            Get-S3ObjectMetadata @headParams
+        }
+        if ($mlHead.ContentLength -gt 50MB) {
+            Write-Host "Skipping oversized manifest-list for table $safeTableName " `
+                       "($($mlHead.ContentLength) bytes) in $safeBucket" -ForegroundColor Yellow
+            return $null
+        }
+
+        $tmpFile = [System.IO.Path]::GetTempFileName()
+        $getParams = @{ BucketName = $bucket; Key = $key; File = $tmpFile
+                        Credential = $Credential; Region = $Region; ErrorAction = 'Stop' }
+        if ($s3ReadObjectSupportsRequestPayer) { $getParams.RequestPayer = 'requester' }
+        Invoke-AWSWithRetry -Context "ManifestList $safeBucket" -ScriptBlock {
+            Read-S3Object @getParams
+        } | Out-Null
+
+        [byte[]]$bytes = [System.IO.File]::ReadAllBytes($tmpFile)
+
+        # Validate Avro magic "Obj\x01"
+        if ($bytes.Length -lt 20 -or
+            $bytes[0] -ne 0x4F -or $bytes[1] -ne 0x62 -or
+            $bytes[2] -ne 0x6A -or $bytes[3] -ne 0x01) {
+            Write-Host "Invalid Avro magic in manifest-list for table $safeTableName" -ForegroundColor Yellow
+            return $null
+        }
+
+        # Zigzag-decode a variable-length long from $bytes at $pos (passed by [ref]).
+        # Avro uses little-endian base-128 with continuation bit, then zigzag-maps signed→unsigned.
+        $decodeZigzag = [scriptblock]{
+            param([byte[]]$b, [ref]$p)
+            $n = [long]0; $shift = 0; $byte = [byte]0
+            do { $byte = $b[$p.Value]; $p.Value++
+                 $n = $n -bor ([long]($byte -band 0x7F) -shl $shift); $shift += 7
+            } while (($byte -band 0x80) -ne 0)
+            return ($n -shr 1) -bxor (-($n -band 1))
+        }
+
+        $pos = [ref]4  # start after magic
+
+        # Skip file-metadata map: map blocks of (key=string, value=bytes) pairs, ends at count=0.
+        do {
+            $blockCount = & $decodeZigzag $bytes $pos
+            if ($blockCount -lt 0) { $blockCount = -$blockCount; & $decodeZigzag $bytes $pos | Out-Null }
+            for ($i = 0; $i -lt $blockCount; $i++) {
+                $kLen = & $decodeZigzag $bytes $pos; $pos.Value += [int]$kLen  # skip key
+                $vLen = & $decodeZigzag $bytes $pos; $pos.Value += [int]$vLen  # skip value
+            }
+        } while ($blockCount -ne 0)
+
+        $pos.Value += 16  # skip 16-byte sync marker that ends the file header
+
+        # Count manifest entries by reading data block headers only (no record parsing).
+        $manifestCount = [long]0
+        while ($pos.Value -lt $bytes.Length) {
+            $blockCount = & $decodeZigzag $bytes $pos
+            if ($blockCount -eq 0) { break }  # terminal block
+            if ($blockCount -lt 0) {
+                $blockCount = -$blockCount
+                & $decodeZigzag $bytes $pos | Out-Null  # consume byte-size for codec blocks
+            }
+            $byteCount  = & $decodeZigzag $bytes $pos
+            $manifestCount += $blockCount
+            $pos.Value += [long]$byteCount + 16  # skip data + sync marker
+        }
+
+        return $manifestCount
+
+    } catch {
+        $errCode = $_.Exception.GetType().Name
+        Write-Host "Failed to read manifest-list for table $safeTableName " `
+                   "in $safeBucket`: $errCode" -ForegroundColor Yellow
+        return $null
+    } finally {
+        if ($null -ne $tmpFile) { Remove-Item $tmpFile -ErrorAction SilentlyContinue }
+    }
+}
+
+function Read-IcebergMetadataJson {
+    param(
+        [string]$MetadataLocation,
+        $Credential,
+        [string]$Region,
+        [string]$TableName   # diagnostic log messages only
+    )
+    # Returns a hashtable; all keys always present with typed defaults on any failure.
+
+    $formatVersion       = $null
+    $fileSizeBytes       = $null
+    $dataFileCount       = $null
+    $deleteFileCount     = $null
+    $manifestCount       = $null
+    $targetManifestSize  = 8388608    # Iceberg spec default; overridden by write.manifest-file-size-bytes if present
+    $manifestBytes       = $null
+    $compactionEnabled   = $false     # $false = not known to be enabled (fetch failed or no replace snapshots)
+    $storageClass        = ""
+
+    $defaultResult = @{
+        FormatVersion            = $null
+        TotalFileSizeBytes       = $null
+        DataFileCount            = $null
+        TotalDeleteFileCount     = $null
+        ManifestCount            = $null
+        TargetManifestSizeBytes  = 8388608
+        ManifestBytesEstimate    = $null
+        CompactionEnabled        = $false
+        MetadataFileStorageClass = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($MetadataLocation) -or
+        $MetadataLocation -notmatch '^s3://([^/]+)/(.+)$') {
+        return $defaultResult
+    }
+    $bucket        = $Matches[1]
+    $key           = $Matches[2]
+    $safeTableName = $TableName -replace '[^\x20-\x7E]', '?'
+    $safeBucket    = $bucket    -replace '[^\x20-\x7E]', '?'
+
+    try {
+        $headParams = @{ BucketName = $bucket; Key = $key; Credential = $Credential; Region = $Region; ErrorAction = 'Stop' }
+        if ($s3ReadObjectSupportsRequestPayer) { $headParams.RequestPayer = 'requester' }
+        $head = Invoke-AWSWithRetry -Context "HeadObject $safeBucket" -ScriptBlock {
+            Get-S3ObjectMetadata @headParams
+        }
+        # Capture BEFORE size guard — available on all early-return paths.
+        # AWS omits x-amz-storage-class header for Standard objects; keep as "".
+        $storageClass = if ($null -ne $head.StorageClass -and $head.StorageClass -ne "") {
+            [string]$head.StorageClass
+        } else { "" }
+        if ($head.ContentLength -gt 10MB) {
+            Write-Host "Skipping oversized metadata.json for table $safeTableName " `
+                       "($($head.ContentLength) bytes) in $safeBucket" -ForegroundColor Yellow
+            $r = $defaultResult.Clone()
+            $r.MetadataFileStorageClass = $storageClass
+            return $r
+        }
+    } catch {
+        # Use ErrorCode (SDK-controlled enum) not exception message (may contain customer data).
+        # ErrorCode = "PermanentRedirect" means cross-region bucket — emit a specific diagnostic.
+        $errCode = if ($_.Exception -is [Amazon.S3.AmazonS3Exception]) {
+            $_.Exception.ErrorCode
+        } else { $_.Exception.GetType().Name }
+        if ($errCode -eq 'PermanentRedirect') {
+            # Cross-region bucket: look up the correct region via GetBucketLocation
+            # (s3:GetBucketLocation is already in the IAM policy) and retry.
+            try {
+                $bucketRegion = (Get-S3BucketLocation -BucketName $bucket `
+                    -Credential $Credential -ErrorAction Stop).Value
+                if ([string]::IsNullOrWhiteSpace($bucketRegion)) { $bucketRegion = 'us-east-1' }
+                Write-Host "Cross-region bucket '$safeBucket' detected — retrying HeadObject in $bucketRegion" `
+                           -ForegroundColor Yellow
+                $headParams.Region = $bucketRegion
+                $head = Invoke-AWSWithRetry -Context "HeadObject-retry $safeBucket" -ScriptBlock {
+                    Get-S3ObjectMetadata @headParams
+                }
+                $storageClass = if ($null -ne $head.StorageClass -and $head.StorageClass -ne "") {
+                    [string]$head.StorageClass
+                } else { "" }
+                if ($head.ContentLength -gt 10MB) {
+                    Write-Host "Skipping oversized metadata.json for table $safeTableName " `
+                               "($($head.ContentLength) bytes) in $safeBucket" -ForegroundColor Yellow
+                    $r = $defaultResult.Clone(); $r.MetadataFileStorageClass = $storageClass; return $r
+                }
+                # Update getParams to use the correct region for the subsequent GetObject
+                $Region = $bucketRegion
+            } catch {
+                Write-Host "Failed to resolve cross-region bucket '$safeBucket' for table $safeTableName`: " `
+                           "$($_.Exception.GetType().Name)" -ForegroundColor Yellow
+                return $defaultResult
+            }
+        } else {
+            Write-Host "Failed HeadObject on metadata.json for table $safeTableName " `
+                       "in $safeBucket`: $errCode" -ForegroundColor Yellow
+            return $defaultResult
+        }
+    }
+
+    # Security note: TOCTOU accepted risk — GetTempFileName creates atomically but
+    # Read-S3Object re-opens by path. Assumed trusted single-user execution environment
+    # per StackSet-provisioned cross-account role threat model.
+    $tmpFile = $null
+    try {
+        $tmpFile = [System.IO.Path]::GetTempFileName()
+        # | Out-Null required: Read-S3Object -File emits FileInfo to pipeline, which
+        # would corrupt the function's return value (PS collects all pipeline output
+        # + explicit return into an array).
+        $getParams = @{ BucketName = $bucket; Key = $key; File = $tmpFile; Credential = $Credential; Region = $Region; ErrorAction = 'Stop' }
+        if ($s3ReadObjectSupportsRequestPayer) { $getParams.RequestPayer = 'requester' }
+        Invoke-AWSWithRetry -Context "GetObject $safeBucket" -ScriptBlock {
+            Read-S3Object @getParams
+        } | Out-Null
+        # No -Depth parameter: added in PS 7.1+; script supports PS 7.0+.
+        # Iceberg metadata.json is at most 5 levels deep; default depth is safe.
+        $meta = Get-Content -Raw $tmpFile | ConvertFrom-Json
+
+        # format-version is a root-level field, always present in valid metadata.json
+        if ($null -ne $meta.'format-version') {
+            $formatVersion = [int]$meta.'format-version'
+        }
+
+        # Snapshot ID comparison uses strings to avoid Double-precision loss on
+        # PS7 < 7.4 where large Int64 snapshot IDs are truncated to Double.
+        # current-snapshot-id = -1 is the V1 legacy sentinel for "no committed snapshot".
+        $currentIdStr = [string]$meta.'current-snapshot-id'
+        $snap = $meta.snapshots |
+            Where-Object { [string]$_.'snapshot-id' -eq $currentIdStr } |
+            Select-Object -First 1
+
+        if ($snap -and $snap.summary) {
+            # NOTE: total-files-size includes delete file bytes in V2 tables.
+            # This is "all tracked files", not "data files only".
+            $rawSize = $snap.summary.'total-files-size'
+            if (![string]::IsNullOrWhiteSpace([string]$rawSize)) {
+                $fileSizeBytes = [long]$rawSize
+            }
+            $rawDataFiles = $snap.summary.'total-data-files'
+            if (![string]::IsNullOrWhiteSpace([string]$rawDataFiles)) {
+                $dataFileCount = [long]$rawDataFiles
+            }
+            $rawDeleteFiles = $snap.summary.'total-delete-files'
+            if (![string]::IsNullOrWhiteSpace([string]$rawDeleteFiles)) {
+                $deleteFileCount = [long]$rawDeleteFiles
+            }
+            $rawManifests = $snap.summary.'total-manifests'
+            if (![string]::IsNullOrWhiteSpace([string]$rawManifests)) {
+                $manifestCount = [long]$rawManifests
+            }
+        }
+
+        # Fallback: parse manifest-list Avro when total-manifests is absent (e.g. Trino writer).
+        # The manifest-list path is in the current snapshot and is the authoritative source.
+        if ($null -eq $manifestCount -and
+            $null -ne $snap -and
+            ![string]::IsNullOrWhiteSpace($snap.'manifest-list')) {
+            $manifestCount = Read-IcebergManifestList `
+                -ManifestListPath $snap.'manifest-list' `
+                -Credential $Credential -Region $Region -TableName $TableName
+        }
+
+        if ($meta.properties) {
+            $rawMfSize = $meta.properties.'write.manifest-file-size-bytes'
+            if (![string]::IsNullOrWhiteSpace([string]$rawMfSize)) {
+                $targetManifestSize = [long]$rawMfSize
+            }
+        }
+
+        if ($null -ne $manifestCount) {
+            # Inner try: [long](<double product>) throws PSInvalidCastException when the
+            # product overflows Int64. Using the cast form (not [long]a * [long]b) because
+            # PS7 silently promotes the multiplication result to Double on overflow instead
+            # of throwing, making the cast the only reliable overflow guard.
+            try {
+                $manifestBytes = [long]($manifestCount * $targetManifestSize)
+            } catch {
+                $errCode2 = $_.Exception.GetType().Name
+                Write-Host "Arithmetic overflow computing ManifestBytesEstimate for table " `
+                           "$safeTableName`: $errCode2" -ForegroundColor Yellow
+                $manifestBytes = $null
+            }
+        }
+
+        # NOTE: 'replace' covers both RewriteManifests (metadata-only) and
+        # RewriteFiles/rewrite_data_files (data file compaction). These are
+        # indistinguishable via snapshot summary alone — CompactionEnabled = $true
+        # means at least one maintenance operation ran; it does not prove data
+        # file compaction ran specifically.
+        $compactionEnabled = [bool]($meta.snapshots | Where-Object {
+            $_.summary -and $_.summary.operation -eq 'replace'
+        } | Select-Object -First 1)
+
+    } catch {
+        $errCode = if ($_.Exception -is [Amazon.S3.AmazonS3Exception]) {
+            $_.Exception.ErrorCode
+        } else { $_.Exception.GetType().Name }
+        Write-Host "Failed to read/parse metadata.json for table $safeTableName " `
+                   "in $safeBucket`: $errCode" -ForegroundColor Yellow
+    } finally {
+        if ($null -ne $tmpFile) { Remove-Item $tmpFile -ErrorAction SilentlyContinue }
+    }
+
+    # Explicit return required. Without it, PS returns $null (implicit return =
+    # last pipeline expression; finally emits none).
+    return @{
+        FormatVersion            = $formatVersion
+        TotalFileSizeBytes       = $fileSizeBytes
+        DataFileCount            = $dataFileCount
+        TotalDeleteFileCount     = $deleteFileCount
+        ManifestCount            = $manifestCount
+        TargetManifestSizeBytes  = $targetManifestSize
+        ManifestBytesEstimate    = $manifestBytes
+        CompactionEnabled        = $compactionEnabled
+        MetadataFileStorageClass = $storageClass
+    }
+}
+
+function Get-AWSGlueIcebergInventory {
+    param(
+        $Credential,
+        [string]$Region,
+        $AccountInfo,
+        [string]$AccountAlias
+    )
+
+    # Known Limitations:
+    # 1. Lake Formation governance: GetTables returns only tables for which the calling
+    #    IAM principal has LF SELECT grants. Tables without grants are silently absent.
+    #    No IAM action can fix this — customers must grant the sizing role SELECT on
+    #    governed databases/tables via Lake Formation before running.
+    # 2. SSE-KMS encryption: s3:GetObject on SSE-KMS objects requires kms:Decrypt on the
+    #    CMK (both added to policy/CFT). Without kms:Decrypt, HeadObject succeeds but
+    #    GetObject fails with AccessDenied.
+    # 3. Cross-region S3 data: If metadata_location points to a bucket in a different
+    #    region, HeadObject returns PermanentRedirect. Detected via ErrorCode =
+    #    "PermanentRedirect" in the catch block; a specific warning is emitted.
+    # 4. Requester-pays buckets: Both S3 calls include -RequestPayer "requester". For
+    #    non-requester-pays buckets AWS ignores the header; for requester-pays it makes
+    #    the call succeed without customer action.
+    # 5. Cross-account S3 data (data mesh): If metadata_location URIs reference S3 in a
+    #    different AWS account, the bucket owner must add a bucket policy granting
+    #    s3:GetObject to the sizing role ARN — IAM policy alone is insufficient.
+    # 6. Performance at scale: Run from EC2 or CloudShell in the same region for large
+    #    table counts. A laptop over VPN can make 9.9 MB metadata reads take 20 s/table;
+    #    at 5,000 tables that is 27+ hours. Write-Progress every 50 tables signals liveness.
+
+    $result = New-Object collections.arraylist
+
+    $databases = New-Object collections.arraylist
+    try {
+        $dbToken = $null
+        do {
+            $dbParams = @{ Credential = $Credential; Region = $Region }
+            if ($dbToken) { $dbParams.NextToken = $dbToken }
+            $dbPage = Invoke-AWSWithRetry -Context "Get-GLUEDatabaseList-$Region" -ScriptBlock {
+                Get-GLUEDatabaseList @dbParams -ErrorAction Stop
+            }
+            # Get-GLUEDatabaseList auto-paginates and returns Database[] directly (not a
+            # response wrapper). $dbToken stays $null so the loop runs exactly once.
+            if ($dbPage) { [void]$databases.AddRange(@($dbPage)) }
+            $dbToken = $null
+        } while ($dbToken)
+    } catch {
+        Write-Host "Failed to get Glue database list for region $Region in account $($AccountInfo.Account)" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+    }
+
+    $tableCounter = 0
+
+    foreach ($database in $databases) {
+
+        $icebergTables = New-Object collections.arraylist
+        try {
+            $tblToken = $null
+            do {
+                $tblParams = @{ DatabaseName = $database.Name; Credential = $Credential; Region = $Region }
+                if ($tblToken) { $tblParams.NextToken = $tblToken }
+                $tblPage = Invoke-AWSWithRetry -Context "Get-GLUETableList-$($database.Name)" -ScriptBlock {
+                    Get-GLUETableList @tblParams -ErrorAction Stop
+                }
+                # Get-GLUETableList auto-paginates and returns Table[] directly.
+                $filtered = @($tblPage | Where-Object {
+                    $_.Parameters -and
+                    $_.Parameters['table_type'] -ieq 'iceberg'
+                })
+                if ($filtered) { [void]$icebergTables.AddRange($filtered) }
+                $tblToken = $null
+            } while ($tblToken)
+        } catch {
+            Write-Host "Failed to get Glue tables for database $($database.Name) in region $Region in account $($AccountInfo.Account)" -ForegroundColor Yellow
+            Write-Host "Error: $_" -ForegroundColor Yellow
+            continue
+        }
+
+        if ($icebergTables.Count -eq 0) {
+            Write-Host "Database '$($database.Name)' returned 0 Iceberg tables in region $Region. " `
+                       "If Lake Formation governance is enabled, grant the sizing role SELECT " `
+                       "access to this database." -ForegroundColor Yellow
+        }
+
+        foreach ($table in $icebergTables) {
+            $tableCounter++
+            if ($tableCounter % 50 -eq 0) {
+                Write-Progress -Activity "Get-AWSGlueIcebergInventory" `
+                    -Status "Processed $tableCounter Iceberg tables in region $Region" `
+                    -CurrentOperation "Table: $($table.Name)"
+            }
+
+            $s3Location  = if ($table.StorageDescriptor) { $table.StorageDescriptor.Location } else { "" }
+            $metadataLoc = if ($table.Parameters) { $table.Parameters['metadata_location'] } else { "" }
+
+            $enrichment = Read-IcebergMetadataJson -MetadataLocation $metadataLoc `
+                -Credential $Credential -Region $Region -TableName $table.Name
+            $dataSizes = if ($null -ne $enrichment.TotalFileSizeBytes) {
+                ConvertTo-SizeUnits -Value $enrichment.TotalFileSizeBytes -Prefix "TotalFileSize" -InputUnit Bytes
+            } else {
+                @{ TotalFileSizeGiB = $null; TotalFileSizeTiB = $null;
+                   TotalFileSizeGB  = $null; TotalFileSizeTB  = $null }
+            }
+
+            $s3BucketName = if ($s3Location -match '^s3://([^/]+)') { $Matches[1] } else { "" }
+
+            $glueObj = [PSCustomObject] @{
+                "AwsAccountId"             = $AccountInfo.Account
+                "AwsAccountAlias"          = $AccountAlias
+                "Region"                   = $Region
+                "CatalogType"              = "GlueDataCatalog"
+                "DatabaseName"             = $database.Name
+                "TableName"                = $table.Name
+                "S3BucketName"             = $s3BucketName
+                "TableType"                = "ICEBERG"
+                "S3Location"               = $s3Location
+                "MetadataLocation"         = $metadataLoc
+                "CreateTime"               = $table.CreateTime
+                "UpdateTime"               = $table.UpdateTime
+                "FormatVersion"            = $enrichment.FormatVersion
+                "TotalFileSizeBytes"       = $enrichment.TotalFileSizeBytes
+                "TotalFileSizeGiB"         = $dataSizes["TotalFileSizeGiB"]
+                "TotalFileSizeTiB"         = $dataSizes["TotalFileSizeTiB"]
+                "TotalFileSizeGB"          = $dataSizes["TotalFileSizeGB"]
+                "TotalFileSizeTB"          = $dataSizes["TotalFileSizeTB"]
+                "DataFileCount"            = $enrichment.DataFileCount
+                "TotalDeleteFileCount"     = $enrichment.TotalDeleteFileCount
+                "ManifestCount"            = $enrichment.ManifestCount
+                "TargetManifestSizeBytes"  = $enrichment.TargetManifestSizeBytes
+                "ManifestBytesEstimate"    = $enrichment.ManifestBytesEstimate
+                "CompactionEnabled"        = $enrichment.CompactionEnabled
+                "MetadataFileStorageClass" = $enrichment.MetadataFileStorageClass
+            }
+
+            $tableTags = @{}
+            try {
+                $tableArn = "arn:aws:glue:${Region}:$($AccountInfo.Account):table/$($database.Name)/$($table.Name)"
+                $tagsResult = Invoke-AWSWithRetry -Context "Get-GLUETag-$($database.Name)-$($table.Name)" -ScriptBlock {
+                    Get-GLUETag -ResourceArn $tableArn `
+                        -Credential $Credential -Region $Region -ErrorAction Stop
+                }
+                if ($null -ne $tagsResult) { $tableTags = $tagsResult }
+            } catch {
+                Write-Host "Failed to get tags for Glue table $($table.Name) in database $($database.Name) in region $Region" -ForegroundColor Yellow
+                Write-Host "Error: $_" -ForegroundColor Yellow
+            }
+            foreach ($tag in $tableTags.GetEnumerator()) {
+                $sanitizedKey = $tag.Key -replace '[^a-zA-Z0-9]', '_'
+                $glueObj | Add-Member -MemberType NoteProperty -Name "Tag: $sanitizedKey" `
+                                     -Value $tag.Value -Force
+            }
+
+            [void]$result.Add($glueObj)
+        }
+    }
+
+    Write-Progress -Activity "Get-AWSGlueIcebergInventory" -Completed
     return ,$result
 }
 
@@ -4582,6 +5238,13 @@ function getAWSData($cred) {
       foreach ($s3tItem in $s3TablesResult) { $s3TablesList.Add($s3tItem) | Out-Null }
     }
 
+    # Collect Glue Data Catalog Iceberg tables for this region.
+    $glueIcebergResult = Get-AWSGlueIcebergInventory -Credential $cred -Region $awsRegion `
+        -AccountInfo $awsAccountInfo -AccountAlias $awsAccountAlias
+    if ($null -ne $glueIcebergResult) {
+      foreach ($giItem in $glueIcebergResult) { $glueIcebergList.Add($giItem) | Out-Null }
+    }
+
     # Collect backup plan inventory for this region
     $backupPlanResult = Get-AWSBackupPlanInventory -Credential $cred -Region $awsRegion -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias -EC2List $ec2List -EC2UnattachedVolumesRaw $ec2UnattachedVolumesRaw `
@@ -4810,6 +5473,7 @@ $redshiftClusterList = New-Object collections.arraylist
 $eksNodeGroupList = New-Object collections.arraylist
 $eksList = New-Object collections.arraylist
 $s3TablesList = New-Object collections.arraylist
+$glueIcebergList = New-Object collections.arraylist
 
 try{
 if ($RegionToQuery) {
@@ -5149,6 +5813,59 @@ $rdsTotalBackupGiB = ($rdsInBackupPolicyList.sizeGiB | Measure-Object -Sum).sum
 $rdsTotalBackupTiB = ($rdsInBackupPolicyList.sizeTiB | Measure-Object -Sum).sum 
 $rdsTotalBackupGB = ($rdsInBackupPolicyList.sizeGB | Measure-Object -Sum).sum
 $rdsTotalBackupTB = ($rdsInBackupPolicyList.sizeTB | Measure-Object -Sum).sum
+
+# Subtract Glue Iceberg data bytes directly from the S3 bucket storage-class columns
+# so the same bytes are not counted in both the S3 and Glue Iceberg workloads.
+# Bytes are deducted from the largest storage class first and spill to the next
+# class if needed (e.g. a mixed bucket whose Iceberg files span multiple classes).
+$glueIcebergByBucket = @{}
+foreach ($giItem in $glueIcebergList) {
+    if (-not $giItem.S3Location) { continue }
+    if ($giItem.S3Location -match '^s3://([^/]+)') {
+        $bucketName = $Matches[1]
+        $bytes = if ($null -ne $giItem.TotalFileSizeBytes) { [double]$giItem.TotalFileSizeBytes } else { 0 }
+        $glueIcebergByBucket[$bucketName] = ($glueIcebergByBucket[$bucketName] ?? 0) + $bytes
+    }
+}
+foreach ($s3Item in $s3List) {
+    $remainingBytes = if ($glueIcebergByBucket.ContainsKey($s3Item.BucketName)) { $glueIcebergByBucket[$s3Item.BucketName] } else { 0 }
+    if ($remainingBytes -le 0) { continue }
+
+    # Sort storage-class _SizeBytes columns largest-first (excludes CurrentVersion variants).
+    $byteProps = $s3Item.PSObject.Properties |
+        Where-Object { $_.Name -like "*_SizeBytes" -and $_.Name -notlike "CurrentVersion*" -and $null -ne $_.Value } |
+        Sort-Object { [double]($_.Value) } -Descending
+
+    foreach ($bytesProp in $byteProps) {
+        if ($remainingBytes -le 0) { break }
+        $prefix       = $bytesProp.Name -replace '_SizeBytes$', ''
+        $currentBytes = [double]($bytesProp.Value ?? 0)
+        if ($currentBytes -le 0) { continue }
+
+        $deductBytes = [math]::min($currentBytes, $remainingBytes)
+        $newBytes    = [math]::max([double]0, $currentBytes - $deductBytes)
+
+        # Recompute all unit columns using the same formulas as Get-AWSS3Inventory.
+        $s3Item."${prefix}_SizeBytes" = $newBytes
+        $s3Item."${prefix}_SizeGB"    = [math]::round($newBytes / 1073741824,        3)
+        $s3Item."${prefix}_SizeTB"    = [math]::round($newBytes / 1073741824 / 1000, 4)
+        $s3Item."${prefix}_SizeGiB"   = [math]::round($newBytes / 1073741824,        3)
+        $s3Item."${prefix}_SizeTiB"   = [math]::round($newBytes / 1073741824 / 1024, 4)
+
+        $remainingBytes -= $deductBytes
+    }
+}
+
+# Stamp HasIcebergTable on every S3 bucket row so SEs can identify buckets that
+# back a Glue Iceberg table even when Iceberg was not initially in scope.
+$glueIcebergBucketSet = [System.Collections.Generic.HashSet[string]]::new(
+    [string[]]@($glueIcebergList | Where-Object { $_.S3BucketName } | ForEach-Object { $_.S3BucketName }),
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+foreach ($s3Item in $s3List) {
+    $hasIceberg = if ($glueIcebergBucketSet.Contains($s3Item.BucketName)) { "Yes" } else { "No" }
+    $s3Item | Add-Member -MemberType NoteProperty -Name "HasIcebergTable" -Value $hasIceberg -Force
+}
 
 # Grab only unique properties
 $s3Props = $s3List.ForEach{ $_.PSObject.Properties.Name } | Select-Object -Unique
@@ -5524,6 +6241,10 @@ Add-TagsToAllObjectsInList($s3TablesList)
 Write-Host "CSV file output to: $outputS3Tables" -ForegroundColor Green
 $s3TablesList | Export-CSV -path $outputS3Tables
 
+Add-TagsToAllObjectsInList($glueIcebergList)
+Write-Host "CSV file output to: $outputGlueIceberg" -ForegroundColor Green
+$glueIcebergList | Export-CSV -path $outputGlueIceberg
+
 Write-Host "CSV file output to: $outputSecrets"  -ForegroundColor Green
 $secretsList | Export-CSV -path $outputSecrets
 
@@ -5683,7 +6404,22 @@ Write-Host "Total # of SQS Queues: $($totalQueues)"  -ForegroundColor Green
 Write-Host
 Write-Host "Total # of DynamoDB Tables: $($ddbList.count)"  -ForegroundColor Green
 Write-Host "Total table size of all DynamoDB Tables: $ddbTotalGiB GiB or $ddbTotalGB GB or $ddbTotalTiB TiB or $ddbTotalTB TB"  -ForegroundColor Green
+
+Write-Host
 Write-Host "Total # of S3 Tables (Iceberg tables): $($s3TablesList.Count)" -ForegroundColor Green
+$s3TablesTotalGiB = [math]::round(($s3TablesList | Where-Object { $_.TotalFileSizeGiB } | Measure-Object -Property TotalFileSizeGiB -Sum).Sum, 4)
+$s3TablesTotalTiB = [math]::round(($s3TablesList | Where-Object { $_.TotalFileSizeTiB } | Measure-Object -Property TotalFileSizeTiB -Sum).Sum, 4)
+$s3TablesTotalGB  = [math]::round(($s3TablesList | Where-Object { $_.TotalFileSizeGB  } | Measure-Object -Property TotalFileSizeGB  -Sum).Sum, 4)
+$s3TablesTotalTB  = [math]::round(($s3TablesList | Where-Object { $_.TotalFileSizeTB  } | Measure-Object -Property TotalFileSizeTB  -Sum).Sum, 4)
+Write-Host "Total file size of all S3 Tables: $s3TablesTotalGiB GiB or $s3TablesTotalGB GB or $s3TablesTotalTiB TiB or $s3TablesTotalTB TB" -ForegroundColor Green
+
+Write-Host
+Write-Host "Total # of Glue Iceberg tables: $($glueIcebergList.Count)" -ForegroundColor Green
+$glueIcebergTotalGiB = [math]::round(($glueIcebergList | Where-Object { $_.TotalFileSizeGiB } | Measure-Object -Property TotalFileSizeGiB -Sum).Sum, 4)
+$glueIcebergTotalTiB = [math]::round(($glueIcebergList | Where-Object { $_.TotalFileSizeTiB } | Measure-Object -Property TotalFileSizeTiB -Sum).Sum, 4)
+$glueIcebergTotalGB  = [math]::round(($glueIcebergList | Where-Object { $_.TotalFileSizeGB  } | Measure-Object -Property TotalFileSizeGB  -Sum).Sum, 4)
+$glueIcebergTotalTB  = [math]::round(($glueIcebergList | Where-Object { $_.TotalFileSizeTB  } | Measure-Object -Property TotalFileSizeTB  -Sum).Sum, 4)
+Write-Host "Total file size of all Glue Iceberg tables: $glueIcebergTotalGiB GiB or $glueIcebergTotalGB GB or $glueIcebergTotalTiB TiB or $glueIcebergTotalTB TB" -ForegroundColor Green
 
 Write-Host
 Write-Host "Total # of S3 buckets: $($s3List.count)"  -ForegroundColor Green
