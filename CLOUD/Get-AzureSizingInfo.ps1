@@ -1000,8 +1000,8 @@ function Get-AzureBackupInventory {
   $costManagementQuery = $null
   $startDate = (Get-Date).AddMonths(-11)
   $endDate = (Get-Date)
-  $TimePeriodFrom = [datetime]::Parse($startDate)
-  $TimePeriodTo = [datetime]::Parse($endDate)
+  $TimePeriodFrom = $startDate
+  $TimePeriodTo = $endDate
   try{
     $dimensions = New-AzCostManagementQueryComparisonExpressionObject -Name 'ServiceName' -Value 'Backup'
     $filter = New-AzCostManagementQueryFilterObject -Dimensions $dimensions
