@@ -11,6 +11,11 @@
     - **User Account Activity**: Determines if user accounts are active, inactive, or have never been used, based on their last sign-in date. This helps in excluding dormant accounts from the count of active users.
     - **Service Account Identification**: Identifies user accounts that may be service accounts based on naming conventions.
     - **Application and Service Principal Inventory**: Provides a count of applications, service principals, and managed identities to help differentiate between human and non-human accounts.
+    - **Identity Type Classification**: Classifies each user into one of four identity types based on UserType, OnPremisesSyncEnabled, and CreationType:
+        - **Hybrid Member**: Member account synced from on-premises Active Directory (OnPremisesSyncEnabled = true).
+        - **Cloud Member**: Cloud-only member account (UserType = Member, not synced from AD, not CIAM).
+        - **B2B Guest**: External guest account invited via B2B collaboration (UserType = Guest, not CIAM).
+        - **CIAM**: Consumer identity from Entra External ID / Azure AD B2C (CreationType = LocalAccount).
     - **Ownership Information**: Optionally, the script can perform a deeper analysis to identify the owners of applications and service principals, which can further help in distinguishing human accounts.
     - **Reporting Modes**:
         - **Full**: A detailed report with information about each user account, as well as a summary by domain.
@@ -23,18 +28,19 @@
     ### Per-User Report (ByUser)
     - **Directory**: The domain associated with the user (resolved from mail, identities, or UPN for guests; from on-premises domain for synced users).
     - **User**: The user's account name (the part before @ in the UPN).
-    - **Guest**: 1 if the user is an external/guest identity (UserType = Guest), 0 otherwise.
-    - **Member**: 1 if the user is a member identity owned by this tenant (UserType = Member), 0 otherwise.
     - **Account Enabled**: 1 if the account is enabled in Entra ID, 0 if disabled.
     - **Account Disabled**: 1 if the account is disabled, 0 otherwise.
     - **Active Identity**: 1 if the user has signed in within the last 180 days, 0 otherwise. Disabled accounts are never marked active.
     - **Inactive Identity**: 1 if the user has not signed in within the inactivity period or has never signed in. Disabled accounts are never marked inactive (they are simply disabled).
     - **Never Logged In**: 1 if no sign-in activity has ever been recorded for this account, 0 otherwise.
     - **Service Account Pattern**: 1 if the user's UPN matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
-    - **Synch from AD**: 1 if the account is synchronized from on-premises Active Directory (OnPremisesSyncEnabled = true), 0 otherwise.
-    - **Cloud Only**: 1 if the account exists only in Entra ID (not synced from AD), 0 otherwise.
-    - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise.
+    - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account AND filter match AND not a duplicate), 0 otherwise.
+    - **Duplicate Identity**: 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses GivenName + Surname by default, or the attribute specified by -DeduplicateOn.
     - **Source AD**: The on-premises AD domain name for synced accounts, N/A for cloud-only accounts.
+    - **Hybrid Member**: 1 if the user is a member synced from on-premises AD (OnPremisesSyncEnabled = true), 0 otherwise.
+    - **Cloud Member**: 1 if the user is a cloud-only member (UserType = Member, not synced from AD, not CIAM), 0 otherwise.
+    - **B2B Guest**: 1 if the user is an external B2B guest (UserType = Guest, not CIAM), 0 otherwise.
+    - **CIAM**: 1 if the user is a CIAM/consumer identity (CreationType = LocalAccount), 0 otherwise.
     - **App owned by User** (only with -CheckOwnership): Number of Entra ID application registrations owned by this user.
     - **SP owned by User** (only with -CheckOwnership): Number of service principals (enterprise apps) owned by this user.
     - **Managed Identity** (only with -CheckOwnership): Number of managed identities owned by this user.
@@ -42,24 +48,28 @@
     ### Per-Domain Report (ByDomain)
     - **Directory**: The domain name.
     - **Total Users**: Total number of user accounts associated with this domain.
-    - **Guest Users**: Number of guest/external accounts.
-    - **Member Users**: Number of member accounts.
     - **Account Enabled**: Number of enabled accounts.
     - **Account Disabled**: Number of disabled accounts.
     - **Active Identity**: Number of users who signed in within the inactivity period.
     - **Inactive Identity**: Number of users who have not signed in within the inactivity period.
     - **Never Logged In Users**: Number of accounts with no recorded sign-in.
     - **Service Account Pattern**: Number of accounts matching the service account naming patterns.
-    - **Synch from AD**: Number of accounts synchronized from on-premises AD.
-    - **Cloud Only**: Number of cloud-only accounts.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account).
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account + filter match + not duplicate).
     - **Source AD**: Number of distinct on-premises AD source domains for synced accounts.
+    - **Hybrid Members**: Number of member accounts synced from on-premises AD.
+    - **Cloud Members**: Number of cloud-only member accounts.
+    - **B2B Guests**: Number of external B2B guest accounts.
+    - **CIAM Users**: Number of CIAM/consumer identity accounts.
     - **Applications**: Number of Entra ID application registrations published under this domain.
     - **Service Principals**: Number of service principals (enterprise apps) associated with this domain.
     - **Managed Identities**: Number of managed identities associated with this domain.
     ### Licensing Report
     - **Directory**: The domain name.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match.
+    - **Licensed Identities**: Total number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match + Filter match + Not a duplicate.
+    - **Licensed Hybrid Members**: Number of licensed hybrid (AD-synced) member identities.
+    - **Licensed Cloud Members**: Number of licensed cloud-only member identities.
+    - **Licensed B2B Guests**: Number of licensed B2B guest identities.
+    - **Licensed CIAM**: Number of licensed CIAM/consumer identities.
 
 .PARAMETER UserServiceAccountNamesLike
     This is an optional parameter that allows you to identify service accounts based on their User Principal Name (UPN). You can provide a list of wildcard patterns, and any user account with a UPN matching one of these patterns will be flagged as a service account in the report.
@@ -77,6 +87,20 @@
     This is an optional switch parameter. If you include this parameter, the script will perform additional queries to determine the owners of applications and service principals. This provides more detailed information but can increase the script's execution time.
 
     Example: -CheckOwnership
+
+.PARAMETER FilterAttribute
+    The name of a user attribute to use for filtering (e.g., "onPremisesExtensionAttributes.extensionAttribute6"). Supports dot notation for nested properties. When specified together with -FilterValue, only users whose attribute value matches the filter are counted as Licensed Identities. The required Graph property is automatically added to the query.
+
+.PARAMETER FilterValue
+    The value to match against the attribute specified by -FilterAttribute. Must be used together with -FilterAttribute.
+
+.PARAMETER FilterDelimiter
+    A delimiter character used to split the attribute value into segments before matching. Without a delimiter, the match is a case-insensitive substring (contains). With a delimiter, each segment is compared for an exact case-insensitive match.
+
+    Example: -FilterAttribute "onPremisesExtensionAttributes.extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#"
+
+.PARAMETER DeduplicateOn
+    An alternative attribute to use as the deduplication key (e.g., "Mail", "EmployeeID"). By default, deduplication uses GivenName + Surname (both must be present). When a user's deduplication key has already been seen, the account is marked as a duplicate and not counted as a Licensed Identity. Accounts with a null or empty key are never deduplicated.
 
 .EXAMPLE
     Example 1: Perform a full audit with ownership checking
@@ -100,6 +124,26 @@
     - Identify inactive users based on their last sign-in date.
     - Save the reports in both CSV and HTML format in the .\EntraReports directory.
 
+.EXAMPLE
+    Example 3: Filter users based on a nested attribute with a delimiter.
+
+    .\Get-EntraHumanIdentity.ps1 -FilterAttribute "onPremisesExtensionAttributes.extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#" -Mode Full
+
+    This command will:
+    - Generate a detailed report for all users.
+    - Only count users whose extensionAttribute6 contains the exact segment "Person" (split by "#") as Licensed Identities.
+    - Add an "Attribute Filter Match" column to the per-user report.
+
+.EXAMPLE
+    Example 4: Override the deduplication key with email.
+
+    .\Get-EntraHumanIdentity.ps1 -DeduplicateOn "Mail" -Mode Full
+
+    This command will:
+    - Generate a detailed report for all users.
+    - Deduplicate users based on their Mail attribute instead of first name + last name.
+    - Mark duplicate accounts with "Duplicate Identity" = 1 and exclude them from the Licensed Identity count.
+
 .NOTES
     Author: Aymeric Jaouen
 
@@ -115,8 +159,27 @@ param (
     [ValidateSet("Summary", "Full")]
     [string]$Mode = "Full",
     [int]$DaysInactive = 180,
-    [switch]$CheckOwnership
+    [switch]$CheckOwnership,
+    [string]$FilterAttribute,
+    [string]$FilterValue,
+    [string]$FilterDelimiter,
+    [string]$DeduplicateOn
 )
+
+# === FilterAttribute Validation ===
+if ($FilterAttribute -and -not $FilterValue) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterValue -and -not $FilterAttribute) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterDelimiter -and -not $FilterAttribute) {
+    Write-Error "-FilterDelimiter requires -FilterAttribute and -FilterValue."
+    exit 1
+}
+$useAttributeFilter = [bool]$FilterAttribute
 
 # === Global Variables and Logging Setup ===
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -209,10 +272,22 @@ function Connect-EntraGraph {
 
     Write-Log "Connecting to Microsoft Graph" "INFO" "Cyan"
 
+    $requiredScopes = @("User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All")
+
     try {
-        if (-not (Get-MgContext)) {
-            #Write-Log "Connecting to Microsoft Graph..." "INFO" "Green"
-            Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All", "Application.Read.All", "AuditLog.Read.All"
+        $ctx = Get-MgContext
+        if ($ctx) {
+            $grantedScopes = $ctx.Scopes
+            $missingScopes = $requiredScopes | Where-Object { $_ -notin $grantedScopes }
+            if ($missingScopes) {
+                Write-Log "Existing session is missing scopes: $($missingScopes -join ', '). Reconnecting..." "WARNING" "Yellow"
+                Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+                $ctx = $null
+            }
+        }
+
+        if (-not $ctx) {
+            Connect-MgGraph -Scopes $requiredScopes
         }
 
         if (-not (Get-MgContext)) {
@@ -226,9 +301,8 @@ function Connect-EntraGraph {
     }
 }
 
-# Run Initialization and Connection
+# Run Initialization
 Initialize-EntraPrerequisites
-Connect-EntraGraph
 
 #————————————————————————————————————————
 # 1. HEADERS
@@ -239,7 +313,9 @@ function Get-ReportHeaders {
         [ValidateSet('ByUser', 'ByDomain', 'Licensing')]
         [string] $Type,
         [Parameter()]
-        [switch] $CheckOwnership
+        [switch] $CheckOwnership,
+        [Parameter()]
+        [switch] $UseAttributeFilter
     )
 
     switch ($Type) {
@@ -247,20 +323,24 @@ function Get-ReportHeaders {
             $baseHeaders = [ordered]@{
                 Directory               = 'Directory'
                 User                    = 'User'
-                GuestAccount            = 'Guest'
-                MemberAccount           = 'Member'
                 AccountEnabled          = 'Account Enabled'
                 DisabledUser            = 'Account Disabled'
                 ActiveUser              = 'Active Identity'
                 InactiveUser            = 'Inactive Identity'
                 NeverLoggedInUser       = 'Never Logged In'
                 PatternMatchedUser      = 'Service Account Pattern'
-                SyncFromAD              = 'Synch from AD'
-                CloudOnly               = 'Cloud Only'
                 LicensedIdentity        = 'Licensed Identity'
+                IsDuplicate             = 'Duplicate Identity'
                 ADSourceDomain          = 'Source AD'
+                HybridMember            = 'Hybrid Member'
+                CloudMember             = 'Cloud Member'
+                B2BGuest                = 'B2B Guest'
+                CIAM                    = 'CIAM'
             }
 
+            if ($UseAttributeFilter) {
+                $baseHeaders['FilterMatch'] = 'Attribute Filter Match'
+            }
             if ($CheckOwnership) {
                 $baseHeaders['OwnedAppsCount']          = 'App owned by User'
                 $baseHeaders['EnterpriseAppsCount']     = 'SP owned by User'
@@ -271,8 +351,12 @@ function Get-ReportHeaders {
 
         'Licensing' {
             return [PSCustomObject]@{
-                Domain             = 'Directory'
-                LicensedIdentities = 'Licensed Identities'
+                Domain                = 'Directory'
+                LicensedIdentities    = 'Licensed Identities'
+                LicensedHybridMembers = 'Licensed Hybrid Members'
+                LicensedCloudMembers  = 'Licensed Cloud Members'
+                LicensedB2BGuests     = 'Licensed B2B Guests'
+                LicensedCIAMs         = 'Licensed CIAM'
             }
         }
 
@@ -280,18 +364,18 @@ function Get-ReportHeaders {
             return [PSCustomObject]@{
                 Domain                        = 'Directory'
                 TotalUsers                    = 'Total Users'
-                GuestUsers                    = 'Guest Users'
-                MemberUsers                   = 'Member Users'
                 AccountEnabledCount           = 'Account Enabled'
                 DisabledUsers                 = 'Account Disabled'
                 ActiveUsers                   = 'Active Identity'
                 InactiveUsers                 = 'Inactive Identity'
                 NeverLoggedInUsers            = 'Never Logged In Users'
                 PatternMatchedUsers           = 'Service Account Pattern'
-                SyncFromADCount               = 'Synch from AD'
-                CloudOnlyCount                = 'Cloud Only'
                 LicensedIdentities            = 'Licensed Identities'
                 ADSourceDomainCounts          = 'Source AD'
+                HybridMemberCount             = 'Hybrid Members'
+                CloudMemberCount              = 'Cloud Members'
+                B2BGuestCount                 = 'B2B Guests'
+                CIAMCount                     = 'CIAM Users'
                 DomainApplicationsCount       = 'Applications'
                 DomainServicePrincipalCount   = 'Service Principals'
                 DomainManagedIdentitiesCount  = 'Managed Identities'
@@ -303,6 +387,40 @@ function Get-ReportHeaders {
 #-------------------------------------------------------------------
 # Helpers
 #-------------------------------------------------------------------
+function Get-NestedProperty {
+    param($Object, [string]$Path)
+    $current = $Object
+    foreach ($part in $Path.Split('.')) {
+        if ($null -eq $current) { return $null }
+        $current = $current.$part
+    }
+    return $current
+}
+
+function Test-FilterMatch {
+    param([string]$AttributeValue, [string]$FilterValue, [string]$Delimiter)
+    if ([string]::IsNullOrEmpty($AttributeValue)) { return $false }
+    if ($Delimiter) {
+        $segments = $AttributeValue.Split($Delimiter)
+        return [bool]($segments | Where-Object { $_ -ieq $FilterValue })
+    } else {
+        return $AttributeValue.IndexOf($FilterValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+}
+
+function Get-DeduplicateKey {
+    param($User, [string]$DeduplicateOn, [string]$FirstNameProp, [string]$LastNameProp)
+    if ($DeduplicateOn) {
+        $val = Get-NestedProperty $User $DeduplicateOn
+        if ($val) { return $val.ToString().Trim().ToLowerInvariant() }
+        return $null
+    }
+    $fn = Get-NestedProperty $User $FirstNameProp
+    $ln = Get-NestedProperty $User $LastNameProp
+    if ($fn -and $ln) { return "$($fn.ToString().Trim()) $($ln.ToString().Trim())".ToLowerInvariant() }
+    return $null
+}
+
 function Get-DomainFromValue {
     param([string]$Value)
 
@@ -374,13 +492,26 @@ function Get-ByUserData {
         Write-Verbose "Inactivity cutoff date: $cutoff"
 
         $output = [System.Collections.Generic.List[object]]::new()
+        $seenKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $duplicateCount = 0
     }
 
     process {
         Write-Log "Retrieving users from Entra ID..." "INFO" "Cyan"
+        $graphProperties = @('Id','UserPrincipalName','Mail','OtherMails','Identities','UserType','AccountEnabled','SignInActivity','OnPremisesSyncEnabled','OnPremisesDomainName','CreationType','GivenName','Surname')
+        if ($DeduplicateOn) {
+            $dedupProp = $DeduplicateOn.Split('.')[0]
+            if ($graphProperties -notcontains $dedupProp) { $graphProperties += $dedupProp }
+        }
+        if ($useAttributeFilter) {
+            $graphProp = $FilterAttribute.Split('.')[0]
+            if ($graphProperties -notcontains $graphProp) {
+                $graphProperties += $graphProp
+            }
+            Write-Log "Filter active: attribute '$FilterAttribute' contains '$FilterValue' (delimiter: $(if ($FilterDelimiter) { "'$FilterDelimiter'" } else { 'none' }))" "INFO" "Cyan"
+        }
         $users = Get-MgUser -All -PageSize 999 `
-            -Property Id,UserPrincipalName,Mail,OtherMails,Identities,UserType,AccountEnabled,SignInActivity, `
-                      OnPremisesSyncEnabled,OnPremisesDomainName `
+            -Property $graphProperties `
             -ErrorAction Stop
         Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
 
@@ -468,43 +599,67 @@ function Get-ByUserData {
                 }
             }
 
-            $syncFromAD = [bool]$u.OnPremisesSyncEnabled
-            $cloudOnly  = [int](-not $syncFromAD)
-            $adSourceDomain = if ($syncFromAD -and -not [string]::IsNullOrWhiteSpace($u.OnPremisesDomainName)) {
+            $isSyncedFromAD = [bool]$u.OnPremisesSyncEnabled
+            $adSourceDomain = if ($isSyncedFromAD -and -not [string]::IsNullOrWhiteSpace($u.OnPremisesDomainName)) {
                 $u.OnPremisesDomainName.ToLowerInvariant()
             } else {
                 'N/A'
             }
 
-            $ownedCount      = $appOwners[$u.Id]      ?? 0
-            $enterpriseCount = $spAppOwners[$u.Id]    ?? 0
-            $miCount         = $spMiOwners[$u.Id]     ?? 0
+            $isHybridMember = $isSyncedFromAD
+            $isCIAM         = (-not $isSyncedFromAD) -and ($u.CreationType -eq 'LocalAccount')
+            $isB2BGuest     = (-not $isSyncedFromAD) -and (-not $isCIAM) -and $isGuest
+            $isCloudMember  = (-not $isSyncedFromAD) -and (-not $isCIAM) -and $isMember
 
-            $output.Add([PSCustomObject]@{
+            $filterMatch = if ($useAttributeFilter) {
+                $attrVal = Get-NestedProperty $u $FilterAttribute
+                Test-FilterMatch -AttributeValue "$attrVal" -FilterValue $FilterValue -Delimiter $FilterDelimiter
+            } else { $true }
+
+            $wouldBeLicensed = $isMember -and $isEnabled -and $isActive -and -not $patternMatched -and $filterMatch
+            $isDuplicate = $false
+            if ($wouldBeLicensed) {
+                $dedupKey = Get-DeduplicateKey -User $u -DeduplicateOn $DeduplicateOn -FirstNameProp 'GivenName' -LastNameProp 'Surname'
+                if ($dedupKey -and -not $seenKeys.Add($dedupKey)) {
+                    $isDuplicate = $true
+                    $duplicateCount++
+                }
+            }
+
+            $record = [ordered]@{
                 Directory               = $directory
                 User                    = $user
-                GuestAccount            = [int]$isGuest
-                MemberAccount           = [int]$isMember
                 AccountEnabled          = [int]$isEnabled
                 DisabledUser            = [int](-not $isEnabled)
                 ActiveUser              = [int]$isActive
                 InactiveUser            = [int]$isInactive
                 NeverLoggedInUser       = [int]$isNeverLoggedIn
                 PatternMatchedUser      = [int]$patternMatched
-                SyncFromAD              = [int]$syncFromAD
-                CloudOnly               = $cloudOnly
-                LicensedIdentity        = [int]($isMember -and $isEnabled -and $isActive -and -not $patternMatched)
+                HybridMember            = [int]$isHybridMember
+                CloudMember             = [int]$isCloudMember
+                B2BGuest                = [int]$isB2BGuest
+                CIAM                    = [int]$isCIAM
+                LicensedIdentity        = [int]($wouldBeLicensed -and -not $isDuplicate)
+                IsDuplicate             = [int]$isDuplicate
                 ADSourceDomain          = $adSourceDomain
-                OwnedAppsCount          = $ownedCount
-                EnterpriseAppsCount     = $enterpriseCount
-                ManagedIdentitiesCount  = $miCount
-            })
+            }
+            if ($useAttributeFilter) {
+                $record['FilterMatch'] = [int]$filterMatch
+            }
+            if ($CheckOwnership) {
+                $record['OwnedAppsCount']         = $appOwners[$u.Id]   ?? 0
+                $record['EnterpriseAppsCount']     = $spAppOwners[$u.Id] ?? 0
+                $record['ManagedIdentitiesCount']  = $spMiOwners[$u.Id]  ?? 0
+            }
+            $output.Add([PSCustomObject]$record)
         }
     }
 
     end {
         Write-Verbose "Built $($output.Count) user records. Calculating totals..."
         Write-Log "Successfully built $($output.Count) user records." "INFO" "Green"
+        $licensedCount = ($output | Where-Object { $_.LicensedIdentity -eq 1 }).Count
+        Write-Log "Deduplication: $($seenKeys.Count) unique identities from $($licensedCount + $duplicateCount) licensed accounts ($duplicateCount duplicates removed)." "INFO" "Cyan"
 
         # Build a grand-total row
         $totals = [ordered]@{ Directory = "TOTAL"; User = "" }
@@ -538,20 +693,20 @@ function Get-ByDomainData {
     [object[]] $ManagedIdentities = @(),
 
     [Parameter(Mandatory)]
-    [Hashtable] $AppDomainMap
+    [Hashtable] $AppDomainMap,
+
+    [Parameter(Mandatory)]
+    [object] $Organization
   )
 
   begin {
     $rows = [System.Collections.Generic.List[object]]::new()
 
-    # Grab your tenant GUID and all verified domains
-    $org = Get-MgOrganization -ErrorAction Stop
-    $tenantId = $org.Id
+    $tenantId = $Organization.Id
 
-    # Build a map: domainName -> tenantId
     $domainTenantMap = @{}
     $verifiedDomains = @()
-    foreach ($vd in $org.VerifiedDomains) {
+    foreach ($vd in $Organization.VerifiedDomains) {
       $domainTenantMap[$vd.Name] = $tenantId
       $verifiedDomains += $vd.Name
     }
@@ -582,22 +737,26 @@ function Get-ByDomainData {
         $rows.Add([PSCustomObject]@{
           Domain = $domain
           TotalUsers = $grpUsers.Count
-          GuestUsers = ($grpUsers | Where-Object { $_.GuestAccount -eq 1 }).Count
-          MemberUsers = ($grpUsers | Where-Object { $_.MemberAccount -eq 1 }).Count
           AccountEnabledCount = ($grpUsers | Where-Object { $_.AccountEnabled -eq 1 }).Count
           DisabledUsers = ($grpUsers | Where-Object { $_.DisabledUser -eq 1 }).Count
           ActiveUsers = ($grpUsers | Where-Object { $_.ActiveUser -eq 1 }).Count
           InactiveUsers = ($grpUsers | Where-Object { $_.InactiveUser -eq 1 }).Count
           NeverLoggedInUsers = ($grpUsers | Where-Object { $_.NeverLoggedInUser -eq 1 }).Count
           PatternMatchedUsers = ($grpUsers | Where-Object { $_.PatternMatchedUser -eq 1 }).Count
-          SyncFromADCount = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
-          CloudOnlyCount = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
           LicensedIdentities = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
           ADSourceDomainCounts = @(
             $grpUsers |
-            Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
+            Where-Object { $_.HybridMember -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
             Select-Object -ExpandProperty ADSourceDomain -Unique
           ).Count
+          HybridMemberCount = ($grpUsers | Where-Object { $_.HybridMember -eq 1 }).Count
+          CloudMemberCount = ($grpUsers | Where-Object { $_.CloudMember -eq 1 }).Count
+          B2BGuestCount = ($grpUsers | Where-Object { $_.B2BGuest -eq 1 }).Count
+          CIAMCount = ($grpUsers | Where-Object { $_.CIAM -eq 1 }).Count
+          LicensedHybridMembers = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.HybridMember -eq 1 }).Count
+          LicensedCloudMembers = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.CloudMember -eq 1 }).Count
+          LicensedB2BGuests = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.B2BGuest -eq 1 }).Count
+          LicensedCIAMs = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 -and $_.CIAM -eq 1 }).Count
           DomainApplicationsCount = $domainAppsCount
           DomainServicePrincipalCount = $tenantAppsCount
           DomainManagedIdentitiesCount = $tenantMIsCount
@@ -620,18 +779,22 @@ function Get-ByDomainData {
     $rows.Add([PSCustomObject]@{
       Domain = "Service Principals from other Domains"
       TotalUsers = 0
-      GuestUsers = 0
-      MemberUsers = 0
       AccountEnabledCount = 0
       DisabledUsers = 0
       ActiveUsers = 0
       InactiveUsers = 0
       NeverLoggedInUsers = 0
       PatternMatchedUsers = 0
-      SyncFromADCount = 0
-      CloudOnlyCount = 0
       LicensedIdentities = 0
       ADSourceDomainCounts = 0
+      HybridMemberCount = 0
+      CloudMemberCount = 0
+      B2BGuestCount = 0
+      CIAMCount = 0
+      LicensedHybridMembers = 0
+      LicensedCloudMembers = 0
+      LicensedB2BGuests = 0
+      LicensedCIAMs = 0
       DomainApplicationsCount = $otherApps.Count
       DomainServicePrincipalCount = ($otherSPs | Where-Object ServicePrincipalType -eq 'Application').Count
       DomainManagedIdentitiesCount = $otherMIs.Count
@@ -746,19 +909,20 @@ function Export-HtmlReport {
 </svg>
 "@
 
-            $html = "<div class='table-header'>"
-            $html += "<div class='table-header-logo'>$svgContent</div>"
-            $html += "<h2>$TableTitle</h2>"
-            $html += "</div>"
-            $html += "<div class='table-scroll'><table>"
+            $sb = [System.Text.StringBuilder]::new()
+            [void]$sb.Append("<div class='table-header'>")
+            [void]$sb.Append("<div class='table-header-logo'>$svgContent</div>")
+            [void]$sb.Append("<h2>$TableTitle</h2>")
+            [void]$sb.Append("</div>")
+            [void]$sb.Append("<div class='table-scroll'><table>")
 
-            $html += '<thead><tr>'
+            [void]$sb.Append('<thead><tr>')
             foreach ($header in $TableColumns.PSObject.Properties.Value) {
                 $safeHeader = [System.Net.WebUtility]::HtmlEncode($header)
-                $html += "<th>$safeHeader</th>"
+                [void]$sb.Append("<th>$safeHeader</th>")
             }
-            $html += '</tr></thead>'
-            $html += '<tbody>'
+            [void]$sb.Append('</tr></thead>')
+            [void]$sb.Append('<tbody>')
 
             foreach ($row in $TableData) {
                 $isTotalRow = ($row.Directory -eq 'TOTAL' -or $row.Domain -eq 'TOTAL')
@@ -767,17 +931,17 @@ function Export-HtmlReport {
                 if ($isTotalRow) {
                     $rowClass = ' class="total"'
                 }
-                $html += "<tr$rowClass>"
+                [void]$sb.Append("<tr$rowClass>")
 
                 foreach ($colName in $TableColumns.PSObject.Properties.Name) {
                     $value = [System.Net.WebUtility]::HtmlEncode("$($row."$colName")")
-                    $html += "<td>$value</td>"
+                    [void]$sb.Append("<td>$value</td>")
                 }
-                $html += '</tr>'
+                [void]$sb.Append('</tr>')
             }
 
-            $html += '</tbody></table></div>'
-            return $html
+            [void]$sb.Append('</tbody></table></div>')
+            return $sb.ToString()
         }
 
         $base64DataUri = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjM4IiB2aWV3Qm94PSIwIDAgMTIwIDM4IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTk1LjczMzMgMTIuNjkyMkM5NC4zMzE1IDEyLjY5MjIgOTMuNjk5NCAxMy4wOTcxIDkyLjQwMTggMTQuNzE3VjE0LjAxNzZDOTIuNDAxOCAxMy4xNzA2IDkyLjI5NjQgMTMuMDYwNiA5MS40ODk3IDEzLjA2MDZIOTAuODI0MkM5MC4wMTc2IDEzLjA2MDYgODkuOTEyMSAxMy4xNzA2IDg5LjkxMjEgMTQuMDE3NlYyNy4zNzc3Qzg5LjkxMjEgMjguMjI0NyA5MC4wMTc2IDI4LjMzNDcgOTAuODI0MiAyOC4zMzQ3SDkxLjQ4OTdDOTIuMjk2NCAyOC4zMzQ3IDkyLjQwMTggMjguMjI0NyA5Mi40MDE4IDI3LjM3NzdWMjAuMjc0MkM5Mi40MDE4IDE4LjQzMzggOTIuNTc3NiAxNy4zMzAzIDkyLjk2MyAxNi41OTQzQzkzLjQ5NTggMTUuNTc4IDk0LjY1NTggMTUuMDY4NyA5NS43Mjg1IDE1LjIyNTlDOTUuOTc4OCAxNS4yNjE5IDk2LjIgMTUuMzUwNCA5Ni40MzgyIDE1LjQzNDVDOTYuNTI2NyAxNS40NjUzIDk2LjYyODUgMTUuNDg4NiA5Ni43MTY0IDE1LjQ0ODVDOTYuODA2MSAxNS40MDcyIDk2Ljg3NjQgMTUuMzMyOCA5Ni45MzUyIDE1LjI1MjdDOTcuMDc3NiAxNS4wNjEyIDk3LjE2OTcgMTQuODMwMSA5Ny4yNzgyIDE0LjYxNjZDOTcuMzQ3MyAxNC40NzkzIDk3LjQxNjQgMTQuMzQyIDk3LjQ4NjcgMTQuMjAxMUM5Ny42Mjg1IDEzLjkwNjYgOTcuNzMzMyAxMy42ODYxIDk3LjczMzMgMTMuNTc2Qzk3Ljc2NzMgMTMuMDk3MSA5Ni44MjEyIDEyLjY5MjIgOTUuNzMzMyAxMi42OTIyWiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTUxLjQxNzIgMTIuNjkyMkM1MC4wMTUyIDEyLjY5MjIgNDkuMzgzMSAxMy4wOTcxIDQ4LjA4NTggMTQuNzE3VjE0LjAxNzZDNDguMDg1OCAxMy4xNzA2IDQ3Ljk4MDYgMTMuMDYwNiA0Ny4xNzM2IDEzLjA2MDZINDYuNTA3NUM0NS43MDA2IDEzLjA2MDYgNDUuNTk1NyAxMy4xNzA2IDQ1LjU5NTcgMTQuMDE3NlYyNy4zNzc3QzQ1LjU5NTcgMjguMjI0NyA0NS43MDA2IDI4LjMzNDcgNDYuNTA3NSAyOC4zMzQ3SDQ3LjE3MzZDNDcuOTgwNiAyOC4zMzQ3IDQ4LjA4NTggMjguMjI0NyA0OC4wODU4IDI3LjM3NzdWMjAuMjc0MkM0OC4wODU4IDE4LjQzMzggNDguMjYwNyAxNy4zMzAzIDQ4LjY0NjYgMTYuNTk0M0M0OS4xNzg4IDE1LjU3OCA1MC4zMzkzIDE1LjA2ODcgNTEuNDExOCAxNS4yMjU5QzUxLjY2MTggMTUuMjYxOSA1MS44ODM2IDE1LjM1MDQgNTIuMTIxNSAxNS40MzQ1QzUyLjIwOTUgMTUuNDY1MyA1Mi4zMTE1IDE1LjQ4ODYgNTIuMzk5NSAxNS40NDg1QzUyLjQ4ODkgMTUuNDA3MiA1Mi41NTk4IDE1LjMzMjggNTIuNjE4NSAxNS4yNTI3QzUyLjc2MSAxNS4wNjEyIDUyLjg1MzMgMTQuODMwMSA1Mi45NjEyIDE0LjYxNjZDNTMuMDMwMyAxNC40NzkzIDUzLjA5OTkgMTQuMzQyIDUzLjE3MDQgMTQuMjAxMUM1My4zMTEzIDEzLjkwNjYgNTMuNDE2MiAxMy42ODYxIDUzLjQxNjIgMTMuNTc2QzUzLjQ1MTQgMTMuMDk3MSA1Mi41MDQ0IDEyLjY5MjIgNTEuNDE3MiAxMi42OTIyWiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTU4LjYzMDIgMjEuOTY2OUM1OC42MzAyIDIzLjQwMTkgNTguNzcwNyAyNC4xNzU3IDU5LjA4NTcgMjQuODM4MkM1OS41NzY0IDI1Ljc5NTUgNjAuNjYzOCAyNi4zODQxIDYxLjkyNjMgMjYuMzg0MUM2My4xNTM1IDI2LjM4NDEgNjQuMjQwOCAyNS43OTU1IDY0LjczMjMgMjQuODM4MkM2NS4wNDc1IDI0LjE3NTcgNjUuMTg4MSAyMy40MDE5IDY1LjE4ODEgMjEuOTY2OVYxNC4wMTczQzY1LjE4ODEgMTMuMTcwNCA2NS4yOTM1IDEzLjA2MDQgNjYuMTAwMiAxMy4wNjA0SDY2Ljc2NjNDNjcuNTcyOSAxMy4wNjA0IDY3LjY3NzggMTMuMTcwNCA2Ny42Nzc4IDE0LjAxNzNWMjIuMjYxNEM2Ny42Nzc4IDI0LjUwNzIgNjcuMzI3NSAyNS43MjE2IDY2LjM0NTcgMjYuODYyMUM2NS4yOTM1IDI4LjExMzkgNjMuNzE0OCAyOC43NzU1IDYxLjkyNjMgMjguNzc1NUM2MC4xMDI0IDI4Ljc3NTUgNTguNTI1NCAyOC4xMTM5IDU3LjQ3MyAyNi44NjIxQzU2LjQ5MDcgMjUuNzIxNiA1Ni4xNDAxIDI0LjUwNzIgNTYuMTQwMSAyMi4yNjE0VjE0LjAxNzNDNTYuMTQwMSAxMy4xNzA0IDU2LjI0NSAxMy4wNjA0IDU3LjA1MiAxMy4wNjA0SDU3LjcxOEM1OC41MjU0IDEzLjA2MDQgNTguNjMwMiAxMy4xNzA0IDU4LjYzMDIgMTQuMDE3M1YyMS45NjY5WiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTc0LjA3NiAyMC42NzkxQzc0LjA3NiAyNC4wNjU4IDc2LjA3NiAyNi4zODQ3IDc4Ljk1MTggMjYuMzg0N0M4MS43MjIxIDI2LjM4NDcgODMuNzIwOSAyMy45NTQ5IDgzLjcyMDkgMjAuNjA1NkM4My43MjA5IDE3LjUxNDIgODEuNjUxOCAxNS4xMjE0IDc4LjkxNjYgMTUuMTIxNEM3Ni4wNzYgMTUuMTIxNCA3NC4wNzYgMTcuNDAzNyA3NC4wNzYgMjAuNjc5MVpNNzQuMjUyNCAxNS4yMzI0Qzc1LjY4OTQgMTMuNTAyNCA3Ny4yMzMgMTIuNzI5MSA3OS4zMzcyIDEyLjcyOTFDODMuMzM0OCAxMi43MjkxIDg2LjI4MDkgMTYuMDc4NCA4Ni4yODA5IDIwLjY3OTFDODYuMjgwOSAyNS4zNTM3IDgzLjI5OTcgMjguNzc2MSA3OS4yNjY5IDI4Ljc3NjFDNzcuMjMzIDI4Ljc3NjEgNzUuNjE5NyAyNy45NjYyIDc0LjI1MjQgMjYuMjM3NlYyNy4zNzc2Qzc0LjI1MjQgMjguMjI0NiA3NC4xNDY5IDI4LjMzNDYgNzMuMzM5NyAyOC4zMzQ2SDcyLjY3NDJDNzEuODY2OSAyOC4zMzQ2IDcxLjc2MTUgMjguMjI0NiA3MS43NjE1IDI3LjM3NzZWMi40NTk3OUM3MS43NjE1IDEuNjEzNzcgNzEuODY2OSAxLjUwMzcyIDcyLjY3NDIgMS41MDM3Mkg3My4zMzk3Qzc0LjE0NjkgMS41MDM3MiA3NC4yNTI0IDEuNjEzNzcgNzQuMjUyNCAyLjQ1OTc5VjE1LjIzMjRaIiBmaWxsPSIjMDcwRjUyIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTAzLjQ3MyAyNy4zNzc3QzEwMy40NzMgMjguMjI0NyAxMDMuMzY3IDI4LjMzNDcgMTAyLjU2MSAyOC4zMzQ3SDEwMS44OTRDMTAxLjA4NyAyOC4zMzQ3IDEwMC45ODMgMjguMjI0NyAxMDAuOTgzIDI3LjM3NzdWMTQuMDE3MUMxMDAuOTgzIDEzLjE3MTEgMTAxLjA4NyAxMy4wNjAxIDEwMS44OTQgMTMuMDYwMUgxMDIuNTYxQzEwMy4zNjcgMTMuMDYwMSAxMDMuNDczIDEzLjE3MTEgMTAzLjQ3MyAxNC4wMTcxVjI3LjM3NzdaTTEwNC4wMzQgNy4yODQwNkMxMDQuMDM0IDguMzE2MSAxMDMuMjI3IDkuMTYzMDUgMTAyLjI0NSA5LjE2MzA1QzEwMS4yNjMgOS4xNjMwNSAxMDAuNDU3IDguMzE2MSAxMDAuNDU3IDcuMjQ3MDdDMTAwLjQ1NyA2LjI1MjQ4IDEwMS4yNjMgNS40MDUwOSAxMDIuMjQ1IDUuNDA1MDlDMTAzLjIyNyA1LjQwNTA5IDEwNC4wMzQgNi4yNTI0OCAxMDQuMDM0IDcuMjg0MDZaIiBmaWxsPSIjMDcwRjUyIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTE1LjQ0OCAxMy41MDI1QzExNS44NjggMTMuMDYwNSAxMTUuODY4IDEzLjA2MDUgMTE2LjQ2NSAxMy4wNjA1SDExNy41NTJDMTE4LjE4MyAxMy4wNjA1IDExOC40MjkgMTMuMjQ0OSAxMTguNDI5IDEzLjY0OTVDMTE4LjQyOSAxMy43OTY1IDExOC4yODggMTQuMDE3NSAxMTguMDA4IDE0LjMxMkwxMTIuOTkyIDE5LjU3NTZMMTE5LjM0IDI3LjA4MzZDMTE5LjU4NiAyNy40MTQ3IDExOS43MjcgMjcuNjM2IDExOS43MjcgMjcuNzgzMUMxMTkuNzI3IDI4LjE1MTEgMTE5LjQ0NiAyOC4zMzUxIDExOC44MTQgMjguMzM1MUgxMTcuNzI3QzExNy4wOTYgMjguMzM1MSAxMTcuMDk2IDI4LjMzNTEgMTE2LjcxIDI3Ljg1NjZMMTExLjIzOSAyMS4zNzg1TDExMC42MDcgMjIuMDQxVjI3LjM3ODFDMTEwLjYwNyAyOC4yMjQ2IDExMC41MDIgMjguMzM1MSAxMDkuNjk2IDI4LjMzNTFIMTA5LjAzQzEwOC4yMjMgMjguMzM1MSAxMDguMTE4IDI4LjIyNDYgMTA4LjExOCAyNy4zNzgxVjIuNDYwMjJDMTA4LjExOCAxLjYxMzc2IDEwOC4yMjMgMS41MDM3MiAxMDkuMDMgMS41MDM3MkgxMDkuNjk2QzExMC41MDIgMS41MDM3MiAxMTAuNjA3IDEuNjEzNzYgMTEwLjYwNyAyLjQ2MDIyVjE4LjY5MjFMMTE1LjQ0OCAxMy41MDI1WiIgZmlsbD0iIzA3MEY1MiIvPgo8bWFzayBpZD0ibWFzazBfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIxMSIgeT0iMSIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEyIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNy4xMTM5IDEuMDk1NzZDMTcuMDA5OSAxLjEzMzYyIDE2LjkxMjEgMS4xOTU2OCAxNi44Mjk1IDEuMjgxOTZMMTIuMDczNyA2LjI2Njk0QzExLjc4MTQgNi41NzI0MyAxMS43ODE0IDcuMDczMzUgMTIuMDczNyA3LjM3ODgxTDE2LjgyOTUgMTIuMzY0M0MxNy4xMjIzIDEyLjY3MDEgMTcuNTk5MiAxMi42NzAxIDE3Ljg5MTEgMTIuMzY0M0wyMi42NDQgNy4zNzg4MUMyMi45MzU0IDcuMDczMzUgMjIuOTM1NCA2LjU3MjQzIDIyLjY0NCA2LjI2Njk0TDE3Ljg5MTEgMS4yODE5NkMxNy44MDg5IDEuMTk1NjggMTcuNzExMiAxLjEzMzYyIDE3LjYwNzUgMS4wOTU3NkgxNy4xMTM5WiIgZmlsbD0id2hpdGUiLz4KPC9tYXNrPgo8ZyBtYXNrPSJ1cmwoI21hc2swXzEwOTE1XzE3NCkiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTE3LjExMzkgMS4wOTU3NkMxNy4wMDk5IDEuMTMzNjIgMTYuOTEyMSAxLjE5NTY4IDE2LjgyOTUgMS4yODE5NkwxMi4wNzM3IDYuMjY2OTRDMTEuNzgxNCA2LjU3MjQzIDExLjc4MTQgNy4wNzMzNSAxMi4wNzM3IDcuMzc4ODFMMTYuODI5NSAxMi4zNjQzQzE3LjEyMjMgMTIuNjcwMSAxNy41OTkyIDEyLjY3MDEgMTcuODkxMSAxMi4zNjQzTDIyLjY0NCA3LjM3ODgxQzIyLjkzNTQgNy4wNzMzNSAyMi45MzU0IDYuNTcyNDMgMjIuNjQ0IDYuMjY2OTRMMTcuODkxMSAxLjI4MTk2QzE3LjgwODkgMS4xOTU2OCAxNy43MTEyIDEuMTMzNjIgMTcuNjA3NSAxLjA5NTc2SDE3LjExMzlaIiBmaWxsPSIjMDcwRjUyIi8+CjwvZz4KPG1hc2sgaWQ9Im1hc2sxXzEwOTE1XzE3NCIgc3R5bGU9Im1hc2stdHlwZTphbHBoYSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMjMiIHk9IjEzIiB3aWR0aD0iMTIiIGhlaWdodD0iMTMiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTI4LjY4NTIgMTMuNzE0NEwyMy45Mjg2IDE4LjY5OTRDMjMuNjM3MSAxOS4wMDUzIDIzLjYzNzEgMTkuNTA1MyAyMy45Mjg2IDE5LjgxMTNMMjguNjg1MiAyNC43OTYzQzI4Ljk3NzEgMjUuMTAxOCAyOS40NTQ5IDI1LjEwMTggMjkuNzQ1OSAyNC43OTYzTDM0LjQ5ODggMTkuODExM0MzNC43OTA3IDE5LjUwNTMgMzQuNzkwNyAxOS4wMDQ0IDM0LjQ5ODggMTguNjk4NkwyOS43NDU5IDEzLjcxNDRDMjkuNjAwNCAxMy41NjEyIDI5LjQwODMgMTMuNDg0NiAyOS4yMTU4IDEzLjQ4NDZDMjkuMDIzMyAxMy40ODQ2IDI4LjgzMTYgMTMuNTYxMiAyOC42ODUyIDEzLjcxNDRaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazFfMTA5MTVfMTc0KSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMjguNjg1MiAxMy43MTQ0TDIzLjkyODYgMTguNjk5NEMyMy42MzcxIDE5LjAwNTMgMjMuNjM3MSAxOS41MDUzIDIzLjkyODYgMTkuODExM0wyOC42ODUyIDI0Ljc5NjNDMjguOTc3MSAyNS4xMDE4IDI5LjQ1NDkgMjUuMTAxOCAyOS43NDU5IDI0Ljc5NjNMMzQuNDk4OCAxOS44MTEzQzM0Ljc5MDcgMTkuNTA1MyAzNC43OTA3IDE5LjAwNDQgMzQuNDk4OCAxOC42OTg2TDI5Ljc0NTkgMTMuNzE0NEMyOS42MDA0IDEzLjU2MTIgMjkuNDA4MyAxMy40ODQ2IDI5LjIxNTggMTMuNDg0NkMyOS4wMjMzIDEzLjQ4NDYgMjguODMxNiAxMy41NjEyIDI4LjY4NTIgMTMuNzE0NFoiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazJfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSI4IiB5PSIzMiIgd2lkdGg9IjQiIGhlaWdodD0iNSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTAuODgwNSAzMi4zNzAzTDguNzY3MDMgMzQuNTg3MUM4LjQ3NTA5IDM0Ljg5MjUgOC41MzM4MiAzNS4zMTA3IDguODk3NDUgMzUuNTE1NEwxMC43MTczIDM2LjQxODZDMTEuMDk5IDM2LjU4NDYgMTEuNDEwNiAzNi4zNjYzIDExLjQxMDYgMzUuOTM0VjMyLjYwMUMxMS40MTA2IDMyLjMzNiAxMS4zMjEzIDMyLjE5NDcgMTEuMTg1NCAzMi4xOTQ3QzExLjA5OSAzMi4xOTQ3IDEwLjk5NDEgMzIuMjUxOSAxMC44ODA1IDMyLjM3MDNaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazJfMTA5MTVfMTc0KSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTAuODgwNSAzMi4zNzAzTDguNzY3MDMgMzQuNTg3MUM4LjQ3NTA5IDM0Ljg5MjUgOC41MzM4MiAzNS4zMTA3IDguODk3NDUgMzUuNTE1NEwxMC43MTczIDM2LjQxODZDMTEuMDk5IDM2LjU4NDYgMTEuNDEwNiAzNi4zNjYzIDExLjQxMDYgMzUuOTM0VjMyLjYwMUMxMS40MTA2IDMyLjMzNiAxMS4zMjEzIDMyLjE5NDcgMTEuMTg1NCAzMi4xOTQ3QzExLjA5OSAzMi4xOTQ3IDEwLjk5NDEgMzIuMjUxOSAxMC44ODA1IDMyLjM3MDNaIiBmaWxsPSIjMDcwRjUyIi8+CjwvZz4KPG1hc2sgaWQ9Im1hc2szXzEwOTE1XzE3NCIgc3R5bGU9Im1hc2stdHlwZTphbHBoYSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMjMiIHk9IjMyIiB3aWR0aD0iNCIgaGVpZ2h0PSI1Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0yMy4zMDU3IDMyLjYwMVYzNS45MzRDMjMuMzA1NyAzNi4zNjYzIDIzLjYxNzMgMzYuNTg0NiAyMy45OTg5IDM2LjQxODZMMjUuODE4OCAzNS41MTU0QzI2LjE4MjUgMzUuMzEwNyAyNi4yNDE2IDM0Ljg5MjUgMjUuOTUwMSAzNC41ODcxTDIzLjgzNjIgMzIuMzcwM0MyMy43MjI2IDMyLjI1MTkgMjMuNjE3MyAzMi4xOTQ3IDIzLjUzMTMgMzIuMTk0N0MyMy4zOTUgMzIuMTk0NyAyMy4zMDU3IDMyLjMzNiAyMy4zMDU3IDMyLjYwMVoiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrM18xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0yMy4zMDU3IDMyLjYwMVYzNS45MzRDMjMuMzA1NyAzNi4zNjYzIDIzLjYxNzMgMzYuNTg0NiAyMy45OTg5IDM2LjQxODZMMjUuODE4OCAzNS41MTU0QzI2LjE4MjUgMzUuMzEwNyAyNi4yNDE2IDM0Ljg5MjUgMjUuOTUwMSAzNC41ODcxTDIzLjgzNjIgMzIuMzcwM0MyMy43MjI2IDMyLjI1MTkgMjMuNjE3MyAzMi4xOTQ3IDIzLjUzMTMgMzIuMTk0N0MyMy4zOTUgMzIuMTk0NyAyMy4zMDU3IDMyLjMzNiAyMy4zMDU3IDMyLjYwMVoiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazRfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIyMyIgeT0iMjUiIHdpZHRoPSI3IiBoZWlnaHQ9IjciPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTI0LjA1NiAyNS40OTI3QzIzLjY0MzcgMjUuNDkyNyAyMy4zMDU3IDI1Ljg0NTcgMjMuMzA1NyAyNi4yNzhWMzAuNzc0NEMyMy4zMDU3IDMxLjIwNTcgMjMuNjQzNyAzMS41NjA1IDI0LjA1NiAzMS41NjA1SDI4LjM0MTJDMjguNzUzNSAzMS41NjA1IDI5LjA5MTUgMzEuMjA1NyAyOS4wOTE1IDMwLjc3NDRWMjYuMjc4QzI5LjA5MTUgMjUuODQ1NyAyOC43NTM1IDI1LjQ5MjcgMjguMzQxMiAyNS40OTI3SDI0LjA1NloiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrNF8xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0yNC4wNTYgMjUuNDkyN0MyMy42NDM3IDI1LjQ5MjcgMjMuMzA1NyAyNS44NDU3IDIzLjMwNTcgMjYuMjc4VjMwLjc3NDRDMjMuMzA1NyAzMS4yMDU3IDIzLjY0MzcgMzEuNTYwNSAyNC4wNTYgMzEuNTYwNUgyOC4zNDEyQzI4Ljc1MzUgMzEuNTYwNSAyOS4wOTE1IDMxLjIwNTcgMjkuMDkxNSAzMC43NzQ0VjI2LjI3OEMyOS4wOTE1IDI1Ljg0NTcgMjguNzUzNSAyNS40OTI3IDI4LjM0MTIgMjUuNDkyN0gyNC4wNTZaIiBmaWxsPSIjMDcwRjUyIi8+CjwvZz4KPG1hc2sgaWQ9Im1hc2s1XzEwOTE1XzE3NCIgc3R5bGU9Im1hc2stdHlwZTphbHBoYSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMjkiIHk9IjEwIiB3aWR0aD0iNSIgaGVpZ2h0PSI0Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zMS45NzgxIDEwLjI0NTdMMjkuODY0NiAxMi40NjQ0QzI5LjU3MzEgMTIuNzcxMSAyOS42NzE2IDEzLjAyMTggMzAuMDg0NCAxMy4wMjE4SDMzLjI2MjdDMzMuNjc0NiAxMy4wMjE4IDMzLjg4MjcgMTIuNjk0NCAzMy43MjQ5IDEyLjI5MzRMMzIuODYzIDEwLjM4MjNDMzIuNzUxNSAxMC4xNjQxIDMyLjU3MzIgMTAuMDUwOSAzMi4zODcgMTAuMDUwOUMzMi4yNDczIDEwLjA1MDkgMzIuMTAyNiAxMC4xMTQ4IDMxLjk3ODEgMTAuMjQ1N1oiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrNV8xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zMS45NzgxIDEwLjI0NTdMMjkuODY0NiAxMi40NjQ0QzI5LjU3MzEgMTIuNzcxMSAyOS42NzE2IDEzLjAyMTggMzAuMDg0NCAxMy4wMjE4SDMzLjI2MjdDMzMuNjc0NiAxMy4wMjE4IDMzLjg4MjcgMTIuNjk0NCAzMy43MjQ5IDEyLjI5MzRMMzIuODYzIDEwLjM4MjNDMzIuNzUxNSAxMC4xNjQxIDMyLjU3MzIgMTAuMDUwOSAzMi4zODcgMTAuMDUwOUMzMi4yNDczIDEwLjA1MDkgMzIuMTAyNiAxMC4xMTQ4IDMxLjk3ODEgMTAuMjQ1N1oiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazZfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIyMyIgeT0iMiIgd2lkdGg9IjQiIGhlaWdodD0iNSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMjMuMzA1NyAyLjU3NjE3VjUuOTA5MThDMjMuMzA1NyA2LjM0MTg4IDIzLjU0NDMgNi40NDU3NiAyMy44MzYyIDYuMTM5ODNMMjUuOTUwMSAzLjkyMjY3QzI2LjI0MTYgMy42MTc2MyAyNi4xODI0IDMuMTk5MDIgMjUuODE5MiAyLjk5NDc3TDIzLjk5ODkgMi4wOTE1M0MyMy45MTE3IDIuMDUzMjQgMjMuODI4NyAyLjAzNjA3IDIzLjc1MTkgMi4wMzYwN0MyMy40OTE1IDIuMDM2MDcgMjMuMzA1NyAyLjI0MjUyIDIzLjMwNTcgMi41NzYxN1oiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrNl8xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0yMy4zMDU3IDIuNTc2MTdWNS45MDkxOEMyMy4zMDU3IDYuMzQxODggMjMuNTQ0MyA2LjQ0NTc2IDIzLjgzNjIgNi4xMzk4M0wyNS45NTAxIDMuOTIyNjdDMjYuMjQxNiAzLjYxNzYzIDI2LjE4MjQgMy4xOTkwMiAyNS44MTkyIDIuOTk0NzdMMjMuOTk4OSAyLjA5MTUzQzIzLjkxMTcgMi4wNTMyNCAyMy44Mjg3IDIuMDM2MDcgMjMuNzUxOSAyLjAzNjA3QzIzLjQ5MTUgMi4wMzYwNyAyMy4zMDU3IDIuMjQyNTIgMjMuMzA1NyAyLjU3NjE3WiIgZmlsbD0iIzA3MEY1MiIvPgo8L2c+CjxtYXNrIGlkPSJtYXNrN18xMDkxNV8xNzQiIHN0eWxlPSJtYXNrLXR5cGU6YWxwaGEiIG1hc2tVbml0cz0idXNlclNwYWNlT25Vc2UiIHg9IjAiIHk9IjEwIiB3aWR0aD0iNiIgaGVpZ2h0PSI0Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xLjg1MzMgMTAuMzgyM0wwLjk5MjIzNiAxMi4yOTQ4QzAuODM0MTE1IDEyLjY5NDQgMS4wNDE3MyAxMy4wMjE4IDEuNDU0MDIgMTMuMDIxOEg0LjYzMzIxQzUuMDQ1OTIgMTMuMDIxOCA1LjE0NDkgMTIuNzcxMSA0Ljg1MjU3IDEyLjQ2NDRMMi43Mzg3IDEwLjI0NTdDMi42MTQxMyAxMC4xMTQ4IDIuNDY5ODUgMTAuMDUwOSAyLjMyOTc2IDEwLjA1MDlDMi4xNDM1NCAxMC4wNTA5IDEuOTY1MjkgMTAuMTY0MSAxLjg1MzMgMTAuMzgyM1oiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrN18xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xLjg1MzMgMTAuMzgyM0wwLjk5MjIzNiAxMi4yOTQ4QzAuODM0MTE1IDEyLjY5NDQgMS4wNDE3MyAxMy4wMjE4IDEuNDU0MDIgMTMuMDIxOEg0LjYzMzIxQzUuMDQ1OTIgMTMuMDIxOCA1LjE0NDkgMTIuNzcxMSA0Ljg1MjU3IDEyLjQ2NDRMMi43Mzg3IDEwLjI0NTdDMi42MTQxMyAxMC4xMTQ4IDIuNDY5ODUgMTAuMDUwOSAyLjMyOTc2IDEwLjA1MDlDMi4xNDM1NCAxMC4wNTA5IDEuOTY1MjkgMTAuMTY0MSAxLjg1MzMgMTAuMzgyM1oiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazhfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSI1IiB5PSI2IiB3aWR0aD0iNyIgaGVpZ2h0PSI4Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjM3NTMzIDYuOTQ5NjVDNS45NjMwNSA2Ljk0OTY1IDUuNjI1IDcuMzA0NDEgNS42MjUgNy43MzY2OVYxMi4yMzEzQzUuNjI1IDEyLjY2NCA1Ljk2MzA1IDEzLjAxODMgNi4zNzUzMyAxMy4wMTgzSDEwLjY2MDVDMTEuMDczMyAxMy4wMTgzIDExLjQxMDkgMTIuNjY0IDExLjQxMDkgMTIuMjMxM1Y3LjczNjY5QzExLjQxMDkgNy4zMDQ0MSAxMS4wNzMzIDYuOTQ5NjUgMTAuNjYwNSA2Ljk0OTY1SDYuMzc1MzNaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazhfMTA5MTVfMTc0KSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNNi4zNzUzMyA2Ljk0OTY1QzUuOTYzMDUgNi45NDk2NSA1LjYyNSA3LjMwNDQxIDUuNjI1IDcuNzM2NjlWMTIuMjMxM0M1LjYyNSAxMi42NjQgNS45NjMwNSAxMy4wMTgzIDYuMzc1MzMgMTMuMDE4M0gxMC42NjA1QzExLjA3MzMgMTMuMDE4MyAxMS40MTA5IDEyLjY2NCAxMS40MTA5IDEyLjIzMTNWNy43MzY2OUMxMS40MTA5IDcuMzA0NDEgMTEuMDczMyA2Ljk0OTY1IDEwLjY2MDUgNi45NDk2NUg2LjM3NTMzWiIgZmlsbD0iIzA3MEY1MiIvPgo8L2c+CjxtYXNrIGlkPSJtYXNrOV8xMDkxNV8xNzQiIHN0eWxlPSJtYXNrLXR5cGU6YWxwaGEiIG1hc2tVbml0cz0idXNlclNwYWNlT25Vc2UiIHg9IjgiIHk9IjIiIHdpZHRoPSI0IiBoZWlnaHQ9IjUiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTEwLjcxNzMgMi4wOTE1M0w4Ljg5NzQ1IDIuOTk0NzdDOC41MzM4MiAzLjE5OTAyIDguNDc1MDkgMy42MTc2MyA4Ljc2NzAzIDMuOTIyNjdMMTAuODgwNSA2LjEzOTgzQzExLjE3MjQgNi40NDU3NiAxMS40MTA2IDYuMzQxODggMTEuNDEwNiA1LjkwOTE4VjIuNTc2MTdDMTEuNDEwNiAyLjI0MjUyIDExLjIyNDggMi4wMzYwNyAxMC45NjQ0IDIuMDM2MDdDMTAuODg3MiAyLjAzNjA3IDEwLjgwNDUgMi4wNTM2OCAxMC43MTczIDIuMDkxNTNaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazlfMTA5MTVfMTc0KSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTAuNzE3MyAyLjA5MTUzTDguODk3NDUgMi45OTQ3N0M4LjUzMzgyIDMuMTk5MDIgOC40NzUwOSAzLjYxNzYzIDguNzY3MDMgMy45MjI2N0wxMC44ODA1IDYuMTM5ODNDMTEuMTcyNCA2LjQ0NTc2IDExLjQxMDYgNi4zNDE4OCAxMS40MTA2IDUuOTA5MThWMi41NzYxN0MxMS40MTA2IDIuMjQyNTIgMTEuMjI0OCAyLjAzNjA3IDEwLjk2NDQgMi4wMzYwN0MxMC44ODcyIDIuMDM2MDcgMTAuODA0NSAyLjA1MzY4IDEwLjcxNzMgMi4wOTE1M1oiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazEwXzEwOTE1XzE3NCIgc3R5bGU9Im1hc2stdHlwZTphbHBoYSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMjkiIHk9IjI1IiB3aWR0aD0iNSIgaGVpZ2h0PSI0Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zMC4wODQ0IDI1LjQ5MjdDMjkuNjcxNiAyNS40OTI3IDI5LjU3MzEgMjUuNzQzIDI5Ljg2NDYgMjYuMDQ4OUwzMS45NzgxIDI4LjI2ODVDMzIuMjY5NiAyOC41NzQ3IDMyLjY2OCAyOC41MTE3IDMyLjg2MyAyOC4xMzA1TDMzLjcyNDkgMjYuMjE5NEMzMy44ODI3IDI1LjgyMDEgMzMuNjc0NiAyNS40OTI3IDMzLjI2MjcgMjUuNDkyN0gzMC4wODQ0WiIgZmlsbD0id2hpdGUiLz4KPC9tYXNrPgo8ZyBtYXNrPSJ1cmwoI21hc2sxMF8xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zMC4wODQ0IDI1LjQ5MjdDMjkuNjcxNiAyNS40OTI3IDI5LjU3MzEgMjUuNzQzIDI5Ljg2NDYgMjYuMDQ4OUwzMS45NzgxIDI4LjI2ODVDMzIuMjY5NiAyOC41NzQ3IDMyLjY2OCAyOC41MTE3IDMyLjg2MyAyOC4xMzA1TDMzLjcyNDkgMjYuMjE5NEMzMy44ODI3IDI1LjgyMDEgMzMuNjc0NiAyNS40OTI3IDMzLjI2MjcgMjUuNDkyN0gzMC4wODQ0WiIgZmlsbD0iIzA3MEY1MiIvPgo8L2c+CjxtYXNrIGlkPSJtYXNrMTFfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSI1IiB5PSIyNSIgd2lkdGg9IjciIGhlaWdodD0iNyI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNNi4zNzUzMyAyNS40OTI2QzUuOTYzMDUgMjUuNDkyNiA1LjYyNSAyNS44NDU2IDUuNjI1IDI2LjI3NzlWMzAuNzc0M0M1LjYyNSAzMS4yMDU2IDUuOTYzMDUgMzEuNTYwNCA2LjM3NTMzIDMxLjU2MDRIMTAuNjYwNUMxMS4wNzMzIDMxLjU2MDQgMTEuNDEwOSAzMS4yMDU2IDExLjQxMDkgMzAuNzc0M1YyNi4yNzc5QzExLjQxMDkgMjUuODQ1NiAxMS4wNzMzIDI1LjQ5MjYgMTAuNjYwNSAyNS40OTI2SDYuMzc1MzNaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazExXzEwOTE1XzE3NCkiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTYuMzc1MzMgMjUuNDkyNkM1Ljk2MzA1IDI1LjQ5MjYgNS42MjUgMjUuODQ1NiA1LjYyNSAyNi4yNzc5VjMwLjc3NDNDNS42MjUgMzEuMjA1NiA1Ljk2MzA1IDMxLjU2MDQgNi4zNzUzMyAzMS41NjA0SDEwLjY2MDVDMTEuMDczMyAzMS41NjA0IDExLjQxMDkgMzEuMjA1NiAxMS40MTA5IDMwLjc3NDNWMjYuMjc3OUMxMS40MTA5IDI1Ljg0NTYgMTEuMDczMyAyNS40OTI2IDEwLjY2MDUgMjUuNDkyNkg2LjM3NTMzWiIgZmlsbD0iIzA3MEY1MiIvPgo8L2c+CjxtYXNrIGlkPSJtYXNrMTJfMTA5MTVfMTc0IiBzdHlsZT0ibWFzay10eXBlOmFscGhhIiBtYXNrVW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4PSIwIiB5PSIyNSIgd2lkdGg9IjYiIGhlaWdodD0iNCI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMS40NTQwMiAyNS40OTI3QzEuMDQxNzMgMjUuNDkyNyAwLjgzNDExNSAyNS44MTg4IDAuOTkyMjM2IDI2LjIxOUwxLjg1MzMgMjguMTMwNUMyLjA0ODc1IDI4LjUxMTcgMi40NDcyIDI4LjU3NDcgMi43Mzg3IDI4LjI2ODVMNC44NTI1NyAyNi4wNDg5QzUuMTQ0OSAyNS43NDMgNS4wNDU5MiAyNS40OTI3IDQuNjMzMjEgMjUuNDkyN0gxLjQ1NDAyWiIgZmlsbD0id2hpdGUiLz4KPC9tYXNrPgo8ZyBtYXNrPSJ1cmwoI21hc2sxMl8xMDkxNV8xNzQpIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xLjQ1NDAyIDI1LjQ5MjdDMS4wNDE3MyAyNS40OTI3IDAuODM0MTE1IDI1LjgxODggMC45OTIyMzYgMjYuMjE5TDEuODUzMyAyOC4xMzA1QzIuMDQ4NzUgMjguNTExNyAyLjQ0NzIgMjguNTc0NyAyLjczODcgMjguMjY4NUw0Ljg1MjU3IDI2LjA0ODlDNS4xNDQ5IDI1Ljc0MyA1LjA0NTkyIDI1LjQ5MjcgNC42MzMyMSAyNS40OTI3SDEuNDU0MDJaIiBmaWxsPSIjMDcwRjUyIi8+CjwvZz4KPG1hc2sgaWQ9Im1hc2sxM18xMDkxNV8xNzQiIHN0eWxlPSJtYXNrLXR5cGU6YWxwaGEiIG1hc2tVbml0cz0idXNlclNwYWNlT25Vc2UiIHg9IjIzIiB5PSI2IiB3aWR0aD0iNyIgaGVpZ2h0PSI4Ij4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0yNC4wNTYgNi45NDk2NUMyMy42NDM3IDYuOTQ5NjUgMjMuMzA1NyA3LjMwNDQxIDIzLjMwNTcgNy43MzY2OVYxMi4yMzEzQzIzLjMwNTcgMTIuNjY0IDIzLjY0MzcgMTMuMDE4MyAyNC4wNTYgMTMuMDE4M0gyOC4zNDEyQzI4Ljc1MzUgMTMuMDE4MyAyOS4wOTE1IDEyLjY2NCAyOS4wOTE1IDEyLjIzMTNWNy43MzY2OUMyOS4wOTE1IDcuMzA0NDEgMjguNzUzNSA2Ljk0OTY1IDI4LjM0MTIgNi45NDk2NUgyNC4wNTZaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazEzXzEwOTE1XzE3NCkiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTI0LjA1NiA2Ljk0OTY1QzIzLjY0MzcgNi45NDk2NSAyMy4zMDU3IDcuMzA0NDEgMjMuMzA1NyA3LjczNjY5VjEyLjIzMTNDMjMuMzA1NyAxMi42NjQgMjMuNjQzNyAxMy4wMTgzIDI0LjA1NiAxMy4wMTgzSDI4LjM0MTJDMjguNzUzNSAxMy4wMTgzIDI5LjA5MTUgMTIuNjY0IDI5LjA5MTUgMTIuMjMxM1Y3LjczNjY5QzI5LjA5MTUgNy4zMDQ0MSAyOC43NTM1IDYuOTQ5NjUgMjguMzQxMiA2Ljk0OTY1SDI0LjA1NloiIGZpbGw9IiMwNzBGNTIiLz4KPC9nPgo8bWFzayBpZD0ibWFzazE0XzEwOTE1XzE3NCIgc3R5bGU9Im1hc2stdHlwZTphbHBoYSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMTEiIHk9IjI1IiB3aWR0aD0iMTIiIGhlaWdodD0iMTMiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTE2LjgyOTUgMjYuMTc3MUwxMi4wNzM3IDMxLjE2MTdDMTEuNzgxNCAzMS40Njc2IDExLjc4MTQgMzEuOTY3NiAxMi4wNzM3IDMyLjI3NEwxNi44Mjk1IDM3LjI1ODFDMTYuODk1OCAzNy4zMjcyIDE2Ljk3MTcgMzcuMzgwOSAxNy4wNTIzIDM3LjQxODdIMTcuNjY4OEMxNy43NDkzIDM3LjM4MDkgMTcuODI0OCAzNy4zMjcyIDE3Ljg5MTEgMzcuMjU4MUwyMi42NDQgMzIuMjc0QzIyLjkzNTQgMzEuOTY3NiAyMi45MzU0IDMxLjQ2NzYgMjIuNjQ0IDMxLjE2MTdMMTcuODkxMSAyNi4xNzcxQzE3Ljc0NTUgMjYuMDIzOSAxNy41NTI2IDI1Ljk0NzggMTcuMzYwNSAyNS45NDc4QzE3LjE2OCAyNS45NDc4IDE2Ljk3NTUgMjYuMDIzOSAxNi44Mjk1IDI2LjE3NzFaIiBmaWxsPSJ3aGl0ZSIvPgo8L21hc2s+CjxnIG1hc2s9InVybCgjbWFzazE0XzEwOTE1XzE3NCkiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTE2LjgyOTUgMjYuMTc3MUwxMi4wNzM3IDMxLjE2MTdDMTEuNzgxNCAzMS40Njc2IDExLjc4MTQgMzEuOTY3NiAxMi4wNzM3IDMyLjI3NEwxNi44Mjk1IDM3LjI1ODFDMTYuODk1OCAzNy4zMjcyIDE2Ljk3MTcgMzcuMzgwOSAxNy4wNTIzIDM3LjQxODdIMTcuNjY4OEMxNy43NDkzIDM3LjM4MDkgMTcuODI0OCAzNy4zMjcyIDE3Ljg5MTEgMzcuMjU4MUwyMi42NDQgMzIuMjc0QzIyLjkzNTQgMzEuOTY3NiAyMi45MzU0IDMxLjQ2NzYgMjIuNjQ0IDMxLjE2MTdMMTcuODkxMSAyNi4xNzcxQzE3Ljc0NTUgMjYuMDIzOSAxNy41NTI2IDI1Ljk0NzggMTcuMzYwNSAyNS45NDc4QzE3LjE2OCAyNS45NDc4IDE2Ljk3NTUgMjYuMDIzOSAxNi44Mjk1IDI2LjE3NzFaIiBmaWxsPSIjMDcwRjUyIi8+CjwvZz4KPG1hc2sgaWQ9Im1hc2sxNV8xMDkxNV8xNzQiIHN0eWxlPSJtYXNrLXR5cGU6YWxwaGEiIG1hc2tVbml0cz0idXNlclNwYWNlT25Vc2UiIHg9IjAiIHk9IjEzIiB3aWR0aD0iMTIiIGhlaWdodD0iMTMiPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTQuOTc1MjYgMTMuNzE0NEwwLjIxODYyMiAxOC42OTk0Qy0wLjA3Mjg3NDEgMTkuMDA1MyAtMC4wNzI4NzQxIDE5LjUwNTMgMC4yMTg2MjIgMTkuODExM0w0Ljk3NTI2IDI0Ljc5NjNDNS4yNjcxNyAyNS4xMDE4IDUuNzQ0MDUgMjUuMTAxOCA2LjAzNTk2IDI0Ljc5NjNMMTAuNzg5MyAxOS44MTEzQzExLjA4MDcgMTkuNTA1MyAxMS4wODA3IDE5LjAwNDQgMTAuNzg5MyAxOC42OTg2TDYuMDM1OTYgMTMuNzE0NEM1Ljg5MDQzIDEzLjU2MTIgNS42OTc5MiAxMy40ODQ2IDUuNTA1ODIgMTMuNDg0NkM1LjMxMzMxIDEzLjQ4NDYgNS4xMjEyMSAxMy41NjEyIDQuOTc1MjYgMTMuNzE0NFoiIGZpbGw9IndoaXRlIi8+CjwvbWFzaz4KPGcgbWFzaz0idXJsKCNtYXNrMTVfMTA5MTVfMTc0KSI+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNNC45NzUyNiAxMy43MTQ0TDAuMjE4NjIyIDE4LjY5OTRDLTAuMDcyODc0MSAxOS4wMDUzIC0wLjA3Mjg3NDEgMTkuNTA1MyAwLjIxODYyMiAxOS44MTEzTDQuOTc1MjYgMjQuNzk2M0M1LjI2NzE3IDI1LjEwMTggNS43NDQwNSAyNS4xMDE4IDYuMDM1OTYgMjQuNzk2M0wxMC43ODkzIDE5LjgxMTNDMTEuMDgwNyAxOS41MDUzIDExLjA4MDcgMTkuMDA0NCAxMC43ODkzIDE4LjY5ODZMNi4wMzU5NiAxMy43MTQ0QzUuODkwNDMgMTMuNTYxMiA1LjY5NzkyIDEzLjQ4NDYgNS41MDU4MiAxMy40ODQ2QzUuMzEzMzEgMTMuNDg0NiA1LjEyMTIxIDEzLjU2MTIgNC45NzUyNiAxMy43MTQ0WiIgZmlsbD0iIzA3MEY1MiIvPgo8L2c+Cjwvc3ZnPgo="
@@ -944,6 +1108,8 @@ function Export-HtmlReport {
 
 try {
 
+Connect-EntraGraph
+
 #— 1) Global Microsoft Graph data retrieval
 # Get applications and create a lookup table for AppId -> PublisherDomain
 Write-Log "Loading global Graph data - Fetching Applications..." "INFO" "Cyan"
@@ -968,6 +1134,10 @@ Write-Log "Loading global Graph data - Fetching Managed Identities..." "INFO" "C
 $managedIdentities = $servicePrincipals | Where-Object servicePrincipalType -eq 'ManagedIdentity'
 Write-Log "Retrieved $($managedIdentities.Count) managed identities." "INFO" "Cyan"
 
+Write-Log "Loading global Graph data - Fetching Organization info..." "INFO" "Cyan"
+$organization = Get-MgOrganization -ErrorAction Stop
+Write-Log "Organization: $($organization.DisplayName) (Tenant: $($organization.Id))" "INFO" "Cyan"
+
 #— 2) Build detailed per-user report
 Write-Log "Building per-user dataset..." "INFO" "Cyan"
 $byUser = Get-ByUserData `
@@ -987,14 +1157,15 @@ $byDomain = Get-ByDomainData `
   -Applications      $applications `
   -ServicePrincipals $servicePrincipals `
   -ManagedIdentities $managedIdentities `
-  -AppDomainMap      $appDomainMap
+  -AppDomainMap      $appDomainMap `
+  -Organization      $organization
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, LicensedHybridMembers, LicensedCloudMembers, LicensedB2BGuests, LicensedCIAMs
 
 #— 4) Prepare report headers
-$userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership
+$userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership -UseAttributeFilter:$useAttributeFilter
 $domainCols    = Get-ReportHeaders -Type ByDomain
 $licensingCols = Get-ReportHeaders -Type Licensing
 
