@@ -2,4 +2,5 @@
 !.gitignore
 !Get-AdHumanIdentity.ps1
 !Get-EntraHumanIdentity.ps1
+!Get-OktaHumanIdentity.ps1
 !README.md
