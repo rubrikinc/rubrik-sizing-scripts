@@ -16,7 +16,7 @@ solution pricing and capacity planning.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `Get-AWSSizingInfo.ps1` | ~3,500 | AWS sizing — EC2, S3, RDS, EFS, FSx, DynamoDB, EKS, VPC, Load Balancers, Route53, IAM, Backup, KMS, SQS, Secrets Manager |
+| `Get-AWSSizingInfo.ps1` | ~5,800 | AWS sizing — EC2, S3, S3 Tables, RDS, EFS, FSx, DynamoDB, EKS, VPC, Load Balancers, Route53, IAM, Backup, KMS, SQS, Secrets Manager |
 | `Get-AzureSizingInfo.ps1` | ~2,700 | Azure sizing — VMs, Managed Disks, SQL, Storage, Files, Backup Vaults, AKS, CosmosDB, Key Vault |
 | `Get-GCPSizingInfo.ps1` | ~900 | GCP sizing — GCE VMs, Disks, Cloud SQL, Spanner |
 | `consolidate.ps1` | | Merges multi-region CSV outputs into single files |
@@ -112,11 +112,14 @@ independently testable.
 
 All scripts produce timestamped CSVs and a compressed ZIP archive.
 
-**AWS:** `aws_ec2_instance_info-*.csv`, `aws_s3_info-*.csv`, `aws_rds_info-*.csv`,
+**AWS:** `aws_ec2_instance_info-*.csv`, `aws_s3_info-*.csv`, `aws_s3_tables_info-*.csv`, `aws_rds_info-*.csv`,
 `aws_efs_info-*.csv`, `aws_fsx_*_info-*.csv`, `aws_DynamoDB_info-*.csv`,
 `aws_eks_*_info-*.csv`, `aws_vpc_info-*.csv`, `aws_lb_info-*.csv`,
 `aws_route53_info-*.csv`, `aws_iam_info-*.csv`, `aws_backup_costs-*.csv`,
-`aws-backup-plans-info-*.json`, `aws_sizing_results_*.zip`
+`aws_backup_recovery_points-*.csv`, `aws_ebs_and_ami_info-*.csv`,
+`aws_rds_snapshot_info-*.csv`, `aws_redshift_info-*.csv`,
+`aws_glue_iceberg_info-*.csv`, `aws_snapshot_storage_costs-*.csv`, `aws-backup-plans-info-*.json`,
+`aws_sizing_results_*.zip`
 
 **Azure:** `azure_vmdisk_info-*.csv`, `azure_sql_info-*.csv`,
 `azure_file_share_info-*.csv`, `azure_backup_vault_*-*.csv`,
@@ -186,7 +189,7 @@ normalization, anonymization, metric calculations, error handling).
 
 | Provider | Required Modules |
 |----------|-----------------|
-| AWS | `AWS.Tools.Common`, `.EC2`, `.S3`, `.RDS`, `.SecurityToken`, `.Organizations`, `.IdentityManagement`, `.CloudWatch`, `.ElasticFileSystem`, `.ElasticLoadBalancing`, `.ElasticLoadBalancingV2`, `.SSO`, `.SSOOIDC`, `.FSX`, `.Backup`, `.CostExplorer`, `.DynamoDBv2`, `.Route53`, `.SQS`, `.SecretsManager`, `.KeyManagementService`, `.EKS`, `.S3Control` |
+| AWS | `AWS.Tools.Common`, `.EC2`, `.S3`, `.RDS`, `.SecurityToken`, `.Organizations`, `.IdentityManagement`, `.CloudWatch`, `.ElasticFileSystem`, `.ElasticLoadBalancing`, `.ElasticLoadBalancingV2`, `.SSO`, `.SSOOIDC`, `.FSX`, `.Backup`, `.CostExplorer`, `.DynamoDBv2`, `.Route53`, `.SQS`, `.SecretsManager`, `.KeyManagementService`, `.EKS`, `.S3Control`, `.S3Tables`, `.Redshift`, `.Glue` |
 | Azure | `Az.Accounts`, `Az.Aks`, `Az.Compute`, `Az.Storage`, `Az.Sql`, `Az.SqlVirtualMachine`, `Az.ResourceGraph`, `Az.Monitor`, `Az.Resources`, `Az.RecoveryServices`, `Az.CostManagement`, `Az.CosmosDB` |
 | GCP | `GoogleCloud` |
 

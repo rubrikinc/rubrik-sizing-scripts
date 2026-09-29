@@ -325,6 +325,86 @@ function Get-AccessToken {
     }
 }
 
+# Refresh the EXO connection so the access token does not age out during the
+# multi-day archive enumeration on very large tenants (SPARK-887257).
+function Reset-ExoConnection {
+  try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch { }
+  if ($script:ExoAuthMode -eq 'App') {
+    $token = Get-AccessToken -clientId $script:ExoClientId -clientSecret $script:ExoClientSecret -tenantId $script:ExoTenantId
+    Connect-ExchangeOnlineForSizing -AccessToken $token -Organization $script:ExoTenantId
+  } elseif ($script:ExoAuthMode -eq 'Delegate') {
+    Connect-ExchangeOnlineForSizing -UserPrincipalName $script:ExoUserPrincipalName
+  } else {
+    Connect-ExchangeOnlineForSizing
+  }
+}
+
+# Test whether an exception is the MSAL broker assembly mismatch that surfaces when
+# an older Microsoft.Identity.Client.dll is loaded into the PowerShell session
+# (typically via stale AzureAD / Microsoft.Graph / EXO modules). See SPARK-887253.
+function Test-ExoBrokerAssemblyConflict {
+  param ([string]$Message)
+  if (-not $Message) { return $false }
+  return ($Message -match 'WithBroker' -or
+          $Message -match 'BrokerExtension' -or
+          ($Message -match 'Method not found' -and $Message -match 'Identity\.Client'))
+}
+
+function Write-ExoBrokerRemediation {
+  Write-Host ""
+  Write-Host "[ERROR] Exchange Online connect failed due to a stale Microsoft.Identity.Client assembly." -ForegroundColor Red
+  Write-Host "        An older Microsoft.Identity.Client.dll is already loaded into this PowerShell session" -ForegroundColor Red
+  Write-Host "        (commonly from the legacy AzureAD/AzureADPreview modules or an outdated Microsoft.Graph)." -ForegroundColor Red
+  Write-Host "        PowerShell cannot unload it, so this session is unrecoverable." -ForegroundColor Red
+  Write-Host ""
+  Write-Host "To fix: open a FRESH PowerShell session and run:" -ForegroundColor Yellow
+  Write-Host "  Uninstall-Module AzureAD -AllVersions -ErrorAction SilentlyContinue" -ForegroundColor Yellow
+  Write-Host "  Uninstall-Module AzureADPreview -AllVersions -ErrorAction SilentlyContinue" -ForegroundColor Yellow
+  Write-Host "  Update-Module ExchangeOnlineManagement -Force" -ForegroundColor Yellow
+  Write-Host "  Update-Module Microsoft.Graph -Force" -ForegroundColor Yellow
+  Write-Host "Then close ALL PowerShell windows, open a new one, and re-run this script." -ForegroundColor Yellow
+  Write-Host ""
+}
+
+# Connect to Exchange Online with retry. If the broker MSAL conflict is hit during
+# an interactive (delegate) connect, fall back to device-code (-Device) which bypasses
+# WAM/broker entirely. App-auth bypasses the broker, so retries print remediation only.
+function Connect-ExchangeOnlineForSizing {
+  param (
+    [string]$AccessToken,
+    [string]$Organization,
+    [string]$UserPrincipalName
+  )
+  try {
+    if ($AccessToken) {
+      Connect-ExchangeOnline -AccessToken $AccessToken -Organization $Organization -ShowBanner:$false
+    } elseif ($UserPrincipalName) {
+      Connect-ExchangeOnline -UserPrincipalName $UserPrincipalName -ShowBanner:$false
+    } else {
+      Connect-ExchangeOnline -ShowBanner:$false
+    }
+  } catch {
+    $msg = $_.Exception.Message
+    if (Test-ExoBrokerAssemblyConflict -Message $msg) {
+      if (-not $AccessToken) {
+        Write-Host "[WARN] Broker MSAL conflict detected; retrying with device-code authentication (-Device)." -ForegroundColor Yellow
+        try {
+          if ($UserPrincipalName) {
+            Connect-ExchangeOnline -UserPrincipalName $UserPrincipalName -Device -ShowBanner:$false
+          } else {
+            Connect-ExchangeOnline -Device -ShowBanner:$false
+          }
+          return
+        } catch {
+          $msg = $_.Exception.Message
+        }
+      }
+      Write-ExoBrokerRemediation
+    }
+    throw
+  }
+}
+
 # Validate that Period (days) for historical reports is valid
 # Must be: 7, 30, 90, or 180
 $PeriodValues = @(7, 30, 90, 180)
@@ -341,9 +421,17 @@ if (Get-Module -ListAvailable -Name Microsoft.Graph.Reports) {
 }
 
 # Validate the required 'ExchangeOnlineManagement' is installed and provide a user friendly message when it's not.
-if (Get-Module -ListAvailable -Name ExchangeOnlineManagement) {
-} else {
-  throw "The 'ExchangeOnlineManagement' module is required for this script. Run the follow command to install: Install-Module ExchangeOnlineManagement"
+# Require >= 3.4.0 to avoid the MSAL broker mismatch
+# ("Method not found ... BrokerExtension.WithBroker(..., BrokerOptions)") seen when an older
+# Microsoft.Identity.Client.dll is loaded into the session via stale modules (SPARK-887253).
+$MinEXOModuleVersion = [version]'3.4.0'
+$exoModule = Get-Module -ListAvailable -Name ExchangeOnlineManagement |
+  Sort-Object Version -Descending | Select-Object -First 1
+if (-not $exoModule) {
+  throw "The 'ExchangeOnlineManagement' module is required for this script. Run the follow command to install: Install-Module ExchangeOnlineManagement -MinimumVersion $MinEXOModuleVersion"
+}
+if ($exoModule.Version -lt $MinEXOModuleVersion) {
+  throw "The 'ExchangeOnlineManagement' module is version $($exoModule.Version), but $MinEXOModuleVersion or later is required to avoid an MSAL broker mismatch. Run: Update-Module ExchangeOnlineManagement -Force, then start a fresh PowerShell session."
 }
 
 $AzureAdRequired = $PSBoundParameters.ContainsKey('ADGroup') -or $PSBoundParameters.ContainsKey('ExcludeADGroup')
@@ -382,10 +470,17 @@ if ($UseAppAccess -eq $true) {
             $clientSecretSecure = Read-Host -Prompt "Password for user $clientId" -AsSecureString
             $clientSecret = ConvertFrom-SecureString -SecureString $clientSecretSecure -AsPlainText   # legit:ignore
             $token = Get-AccessToken -clientId $clientId -clientSecret $clientSecret -tenantId $tenantId
-            Connect-ExchangeOnline -AccessToken $token -Organization $tenantId
+            Connect-ExchangeOnlineForSizing -AccessToken $token -Organization $tenantId
+            # Cache credentials so long-running loops can refresh the EXO token without re-prompting.
+            $script:ExoAuthMode = 'App'
+            $script:ExoTenantId = $tenantId
+            $script:ExoClientId = $clientId
+            $script:ExoClientSecret = $clientSecret
         } catch {
-            $errorException = $_.Exception
-            $errorMessage = $errorException.Message
+            if (Test-ExoBrokerAssemblyConflict -Message $_.Exception.Message) {
+                Write-ExoBrokerRemediation
+            }
+            $errorMessage = $_.Exception.Message
             Write-Host "[ERROR] Unable to Connect to the Microsoft Exchange PowerShell Module: $errorMessage"
             return
         }
@@ -407,10 +502,14 @@ if ($UseAppAccess -eq $true) {
     if ($SkipArchiveMailbox -eq $false -or $SkipRecoverableItems -eq $false) {
         Write-Host "Connecting to the Microsoft Exchange Online Module to gather per-mailbox In Place Archive stats."
         try {
-            Connect-ExchangeOnline -ShowBanner:$false
+            Connect-ExchangeOnlineForSizing
+            $script:ExoAuthMode = 'Delegate'
+            $script:ExoUserPrincipalName = (Get-ConnectionInformation).UserPrincipalName
         } catch {
-            $errorException = $_.Exception
-            $errorMessage = $errorException.Message
+            if (Test-ExoBrokerAssemblyConflict -Message $_.Exception.Message) {
+                Write-ExoBrokerRemediation
+            }
+            $errorMessage = $_.Exception.Message
             Write-Host "[ERROR] Unable to Connect to the Microsoft Exchange PowerShell Module: $errorMessage"
             return
         }
@@ -733,12 +832,22 @@ if ($SkipArchiveMailbox -eq $true) {
   Write-Host "[INFO] Retrieving all Exchange Mailbox In-Place Archive sizing"
   # Get a list of all users with In Place Archive mailboxes in the tenant
   # $ArchiveMailboxes = Get-ExoMailbox -Archive -ResultSize Unlimited
-  $ArchiveMailboxList = @()
+  # Use a generic List to avoid O(N^2) array re-allocation on +=. With tens of
+  # thousands of mailboxes the array-append cost alone was hours (SPARK-887257).
+  $ArchiveMailboxList = [System.Collections.Generic.List[object]]::new()
   $CurrentMailboxNum = 0
   Write-Host "Found $ArchiveMailboxesCount mailboxes with In Place Archives" -foregroundcolor green
   do {
     if ( ($CurrentMailboxNum % 10) -eq 0 ) {
       Write-Host "[$CurrentMailboxNum / $ArchiveMailboxesCount] Processing mailboxes ..."
+    }
+    # Refresh the EXO connection periodically so the access token doesn't age out
+    # mid-run on very large tenants where the enumeration can take days.
+    if ($CurrentMailboxNum -gt 0 -and ($CurrentMailboxNum % $SkipInternval) -eq 0) {
+      Write-Host "[INFO] Refreshing Exchange Online connection at $CurrentMailboxNum / $ArchiveMailboxesCount to avoid token timeout."
+      try { Reset-ExoConnection } catch {
+        Write-Host "[WARN] EXO reconnect failed: $($_.Exception.Message). Will retry on next interval."
+      }
     }
     $CurrentUser = $ArchiveMailboxes[$CurrentMailboxNum].'User Principal Name'
     try {
@@ -750,7 +859,7 @@ if ($SkipArchiveMailbox -eq $true) {
         "ArchiveSize" = $ArchiveSize
         "ArchiveItems" = $ArchiveMailboxStats.ItemCount
       }
-      $ArchiveMailboxList += $ArchiveStats
+      [void]$ArchiveMailboxList.Add($ArchiveStats)
     } catch {
       Write-Error "Error getting info for mailbox: $CurrentUser"
     }
@@ -790,10 +899,13 @@ function Get-RIFMailboxStats {
         [array]$ExchangeUsers,
 
         [Parameter(Mandatory = $true, HelpMessage = "Enter whether to include In-Place archive mailbox Recoverable Items folder or not.")]
-        [bool]$IncludeArchiveMailbox
+        [bool]$IncludeArchiveMailbox,
+
+        [Parameter()]
+        [int]$ReconnectInterval = 500
     )
 
-    $RIFMailboxList = @()
+    $RIFMailboxList = [System.Collections.Generic.List[object]]::new()
     $CurrentMailboxNum = 0
     $ActiveMailboxesCount = $ExchangeUsers.count
 
@@ -803,10 +915,16 @@ function Get-RIFMailboxStats {
         if (($CurrentMailboxNum % 10) -eq 0) {
             Write-Host "[$CurrentMailboxNum / $ActiveMailboxesCount] Processing mailboxes ..."
         }
+        if ($CurrentMailboxNum -gt 0 -and ($CurrentMailboxNum % $ReconnectInterval) -eq 0) {
+            Write-Host "[INFO] Refreshing Exchange Online connection at $CurrentMailboxNum / $ActiveMailboxesCount to avoid token timeout."
+            try { Reset-ExoConnection } catch {
+                Write-Host "[WARN] EXO reconnect failed: $($_.Exception.Message). Will retry on next interval."
+            }
+        }
         $CurrentUser = $ExchangeUsers[$CurrentMailboxNum].'User Principal Name'
         try {
             $RIFStats = Get-RecoverableItemsInfo -Mailbox $CurrentUser -IncludeArchiveMailbox $IncludeArchiveMailbox
-            $RIFMailboxList += $RIFStats
+            [void]$RIFMailboxList.Add($RIFStats)
         } catch {
             Write-Error "Error getting info for mailbox: $CurrentUser"
         }
