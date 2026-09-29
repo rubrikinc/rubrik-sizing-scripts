@@ -101,7 +101,9 @@
     PERMISSIONS
     ============================================================================
     BASE (always requested): Entra role "Reports Reader". Delegated scopes
-              Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All.
+              Reports.Read.All, User.Read.All, Sites.Read.All. Also requests
+              Group.Read.All BY DEFAULT (opt out via -NoGroups - see below;
+              not a fixed base scope like the three above).
               Buys: full tiering, recovery time, and cost modeling for every
               workload, plus user profile enrichment (Job Title, Department,
               Employee Type, Manager, manager roll-up chain, mailbox-type
