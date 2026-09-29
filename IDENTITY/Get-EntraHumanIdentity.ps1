@@ -403,7 +403,7 @@ function Test-FilterMatch {
     param([string]$AttributeValue, [string]$FilterValue, [string]$Delimiter)
     if ([string]::IsNullOrEmpty($AttributeValue)) { return $false }
     if ($Delimiter) {
-        $segments = $AttributeValue.Split($Delimiter)
+        $segments = $AttributeValue -split [regex]::Escape($Delimiter)
         return [bool]($segments | Where-Object { $_ -ieq $FilterValue })
     } else {
         return $AttributeValue.IndexOf($FilterValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0

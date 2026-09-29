@@ -308,7 +308,7 @@ function Test-FilterMatch {
     param([string]$AttributeValue, [string]$FilterValue, [string]$Delimiter)
     if ([string]::IsNullOrEmpty($AttributeValue)) { return $false }
     if ($Delimiter) {
-        $segments = $AttributeValue.Split($Delimiter)
+        $segments = $AttributeValue -split [regex]::Escape($Delimiter)
         return [bool]($segments | Where-Object { $_ -ieq $FilterValue })
     } else {
         return $AttributeValue.IndexOf($FilterValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
@@ -408,11 +408,13 @@ function Get-ByOUData {
             $PatternSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$patternNames, [System.StringComparer]::OrdinalIgnoreCase)
 
             $adProperties = @('SamAccountName', 'DistinguishedName', 'LastLogonTimestamp', 'GivenName', 'Surname')
-            if ($DeduplicateOn -and $adProperties -notcontains $DeduplicateOn) {
-                $adProperties += $DeduplicateOn
+            if ($DeduplicateOn) {
+                $dedupProp = $DeduplicateOn.Split('.')[0]
+                if ($adProperties -notcontains $dedupProp) { $adProperties += $dedupProp }
             }
             if ($useAttributeFilter) {
-                $adProperties += $FilterAttribute
+                $filterProp = $FilterAttribute.Split('.')[0]
+                if ($adProperties -notcontains $filterProp) { $adProperties += $filterProp }
                 if ($domain -eq $DomainsToAudit[0]) {
                     Write-Log "Filter active: attribute '$FilterAttribute' contains '$FilterValue' (delimiter: $(if ($FilterDelimiter) { "'$FilterDelimiter'" } else { 'none' }))" "INFO" "Cyan"
                 }
