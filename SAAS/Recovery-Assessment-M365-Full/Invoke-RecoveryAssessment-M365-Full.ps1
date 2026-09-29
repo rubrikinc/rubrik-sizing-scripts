@@ -705,7 +705,7 @@ function Get-UserEnrichmentIndex {
 
 function Add-UserEnrichment {
     param(
-        [Parameter(Mandatory)] [array]     $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]     $Data,
         [Parameter(Mandatory)] [hashtable] $EnrichmentIndex,
         [Parameter(Mandatory)] [string]    $UpnField
     )
@@ -755,7 +755,7 @@ function Add-MailboxTypeHeuristic {
         report export where Recipient Type comes back blank, and only runs
         in that case.
     #>
-    param([Parameter(Mandatory)] [array] $Data)
+    param([AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data)
     foreach ($row in $Data) {
         $recipientType = [string]$row.RecipientType
         $type = if ($recipientType) {
@@ -784,7 +784,7 @@ function Add-MailboxTypeHeuristic {
 function Add-TitleWeightScore {
     <# FULL ONLY (needs JobTitle). Highest-weight keyword match wins. #>
     param(
-        [Parameter(Mandatory)] [array]     $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]     $Data,
         [Parameter(Mandatory)] [hashtable] $TitleWeights
     )
     foreach ($row in $Data) {
@@ -815,7 +815,7 @@ function Add-HubSiteFlag {
         permissions crawl - out of scope here, see README).
     #>
     param(
-        [Parameter(Mandatory)] [array]    $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]    $Data,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $Keywords,
         [double] $Bonus = 0.15
     )
@@ -867,7 +867,7 @@ function Get-ExactTeamSiteUrls {
     v1.2.1/1.2.2 notes retained below.
     #>
     param(
-        [Parameter(Mandatory)] [array] $Teams,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Teams,
         [switch] $Groups
     )
 
@@ -957,7 +957,7 @@ function Get-FieldSum {
 
 function Add-CompositeScore {
     param(
-        [Parameter(Mandatory)] [array] $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data,
         [Parameter(Mandatory)] [hashtable] $MetricWeights
     )
     $count = $Data.Count
@@ -990,7 +990,7 @@ function Add-CriteriaTags {
         accurate when weights are adjusted live in the report.
     #>
     param(
-        [Parameter(Mandatory)] [array]     $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]     $Data,
         [Parameter(Mandatory)] [hashtable] $MetricWeights
     )
     $friendly = @{
@@ -1023,7 +1023,7 @@ function Add-CriteriaTags {
 
 function Add-Tier {
     param(
-        [Parameter(Mandatory)] [array] $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data,
         [double[]] $TierSplit = @(0.33, 0.33, 0.34),
         [string] $InactiveCheckField
     )
@@ -1090,7 +1090,7 @@ function Add-RecentDataEstimate {
         Build-RecoveryModel's ABR (hot-scope) recovery-time figures.
     #>
     param(
-        [Parameter(Mandatory)] [array]  $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Data,
         [Parameter(Mandatory)] [string] $TotalItemField,
         [Parameter(Mandatory)] [string] $TotalStorageField,
         [Parameter(Mandatory)] [string] $RecentItemField
@@ -1138,7 +1138,7 @@ function Add-BudgetTier {
         same 0-7 day scaling the JS Recovery tab/tiering walk uses.
     #>
     param(
-        [Parameter(Mandatory)] [array]  $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Data,
         [Parameter(Mandatory)] [string] $InactiveCheckField,
         [Parameter(Mandatory)] [double] $AvgItemSize,
         [hashtable] $SPODTier,
@@ -1221,7 +1221,7 @@ function Import-Overrides {
 
 function Add-Overrides {
     param(
-        [Parameter(Mandatory)] [array]     $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]     $Data,
         [Parameter(Mandatory)] [hashtable] $OverridesIndex,
         [Parameter(Mandatory)] [string]    $Workload
     )
@@ -1240,7 +1240,7 @@ function Add-Overrides {
 
 function Get-TierTotals {
     param(
-        [Parameter(Mandatory)] [array]  $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Data,
         [string] $ItemField = '',
         [string] $StorageField = ''
     )
@@ -1439,9 +1439,9 @@ function Build-RecoveryModel {
         cumulative time against the corresponding entry in $TargetsMin.
     #>
     param(
-        [Parameter(Mandatory)] [array] $SharePoint,
-        [Parameter(Mandatory)] [array] $OneDrive,
-        [Parameter(Mandatory)] [array] $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Mailboxes,
         [Parameter(Mandatory)] [string] $RecoveryLicenseTier,
         # NEW v3.1.0: Group 1/2/3 RTO targets in minutes, used to flag
         # ExceedsTarget/TargetGapMin per group (a compliance check, not a
@@ -1582,9 +1582,9 @@ function Get-FullTenantRecoveryEstimate {
         that could quietly diverge.
     #>
     param(
-        [Parameter(Mandatory)] [array]  $SharePoint,
-        [Parameter(Mandatory)] [array]  $OneDrive,
-        [Parameter(Mandatory)] [array]  $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
         [Parameter(Mandatory)] [string] $RecoveryLicenseTier
     )
 
@@ -1650,9 +1650,9 @@ function Get-WholeTenantABRMinutes {
         real budget walk excludes from its active population.
     #>
     param(
-        [Parameter(Mandatory)] [array]  $SharePoint,
-        [Parameter(Mandatory)] [array]  $OneDrive,
-        [Parameter(Mandatory)] [array]  $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
         [Parameter(Mandatory)] [string] $RecoveryLicenseTier,
         [Parameter(Mandatory)] [double] $WindowFactor
     )
@@ -1763,7 +1763,7 @@ function Get-GraphReport {
 
 function Export-WorkloadResult {
     param(
-        [Parameter(Mandatory)] [array] $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data,
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [string] $OutDir
     )
@@ -1850,7 +1850,7 @@ function Get-RecoverableItemsInfo {
 function Get-DetailedSizingInfo {
     <# Archive Mailbox storage/items + Recoverable Items sizing - the -DetailedSizing half of the Sizing tab. Connects to Exchange Online itself; always disconnects before returning, even on error. #>
     param(
-        [Parameter(Mandatory)] [array]  $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
         [string] $TenantId,
         [string] $ClientId,
         [string] $CertificateThumbprint
@@ -2005,6 +2005,13 @@ function Get-MailboxCriticality {
             SendRecvActivity7d = $sendCount7d + $receiveCount7d
         }
     }
+    # NEW: see ConvertTo-ReportRows's matching comment - if $usage has zero
+    # rows, or every row gets skipped by the `if (-not $upn) { continue }`
+    # above, this foreach-as-expression produces ZERO output objects and
+    # PowerShell collapses $rows to $null (not an empty array) - so @($rows)
+    # would return a ONE-element array containing $null instead of a true
+    # empty array. Guard against that explicitly.
+    if ($null -eq $rows) { return @() }
     return @($rows)
 }
 
@@ -2067,6 +2074,11 @@ function Get-OneDriveCriticality {
             ViewedOrEditedCount7d  = $viewedEdited7d
         }
     }
+    # NEW: see ConvertTo-ReportRows's matching comment - guard against the
+    # foreach-as-expression $null-collapse when $usage is empty or every row
+    # gets skipped above, so @($rows) can't return a ONE-element [$null]
+    # array instead of a true empty array.
+    if ($null -eq $rows) { return @() }
     return @($rows)
 }
 
@@ -2197,6 +2209,18 @@ function Get-TeamsCriticality {
             TotalActivity     = $activeUsers + $channelMsgs + $meetings
         }
     }
+    # NEW: see ConvertTo-ReportRows's matching comment - a tenant with no
+    # Teams usage (or a Teams report that comes back with zero data rows)
+    # makes this foreach-as-expression produce ZERO output objects, which
+    # PowerShell collapses to $rows = $null rather than an empty array.
+    # Without this guard, @($rows) would return a ONE-element array
+    # containing $null instead of a true empty array - which is what caused
+    # a real customer's run to crash downstream with "Cannot bind argument
+    # to parameter 'Teams' because it is an empty collection" when that
+    # value was later passed into a [Parameter(Mandatory)] [array] $Teams
+    # parameter (see Get-ExactTeamSiteUrls and [AllowEmptyCollection()]
+    # additions throughout this file).
+    if ($null -eq $rows) { return @() }
     return @($rows)
 }
 
@@ -5935,7 +5959,7 @@ $script:RubrikBrandmarkSvg = @'
 function ConvertTo-ReportRows {
     <# Builds the JSON-ready row shape - common fields plus a `metrics` sub-object of raw numeric fields used for client-side scoring/tiering/totals/recovery math. #>
     param(
-        [Parameter(Mandatory)] [array]    $Data,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]    $Data,
         [Parameter(Mandatory)] [string[]] $MetricFields
     )
     $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate')
@@ -5960,6 +5984,16 @@ function ConvertTo-ReportRows {
         }
         [PSCustomObject]$obj
     }
+    # NEW: when $Data is empty, the foreach-as-expression above produces ZERO
+    # output objects, and PowerShell's pipeline collapse then assigns $rows =
+    # $null (not an empty array) - the same collection-unroll footgun this
+    # file already works around elsewhere for ManagerChain/Groups/GroupIds.
+    # Without this guard, @($rows) on that $null becomes a ONE-element array
+    # containing $null (@($null) is never empty), so a zero-object workload
+    # (e.g. a tenant with no Teams) would embed [null] instead of [] in the
+    # report's JSON - and the client-side JS, which expects every array entry
+    # to be a row object, would throw dereferencing a property on that null.
+    if ($null -eq $rows) { return @() }
     return @($rows)
 }
 
@@ -6092,10 +6126,10 @@ $script:ReportHtmlTemplate = @'
 
 function New-M365HtmlReport {
     param(
-        [Parameter(Mandatory)] [array]  $Mailboxes,
-        [Parameter(Mandatory)] [array]  $OneDrive,
-        [Parameter(Mandatory)] [array]  $SharePoint,
-        [Parameter(Mandatory)] [array]  $Teams,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Teams,
         [Parameter(Mandatory)] [string] $CustomerLabel,
         [Parameter(Mandatory)] [string] $Period,
         [Parameter(Mandatory)] [string] $OutFile,
@@ -6277,10 +6311,10 @@ function New-M365SummaryHtmlReport {
         client-side engine to recompute from.
     #>
     param(
-        [Parameter(Mandatory)] [array]  $Mailboxes,
-        [Parameter(Mandatory)] [array]  $OneDrive,
-        [Parameter(Mandatory)] [array]  $SharePoint,
-        [Parameter(Mandatory)] [array]  $Teams,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Teams,
         [Parameter(Mandatory)] [string] $CustomerLabel,
         [Parameter(Mandatory)] [string] $Period,
         [Parameter(Mandatory)] [string] $OutFile,
@@ -6502,7 +6536,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.12) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.16.13) ===" -ForegroundColor Cyan
 
 # NEW 2026-09-22: found via a real customer - a very large tenant
 # (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
@@ -6870,7 +6904,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.12)
+Recovery Assessment - M365 - Run Manifest (v3.16.13)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
