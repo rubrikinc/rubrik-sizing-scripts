@@ -283,8 +283,9 @@ function Get-ReportHeaders {
 
         'Licensing' {
             return [PSCustomObject][ordered]@{
-                Domain             = 'Domain'
-                LicensedIdentities = 'Licensed Identities'
+                Domain              = 'Domain'
+                LicensedIdentities  = 'Licensed Identities'
+                DuplicateIdentities = 'Duplicate Identities'
             }
         }
     }
@@ -870,7 +871,7 @@ $byDomain = Get-ByDomainData -OUData $ouDataInput
 
 #— 3b) Licensing data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, DuplicateIdentities
 
 #— 4) Report headers
 $ouCols        = Get-ReportHeaders -Type ByOU

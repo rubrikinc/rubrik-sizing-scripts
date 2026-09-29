@@ -120,6 +120,7 @@ Same columns as ByOU, minus the OU column. Values are aggregated across all OUs 
 | --- | --- |
 | Domain | The Active Directory domain name. |
 | Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Active + not MSA + not gMSA + not pattern-matched + filter match + not duplicate. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 
