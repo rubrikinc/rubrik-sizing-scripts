@@ -245,6 +245,7 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | Never Logged In Users | Number of accounts with no recorded sign-in. |
 | Service Account Pattern | Number of accounts matching the service account naming patterns. |
 | Licensed Identities | Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account + filter match + not duplicate). |
+| Duplicate Identities | Number of accounts that would otherwise be licensed but were excluded as duplicates of an already-counted identity. |
 | Source AD | Number of distinct on-premises AD source domains for synced accounts. |
 | Hybrid Members | Number of member accounts synced from on-premises AD. |
 | Cloud Members | Number of cloud-only member accounts. |
@@ -264,6 +265,7 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | Licensed Cloud Members | Number of licensed cloud-only member identities. |
 | Licensed B2B Guests | Number of licensed B2B guest identities. |
 | Licensed CIAM | Number of licensed CIAM/consumer identities. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 
@@ -418,6 +420,7 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | Synch from AD | Number of accounts sourced from Active Directory. |
 | Cloud Only | Number of Okta-managed cloud-only accounts. |
 | Licensed Identities | Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account + filter match + not duplicate). |
+| Duplicate Identities | Number of accounts that would otherwise be licensed but were excluded as duplicates of an already-counted identity. |
 | Source AD | Number of distinct AD source domains for AD-synced accounts. |
 | Deprovisioned | *(only with `-IncludeDeprovisioned`)* Number of deprovisioned accounts in this domain. |
 | Applications | *(only with `-CheckAppAssignments`)* Number of unique application labels assigned to users in this domain. |
@@ -428,6 +431,7 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | --- | --- |
 | Directory | The domain name. |
 | Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Internal + Enabled + Active (logged in within inactivity period) + Not a service account pattern match + Filter match + Not a duplicate. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 

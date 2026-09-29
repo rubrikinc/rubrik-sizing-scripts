@@ -715,8 +715,9 @@ function Get-ReportHeaders {
 
         'Licensing' {
             return [PSCustomObject][ordered]@{
-                Domain             = 'Directory'
-                LicensedIdentities = 'Licensed Identities'
+                Domain              = 'Directory'
+                LicensedIdentities  = 'Licensed Identities'
+                DuplicateIdentities = 'Duplicate Identities'
             }
         }
 
@@ -735,6 +736,7 @@ function Get-ReportHeaders {
                 SyncFromADCount               = 'Synch from AD'
                 CloudOnlyCount                = 'Cloud Only'
                 LicensedIdentities            = 'Licensed Identities'
+                DuplicateIdentities           = 'Duplicate Identities'
                 ADSourceDomainCounts          = 'Source AD'
             }
             if ($IncludeDeprovisioned) {
@@ -983,6 +985,7 @@ function Get-ByDomainData {
                     SyncFromADCount               = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
                     CloudOnlyCount                = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
                     LicensedIdentities            = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
+                    DuplicateIdentities           = ($grpUsers | Where-Object { $_.IsDuplicate -eq 1 }).Count
                     ADSourceDomainCounts          = @(
                         $grpUsers |
                         Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
@@ -1347,7 +1350,7 @@ $byDomain = Get-ByDomainData `
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, DuplicateIdentities
 
 #— 4) Prepare report headers
 $userCols      = Get-ReportHeaders -Type ByUser -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned -UseAttributeFilter:$useAttributeFilter

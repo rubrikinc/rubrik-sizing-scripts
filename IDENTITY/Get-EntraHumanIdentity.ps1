@@ -357,6 +357,7 @@ function Get-ReportHeaders {
                 LicensedCloudMembers  = 'Licensed Cloud Members'
                 LicensedB2BGuests     = 'Licensed B2B Guests'
                 LicensedCIAMs         = 'Licensed CIAM'
+                DuplicateIdentities   = 'Duplicate Identities'
             }
         }
 
@@ -371,6 +372,7 @@ function Get-ReportHeaders {
                 NeverLoggedInUsers            = 'Never Logged In Users'
                 PatternMatchedUsers           = 'Service Account Pattern'
                 LicensedIdentities            = 'Licensed Identities'
+                DuplicateIdentities           = 'Duplicate Identities'
                 ADSourceDomainCounts          = 'Source AD'
                 HybridMemberCount             = 'Hybrid Members'
                 CloudMemberCount              = 'Cloud Members'
@@ -744,6 +746,7 @@ function Get-ByDomainData {
           NeverLoggedInUsers = ($grpUsers | Where-Object { $_.NeverLoggedInUser -eq 1 }).Count
           PatternMatchedUsers = ($grpUsers | Where-Object { $_.PatternMatchedUser -eq 1 }).Count
           LicensedIdentities = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
+          DuplicateIdentities = ($grpUsers | Where-Object { $_.IsDuplicate -eq 1 }).Count
           ADSourceDomainCounts = @(
             $grpUsers |
             Where-Object { $_.HybridMember -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
@@ -786,6 +789,7 @@ function Get-ByDomainData {
       NeverLoggedInUsers = 0
       PatternMatchedUsers = 0
       LicensedIdentities = 0
+      DuplicateIdentities = 0
       ADSourceDomainCounts = 0
       HybridMemberCount = 0
       CloudMemberCount = 0
@@ -1162,7 +1166,7 @@ $byDomain = Get-ByDomainData `
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, LicensedHybridMembers, LicensedCloudMembers, LicensedB2BGuests, LicensedCIAMs
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, LicensedHybridMembers, LicensedCloudMembers, LicensedB2BGuests, LicensedCIAMs, DuplicateIdentities
 
 #— 4) Prepare report headers
 $userCols      = Get-ReportHeaders -Type ByUser -CheckOwnership:$CheckOwnership -UseAttributeFilter:$useAttributeFilter
