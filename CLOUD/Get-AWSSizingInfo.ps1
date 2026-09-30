@@ -104,7 +104,6 @@
                     "s3:GetStorageLensConfiguration",
                     "s3:ListStorageLensConfigurations",
                     "secretsmanager:ListSecrets",
-                    "sts:AssumeRole",
                     "s3tables:GetTableData",
                     "s3tables:GetTableMaintenanceConfiguration",
                     "s3tables:GetTableMetadataLocation",

@@ -95,7 +95,6 @@ To run the AWS sizing script, ensure you have the following:
                       "s3tables:GetTable",
                       "s3tables:ListTagsForResource",
                       "secretsmanager:ListSecrets",
-                      "sts:AssumeRole",
                       "sqs:ListQueues"
                   ],
                   "Resource": "*"

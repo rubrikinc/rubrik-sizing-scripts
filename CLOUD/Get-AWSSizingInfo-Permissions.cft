@@ -98,7 +98,6 @@ Resources:
                   - 's3tables:ListTables'
                   - 's3tables:ListTagsForResource'
                   - 'secretsmanager:ListSecrets'
-                  - 'sts:AssumeRole'
                   - 'sqs:ListQueues'
                 Resource: '*'
 
