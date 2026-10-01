@@ -35,7 +35,7 @@
     - **Never Logged In**: 1 if no sign-in activity has ever been recorded for this account, 0 otherwise.
     - **Service Account Pattern**: 1 if the user's UPN matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
     - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account AND filter match AND not a duplicate), 0 otherwise.
-    - **Duplicate Identity**: 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses GivenName + Surname by default, or the attribute specified by -DeduplicateOn.
+    - **Duplicate Identity**: 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses UserPrincipalName by default, or the attribute specified by -DeduplicateOn ("Name" for GivenName + Surname).
     - **Source AD**: The on-premises AD domain name for synced accounts, N/A for cloud-only accounts.
     - **Hybrid Member**: 1 if the user is a member synced from on-premises AD (OnPremisesSyncEnabled = true), 0 otherwise.
     - **Cloud Member**: 1 if the user is a cloud-only member (UserType = Member, not synced from AD, not CIAM), 0 otherwise.
@@ -100,7 +100,7 @@
     Example: -FilterAttribute "onPremisesExtensionAttributes.extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#"
 
 .PARAMETER DeduplicateOn
-    An alternative attribute to use as the deduplication key (e.g., "Mail", "EmployeeID"). By default, deduplication uses GivenName + Surname (both must be present). When a user's deduplication key has already been seen, the account is marked as a duplicate and not counted as a Licensed Identity. Accounts with a null or empty key are never deduplicated.
+    An alternative attribute to use as the deduplication key (e.g., "Mail", "EmployeeID"). By default, deduplication uses UserPrincipalName, which is unique within a tenant. Use "Name" to deduplicate on GivenName + Surname instead (both must be present); this can merge two different people who share a name. When a user's deduplication key has already been seen, the account is marked as a duplicate and not counted as a Licensed Identity. Accounts with a null or empty key are never deduplicated.
 
 .EXAMPLE
     Example 1: Perform a full audit with ownership checking
@@ -411,15 +411,16 @@ function Test-FilterMatch {
 }
 
 function Get-DeduplicateKey {
-    param($User, [string]$DeduplicateOn, [string]$FirstNameProp, [string]$LastNameProp)
-    if ($DeduplicateOn) {
-        $val = Get-NestedProperty $User $DeduplicateOn
-        if ($val) { return $val.ToString().Trim().ToLowerInvariant() }
+    param($User, [string]$DeduplicateOn, [string]$DefaultAttribute, [string]$FirstNameProp, [string]$LastNameProp)
+    $attribute = if ($DeduplicateOn) { $DeduplicateOn } else { $DefaultAttribute }
+    if ($attribute -ieq 'Name') {
+        $fn = Get-NestedProperty $User $FirstNameProp
+        $ln = Get-NestedProperty $User $LastNameProp
+        if ($fn -and $ln) { return "$($fn.ToString().Trim()) $($ln.ToString().Trim())".ToLowerInvariant() }
         return $null
     }
-    $fn = Get-NestedProperty $User $FirstNameProp
-    $ln = Get-NestedProperty $User $LastNameProp
-    if ($fn -and $ln) { return "$($fn.ToString().Trim()) $($ln.ToString().Trim())".ToLowerInvariant() }
+    $val = Get-NestedProperty $User $attribute
+    if ($val) { return $val.ToString().Trim().ToLowerInvariant() }
     return $null
 }
 
@@ -501,7 +502,7 @@ function Get-ByUserData {
     process {
         Write-Log "Retrieving users from Entra ID..." "INFO" "Cyan"
         $graphProperties = @('Id','UserPrincipalName','Mail','OtherMails','Identities','UserType','AccountEnabled','SignInActivity','OnPremisesSyncEnabled','OnPremisesDomainName','CreationType','GivenName','Surname')
-        if ($DeduplicateOn) {
+        if ($DeduplicateOn -and $DeduplicateOn -ine 'Name') {
             $dedupProp = $DeduplicateOn.Split('.')[0]
             if ($graphProperties -notcontains $dedupProp) { $graphProperties += $dedupProp }
         }
@@ -621,7 +622,7 @@ function Get-ByUserData {
             $wouldBeLicensed = $isMember -and $isEnabled -and $isActive -and -not $patternMatched -and $filterMatch
             $isDuplicate = $false
             if ($wouldBeLicensed) {
-                $dedupKey = Get-DeduplicateKey -User $u -DeduplicateOn $DeduplicateOn -FirstNameProp 'GivenName' -LastNameProp 'Surname'
+                $dedupKey = Get-DeduplicateKey -User $u -DeduplicateOn $DeduplicateOn -DefaultAttribute 'UserPrincipalName' -FirstNameProp 'GivenName' -LastNameProp 'Surname'
                 if ($dedupKey -and -not $seenKeys.Add($dedupKey)) {
                     $isDuplicate = $true
                     $duplicateCount++
