@@ -662,7 +662,8 @@ function Get-ByUserData {
         Write-Verbose "Built $($output.Count) user records. Calculating totals..."
         Write-Log "Successfully built $($output.Count) user records." "INFO" "Green"
         $licensedCount = ($output | Where-Object { $_.LicensedIdentity -eq 1 }).Count
-        Write-Log "Deduplication: $($seenKeys.Count) unique identities from $($licensedCount + $duplicateCount) licensed accounts ($duplicateCount duplicates removed)." "INFO" "Cyan"
+        $noKeyCount = $licensedCount - $seenKeys.Count
+        Write-Log "Deduplication: $($licensedCount + $duplicateCount) eligible accounts, $duplicateCount duplicates removed, $licensedCount licensed identities ($noKeyCount of them have no deduplication key and are never deduplicated)." "INFO" "Cyan"
 
         # Build a grand-total row
         $totals = [ordered]@{ Directory = "TOTAL"; User = "" }

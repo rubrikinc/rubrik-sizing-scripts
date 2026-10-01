@@ -512,7 +512,8 @@ function Get-ByOUData {
     }
 
     $licensedTotal = ($summary | Measure-Object -Property LicensedIdentities -Sum).Sum
-    Write-Log "Deduplication: $($seenKeys.Count) unique identities from $($licensedTotal + $duplicateCount) licensed accounts ($duplicateCount duplicates removed)." "INFO" "Cyan"
+    $noKeyCount = $licensedTotal - $seenKeys.Count
+    Write-Log "Deduplication: $($licensedTotal + $duplicateCount) eligible accounts, $duplicateCount duplicates removed, $licensedTotal licensed identities ($noKeyCount of them have no deduplication key and are never deduplicated)." "INFO" "Cyan"
     Write-Log "Successfully built $($summary.Count) OU records across all domains." "INFO" "Green"
     return $summary + [PSCustomObject]$totals
 }
@@ -527,7 +528,7 @@ function Get-ByDomainData {
         [object[]] $OUData
     )
 
-    $rows = $OUData |
+    $rows = @($OUData |
         Group-Object Domain |
         ForEach-Object {
             [PSCustomObject][ordered]@{
@@ -543,7 +544,7 @@ function Get-ByDomainData {
                 LicensedIdentities                  = ($_.Group | Measure-Object LicensedIdentities -Sum).Sum
                 DuplicateIdentities                 = ($_.Group | Measure-Object DuplicateIdentities -Sum).Sum
             }
-        }
+        })
 
     # Build a grand-total row
     $totals = [ordered]@{ Domain = 'TOTAL' }
