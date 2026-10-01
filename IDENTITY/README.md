@@ -35,6 +35,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 -   **Flexible Reporting**: Generates reports in two modes:
     -   `Full`: A detailed breakdown of accounts per Organizational Unit (OU).
     -   `Summary`: A high-level summary of accounts per domain.
+-   **Attribute-Based Filtering**: Optionally filter users based on any directory attribute. For example, use `-FilterAttribute "extensionAttribute6" -FilterValue "Person"` to count only users whose `extensionAttribute6` contains "Person". Add `-FilterDelimiter "#"` to split the attribute value and match an exact segment instead of substring matching.
+-   **Identity Deduplication**: Automatically deduplicates identities across domains based on first name + last name (both must be present). The same physical person with multiple accounts across domains is counted only once for licensing. Use `-DeduplicateOn "Mail"` to override the deduplication key with another attribute (e.g., email or employee ID).
 -   **CSV & HTML Export**: Automatically exports the audit results to timestamped CSV and HTML files that can be shared with Rubrik.
 -   **Logging**: Creates a detailed log file for each execution, capturing all actions and potential errors.
 
@@ -52,6 +54,10 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 | `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by name. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None                      |
 | `ExcludeOUs`                    | An array of OU distinguished names to exclude from the audit (exact match on the full DN).                                          | No       | None                      |
 | `Mode`                          | The reporting mode. `Full` for a detailed per-OU report or `Summary` for a domain-level summary.                                    | Yes      | `Full`                    |
+| `FilterAttribute`               | The name of a directory attribute to use for filtering users (e.g., `"extensionAttribute6"`). Must be used together with `-FilterValue`. | No       | None                      |
+| `FilterValue`                   | The value to match against the attribute specified by `-FilterAttribute`.                                                             | No       | None                      |
+| `FilterDelimiter`               | A delimiter character to split the attribute value into segments before matching. Without it, the match is a case-insensitive substring (contains). With it, the match is an exact segment match after splitting. | No       | None (contains mode)      |
+| `DeduplicateOn`                 | An alternative attribute to use as the deduplication key (e.g., `"Mail"`, `"EmployeeID"`). By default, deduplication uses first name + last name (GivenName + Surname). Both must be present for deduplication to apply. | No       | GivenName + Surname       |
 
 ### Usage Examples
 
@@ -65,6 +71,24 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 
 ```powershell
 .\Get-AdHumanIdentity.ps1 -SpecificDomains "corp.domain.local" -UserServiceAccountNamesLike "*svc*", "*_bot*" -Mode Summary
+```
+
+**Example 3: Filter users based on a directory attribute (contains match).**
+
+```powershell
+.\Get-AdHumanIdentity.ps1 -FilterAttribute "extensionAttribute6" -FilterValue "Person" -Mode Full
+```
+
+**Example 4: Filter users based on a directory attribute with a delimiter (exact segment match).**
+
+```powershell
+.\Get-AdHumanIdentity.ps1 -FilterAttribute "extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#" -Mode Full
+```
+
+**Example 5: Override the deduplication key with an alternative attribute.**
+
+```powershell
+.\Get-AdHumanIdentity.ps1 -DeduplicateOn "Mail" -Mode Full
 ```
 
 ### Report Columns
@@ -83,7 +107,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ac
 | Group Managed Service Accounts | Number of Group Managed Service Accounts (gMSA). |
 | Password Never Expires | Number of enabled accounts with the PasswordNeverExpires flag set. |
 | Pattern Matched Service Accounts | Number of accounts matching the `-UserServiceAccountNamesLike` patterns. |
-| Licensed Identities | Number of users qualifying for Rubrik licensing (Active + not MSA + not gMSA + not pattern-matched service account). |
+| Licensed Identities | Number of users qualifying for Rubrik licensing (Active + not MSA + not gMSA + not pattern-matched + filter match + not duplicate). |
+| Duplicate Identities | Number of accounts identified as duplicates (same person already counted in another domain/OU). The first domain/OU enumerated keeps the licensed count and later ones receive the duplicate, so per-domain/OU figures depend on enumeration order; the total is not affected. |
 
 #### Per-Domain Report (ByDomain)
 
@@ -94,7 +119,8 @@ Same columns as ByOU, minus the OU column. Values are aggregated across all OUs 
 | Column | Description |
 | --- | --- |
 | Domain | The Active Directory domain name. |
-| Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Active + not MSA + not gMSA + not pattern-matched. |
+| Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Active + not MSA + not gMSA + not pattern-matched + filter match + not duplicate. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 
@@ -128,6 +154,8 @@ This script is a Rubrik utility for counting human identities in a customer's En
     -   `Full`: A detailed per-user report.
     -   `Summary`: An aggregated report by domain.
 -   **Multiple Export Formats**: Exports reports in both CSV and a user-friendly HTML format, which can be shared with Rubrik.
+-   **Attribute-Based Filtering**: Optionally filter users based on any user attribute, including nested properties using dot notation (e.g., `onPremisesExtensionAttributes.extensionAttribute6`). Supports substring matching (default) or exact segment matching with a delimiter.
+-   **Identity Deduplication**: Automatically deduplicates identities based on `UserPrincipalName`, which is unique within a tenant. Use `-DeduplicateOn` to override the deduplication key with another attribute, or `-DeduplicateOn "Name"` to match on first name + last name (GivenName + Surname, both must be present). Name matching can merge two different people who share a name, so it is not the default.
 -   **Automated Module Installation**: Checks for and installs the required Microsoft Graph PowerShell modules if they are not already present.
 -   **Logging**: Creates a detailed log file for each execution.
 
@@ -148,6 +176,10 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | `UserServiceAccountNamesLike`   | An array of wildcard patterns to identify service accounts by their UPN. Patterns are used as-is with `-like`, so include wildcards explicitly (e.g., `"*svc*"` for contains-match, `"svc-*"` for prefix-match). | No       | None          |
 | `Mode`                          | The reporting mode. `Full` for a detailed per-user report or `Summary` for an aggregated report.                         | Yes      | `Full`        |
 | `CheckOwnership`                | When present, enables the check for application and service principal ownership. This is time-consuming on large tenants. | No       | Not present   |
+| `FilterAttribute`               | The name of a user attribute to use for filtering (e.g., `"onPremisesExtensionAttributes.extensionAttribute6"`). Supports dot notation for nested properties. Must be used together with `-FilterValue`. | No       | None          |
+| `FilterValue`                   | The value to match against the attribute specified by `-FilterAttribute`.                                                             | No       | None          |
+| `FilterDelimiter`               | A delimiter character to split the attribute value into segments before matching. Without it, the match is a case-insensitive substring (contains). With it, the match is an exact segment match after splitting. | No       | None (contains mode) |
+| `DeduplicateOn`                 | An alternative attribute to use as the deduplication key (e.g., `"Mail"`, `"EmployeeID"`). Use `"Name"` to match on GivenName + Surname instead (both must be present). Accounts with an empty key are never deduplicated. | No       | UserPrincipalName |
 
 ### Usage Examples
 
@@ -161,6 +193,24 @@ This script is a Rubrik utility for counting human identities in a customer's En
 
 ```powershell
 .\Get-EntraHumanIdentity.ps1 -Mode Summary -UserServiceAccountNamesLike "*svc*"
+```
+
+**Example 3: Filter users based on a nested attribute with a delimiter.**
+
+```powershell
+.\Get-EntraHumanIdentity.ps1 -FilterAttribute "onPremisesExtensionAttributes.extensionAttribute6" -FilterValue "Person" -FilterDelimiter "#" -Mode Full
+```
+
+**Example 4: Override the deduplication key with email.**
+
+```powershell
+.\Get-EntraHumanIdentity.ps1 -DeduplicateOn "Mail" -Mode Full
+```
+
+**Example 5: Deduplicate on first name + last name.**
+
+```powershell
+.\Get-EntraHumanIdentity.ps1 -DeduplicateOn "Name" -Mode Full
 ```
 
 ### Report Columns
@@ -177,12 +227,14 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | Inactive Identity | 1 if the user has not signed in within the inactivity period or has never signed in. Disabled accounts are never marked inactive (they are simply disabled). |
 | Never Logged In | 1 if no sign-in activity has ever been recorded for this account, 0 otherwise. |
 | Service Account Pattern | 1 if the user's UPN matches one of the patterns specified in `-UserServiceAccountNamesLike`, 0 otherwise. |
-| Licensed Identity | 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise. |
+| Licensed Identity | 1 if the user qualifies for Rubrik licensing (Member AND Enabled AND Active AND not a pattern-matched service account AND filter match AND not a duplicate), 0 otherwise. |
+| Duplicate Identity | 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses `UserPrincipalName` by default, or the attribute specified by `-DeduplicateOn` (`"Name"` for GivenName + Surname). |
 | Source AD | The on-premises AD domain name for synced accounts, N/A for cloud-only accounts. |
 | Hybrid Member | 1 if the user is a member synced from on-premises AD (OnPremisesSyncEnabled = true), 0 otherwise. |
 | Cloud Member | 1 if the user is a cloud-only member (UserType = Member, not synced from AD, not CIAM), 0 otherwise. |
 | B2B Guest | 1 if the user is an external B2B guest (UserType = Guest, not CIAM), 0 otherwise. |
 | CIAM | 1 if the user is a CIAM/consumer identity (CreationType = LocalAccount), 0 otherwise. |
+| Attribute Filter Match | *(only with `-FilterAttribute`)* 1 if the user's attribute value matches the filter, 0 otherwise. |
 | App owned by User | *(only with `-CheckOwnership`)* Number of Entra ID application registrations owned by this user. |
 | SP owned by User | *(only with `-CheckOwnership`)* Number of service principals (enterprise apps) owned by this user. |
 | Managed Identity | *(only with `-CheckOwnership`)* Number of managed identities owned by this user. |
@@ -199,7 +251,8 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | Inactive Identity | Number of users who have not signed in within the inactivity period. |
 | Never Logged In Users | Number of accounts with no recorded sign-in. |
 | Service Account Pattern | Number of accounts matching the service account naming patterns. |
-| Licensed Identities | Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account). |
+| Licensed Identities | Number of users qualifying for Rubrik licensing (Member + Enabled + Active + not service account + filter match + not duplicate). |
+| Duplicate Identities | Number of accounts that would otherwise be licensed but were excluded as duplicates of an already-counted identity. The first domain enumerated keeps the licensed count and later ones receive the duplicate, so per-domain figures depend on enumeration order; the total is not affected. |
 | Source AD | Number of distinct on-premises AD source domains for synced accounts. |
 | Hybrid Members | Number of member accounts synced from on-premises AD. |
 | Cloud Members | Number of cloud-only member accounts. |
@@ -214,11 +267,12 @@ This script is a Rubrik utility for counting human identities in a customer's En
 | Column | Description |
 | --- | --- |
 | Directory | The domain name. |
-| Licensed Identities | Total number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match. |
+| Licensed Identities | Total number of users qualifying for Rubrik licensing. Formula: Member + Enabled + Active (signed in within inactivity period) + Not a service account pattern match + Filter match + Not a duplicate. |
 | Licensed Hybrid Members | Number of licensed hybrid (AD-synced) member identities. |
 | Licensed Cloud Members | Number of licensed cloud-only member identities. |
 | Licensed B2B Guests | Number of licensed B2B guest identities. |
 | Licensed CIAM | Number of licensed CIAM/consumer identities. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 
@@ -248,6 +302,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
     -   `Full`: A detailed per-user report and a summary by domain.
     -   `Summary`: An aggregated report by domain.
 -   **Multiple Export Formats**: Exports reports in both CSV and a user-friendly HTML format with Rubrik branding, which can be shared with Rubrik.
+-   **Attribute-Based Filtering**: Optionally filter users based on any profile attribute using dot notation (e.g., `profile.department`). Supports substring matching (default) or exact segment matching with a delimiter.
+-   **Identity Deduplication**: Automatically deduplicates identities based on `profile.login`, which is unique within a tenant. Use `-DeduplicateOn` to override the deduplication key with another attribute, or `-DeduplicateOn "Name"` to match on first name + last name (`profile.firstName` + `profile.lastName`, both must be present). Name matching can merge two different people who share a name, so it is not the default.
 -   **Rate Limit Handling**: Automatically handles Okta API rate limits (HTTP 429) with retry logic (up to 5 retries per request).
 -   **Logging**: Creates a detailed log file for each execution.
 
@@ -280,6 +336,10 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | `DaysInactive`                  | The number of days of inactivity to classify users as inactive.                                                          | No             | 180                                          |
 | `CheckAppAssignments`           | When present, retrieves the apps assigned to each user (1 API call per user). Adds "Assigned Applications" to ByUser and "Applications" to ByDomain. **WARNING: Very slow on large tenants. Not required for Rubrik licensing.** | No | Not present |
 | `IncludeDeprovisioned`          | When present, retrieves deprovisioned (deactivated) users via a separate API call and adds a "Deprovisioned" column to ByUser and ByDomain. Deprovisioned users do not affect the Licensed Identity count. | No | Not present |
+| `FilterAttribute`               | The name of a user attribute to use for filtering (e.g., `"profile.department"`, `"profile.extensionAttribute6"`). Supports dot notation for nested properties. Must be used together with `-FilterValue`. | No       | None          |
+| `FilterValue`                   | The value to match against the attribute specified by `-FilterAttribute`.                                                             | No       | None          |
+| `FilterDelimiter`               | A delimiter character to split the attribute value into segments before matching. Without it, the match is a case-insensitive substring (contains). With it, the match is an exact segment match after splitting. | No       | None (contains mode) |
+| `DeduplicateOn`                 | An alternative attribute to use as the deduplication key (e.g., `"profile.email"`, `"profile.employeeNumber"`). Use `"Name"` to match on `profile.firstName` + `profile.lastName` instead (both must be present). Accounts with an empty key are never deduplicated. | No       | profile.login |
 
 ### Usage Examples
 
@@ -313,6 +373,24 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 .\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -Mode Full -IncludeDeprovisioned
 ```
 
+**Example 6: Filter users based on a profile attribute with a delimiter.**
+
+```powershell
+.\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -FilterAttribute "profile.userType" -FilterValue "Employee" -FilterDelimiter "#" -Mode Full
+```
+
+**Example 7: Override the deduplication key with email.**
+
+```powershell
+.\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -DeduplicateOn "profile.email" -Mode Full
+```
+
+**Example 8: Deduplicate on first name + last name.**
+
+```powershell
+.\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -DeduplicateOn "Name" -Mode Full
+```
+
 ### Report Columns
 
 #### Per-User Report (ByUser)
@@ -331,8 +409,10 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | Service Account Pattern | 1 if the user's login matches one of the patterns specified in `-UserServiceAccountNamesLike`, 0 otherwise. |
 | Synch from AD | 1 if the account is sourced from Active Directory (credentials provider type is ACTIVE_DIRECTORY), 0 otherwise. |
 | Cloud Only | 1 if the account is managed directly in Okta (credentials provider type is OKTA), 0 otherwise. |
-| Licensed Identity | 1 if the user qualifies for Rubrik licensing (Internal AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise. |
+| Licensed Identity | 1 if the user qualifies for Rubrik licensing (Internal AND Enabled AND Active AND not a pattern-matched service account AND filter match AND not a duplicate), 0 otherwise. |
+| Duplicate Identity | 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses `profile.login` by default, or the attribute specified by `-DeduplicateOn` (`"Name"` for `profile.firstName` + `profile.lastName`). |
 | Source AD | The Active Directory source name for AD-synced accounts, N/A otherwise. |
+| Attribute Filter Match | *(only with `-FilterAttribute`)* 1 if the user's attribute value matches the filter, 0 otherwise. |
 | Deprovisioned | *(only with `-IncludeDeprovisioned`)* 1 if the account status is DEPROVISIONED, 0 otherwise. |
 | Assigned Applications | *(only with `-CheckAppAssignments`)* Number of applications assigned to this user. |
 
@@ -352,7 +432,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | Service Account Pattern | Number of accounts matching the service account naming patterns. |
 | Synch from AD | Number of accounts sourced from Active Directory. |
 | Cloud Only | Number of Okta-managed cloud-only accounts. |
-| Licensed Identities | Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account). |
+| Licensed Identities | Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account + filter match + not duplicate). |
+| Duplicate Identities | Number of accounts that would otherwise be licensed but were excluded as duplicates of an already-counted identity. The first domain enumerated keeps the licensed count and later ones receive the duplicate, so per-domain figures depend on enumeration order; the total is not affected. |
 | Source AD | Number of distinct AD source domains for AD-synced accounts. |
 | Deprovisioned | *(only with `-IncludeDeprovisioned`)* Number of deprovisioned accounts in this domain. |
 | Applications | *(only with `-CheckAppAssignments`)* Number of unique application labels assigned to users in this domain. |
@@ -362,7 +443,8 @@ This script is a Rubrik utility for counting human identities in a customer's Ok
 | Column | Description |
 | --- | --- |
 | Directory | The domain name. |
-| Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Internal + Enabled + Active (logged in within inactivity period) + Not a service account pattern match. |
+| Licensed Identities | Number of users qualifying for Rubrik licensing. Formula: Internal + Enabled + Active (logged in within inactivity period) + Not a service account pattern match + Filter match + Not a duplicate. |
+| Duplicate Identities | Number of accounts excluded from the licensed count as duplicates of an already-counted identity. |
 
 ### Output
 

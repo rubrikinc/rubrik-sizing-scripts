@@ -33,7 +33,8 @@
     - **Service Account Pattern**: 1 if the user's login matches one of the patterns specified in -UserServiceAccountNamesLike, 0 otherwise.
     - **Synch from AD**: 1 if the account is sourced from Active Directory (credentials provider type is ACTIVE_DIRECTORY), 0 otherwise.
     - **Cloud Only**: 1 if the account is managed directly in Okta (credentials provider type is OKTA), 0 otherwise.
-    - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Internal AND Enabled AND Active AND not a pattern-matched service account), 0 otherwise.
+    - **Licensed Identity**: 1 if the user qualifies for Rubrik licensing (Internal AND Enabled AND Active AND not a pattern-matched service account AND filter match AND not a duplicate), 0 otherwise.
+    - **Duplicate Identity**: 1 if the account is a duplicate (same person already counted), 0 otherwise. Deduplication uses profile.login by default, or the attribute specified by -DeduplicateOn ("Name" for profile.firstName + profile.lastName).
     - **Source AD**: The Active Directory source name for AD-synced accounts, N/A otherwise.
     - **Deprovisioned** (only with -IncludeDeprovisioned): 1 if the account status is DEPROVISIONED, 0 otherwise.
 
@@ -50,14 +51,14 @@
     - **Service Account Pattern**: Number of accounts matching the service account naming patterns.
     - **Synch from AD**: Number of accounts sourced from Active Directory.
     - **Cloud Only**: Number of Okta-managed cloud-only accounts.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account).
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing (Internal + Enabled + Active + not service account + filter match + not duplicate).
     - **Source AD**: Number of distinct AD source domains for AD-synced accounts.
     - **Deprovisioned** (only with -IncludeDeprovisioned): Number of deprovisioned accounts in this domain.
     - **Applications** (only with -CheckAppAssignments): Number of unique application labels assigned to users in this domain (via per-user appLinks).
 
     ### Licensing Report
     - **Directory**: The domain name.
-    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Internal + Enabled + Active (logged in within inactivity period) + Not a service account pattern match.
+    - **Licensed Identities**: Number of users qualifying for Rubrik licensing. Formula: Internal + Enabled + Active (logged in within inactivity period) + Not a service account pattern match + Filter match + Not a duplicate.
 
 .PARAMETER OktaDomain
     The fully qualified domain name of your Okta tenant (e.g., "myorg.okta.com"). This is the domain used to access the Okta admin console. Required for both authentication methods.
@@ -99,6 +100,20 @@
 .PARAMETER IncludeDeprovisioned
     When present, retrieves deprovisioned (deactivated) users via a separate API call and includes them in the report. By default, Okta's list-users endpoint omits DEPROVISIONED users. When enabled, a "Deprovisioned" column is added to the ByUser and ByDomain reports. Deprovisioned users do not affect the Licensed Identity count (they are neither enabled nor active).
 
+.PARAMETER FilterAttribute
+    The name of a user attribute to use for filtering (e.g., "profile.department", "profile.userType"). Supports dot notation for nested properties. When specified together with -FilterValue, only users whose attribute value matches the filter are counted as Licensed Identities.
+
+.PARAMETER FilterValue
+    The value to match against the attribute specified by -FilterAttribute. Must be used together with -FilterAttribute.
+
+.PARAMETER FilterDelimiter
+    A delimiter character used to split the attribute value into segments before matching. Without a delimiter, the match is a case-insensitive substring (contains). With a delimiter, each segment is compared for an exact case-insensitive match.
+
+    Example: -FilterAttribute "profile.userType" -FilterValue "Employee" -FilterDelimiter "#"
+
+.PARAMETER DeduplicateOn
+    An alternative attribute to use as the deduplication key (e.g., "profile.email", "profile.employeeNumber"). By default, deduplication uses profile.login, which is unique within a tenant. Use "Name" to deduplicate on profile.firstName + profile.lastName instead (both must be present); this can merge two different people who share a name. When a user's deduplication key has already been seen, the account is marked as a duplicate and not counted as a Licensed Identity. Accounts with a null or empty key are never deduplicated.
+
 .EXAMPLE
     Example 1: Perform a full audit using an API token.
 
@@ -138,6 +153,24 @@
     - Generate a detailed report with an additional "Assigned Applications" column per user.
     - Populate the "Applications" column in the domain summary.
     - WARNING: Makes one API call per user — can be very slow on large tenants.
+
+.EXAMPLE
+    Example 5: Filter users based on a profile attribute with a delimiter.
+
+    .\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -FilterAttribute "profile.userType" -FilterValue "Employee" -FilterDelimiter "#" -Mode Full
+
+    This command will:
+    - Only count users whose profile.userType contains the exact segment "Employee" (split by "#") as Licensed Identities.
+    - Add an "Attribute Filter Match" column to the per-user report.
+
+.EXAMPLE
+    Example 6: Override the deduplication key with email.
+
+    .\Get-OktaHumanIdentity.ps1 -OktaDomain "myorg.okta.com" -ApiToken "00abc123..." -DeduplicateOn "profile.email" -Mode Full
+
+    This command will:
+    - Deduplicate users based on their profile.email attribute instead of first name + last name.
+    - Mark duplicate accounts with "Duplicate Identity" = 1 and exclude them from the Licensed Identity count.
 
 .NOTES
     Author: Aymeric Jaouen
@@ -187,8 +220,27 @@ param (
     [string]$Mode = "Full",
     [int]$DaysInactive = 180,
     [switch]$CheckAppAssignments,
-    [switch]$IncludeDeprovisioned
+    [switch]$IncludeDeprovisioned,
+    [string]$FilterAttribute,
+    [string]$FilterValue,
+    [string]$FilterDelimiter,
+    [string]$DeduplicateOn
 )
+
+# === FilterAttribute Validation ===
+if ($FilterAttribute -and -not $FilterValue) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterValue -and -not $FilterAttribute) {
+    Write-Error "-FilterAttribute and -FilterValue must be used together."
+    exit 1
+}
+if ($FilterDelimiter -and -not $FilterAttribute) {
+    Write-Error "-FilterDelimiter requires -FilterAttribute and -FilterValue."
+    exit 1
+}
+$useAttributeFilter = [bool]$FilterAttribute
 
 # === Global Variables and Logging Setup ===
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -581,6 +633,44 @@ function Invoke-OktaPagedRequest {
 }
 
 #————————————————————————————————————————
+# FILTER HELPERS
+#————————————————————————————————————————
+function Get-NestedProperty {
+    param($Object, [string]$Path)
+    $current = $Object
+    foreach ($part in $Path.Split('.')) {
+        if ($null -eq $current) { return $null }
+        $current = $current.$part
+    }
+    return $current
+}
+
+function Test-FilterMatch {
+    param([string]$AttributeValue, [string]$FilterValue, [string]$Delimiter)
+    if ([string]::IsNullOrEmpty($AttributeValue)) { return $false }
+    if ($Delimiter) {
+        $segments = $AttributeValue -split [regex]::Escape($Delimiter)
+        return [bool]($segments | Where-Object { $_ -ieq $FilterValue })
+    } else {
+        return $AttributeValue.IndexOf($FilterValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+}
+
+function Get-DeduplicateKey {
+    param($User, [string]$DeduplicateOn, [string]$DefaultAttribute, [string]$FirstNameProp, [string]$LastNameProp)
+    $attribute = if ($DeduplicateOn) { $DeduplicateOn } else { $DefaultAttribute }
+    if ($attribute -ieq 'Name') {
+        $fn = Get-NestedProperty $User $FirstNameProp
+        $ln = Get-NestedProperty $User $LastNameProp
+        if ($fn -and $ln) { return "$($fn.ToString().Trim()) $($ln.ToString().Trim())".ToLowerInvariant() }
+        return $null
+    }
+    $val = Get-NestedProperty $User $attribute
+    if ($val) { return $val.ToString().Trim().ToLowerInvariant() }
+    return $null
+}
+
+#————————————————————————————————————————
 # 1. HEADERS
 #————————————————————————————————————————
 function Get-ReportHeaders {
@@ -589,7 +679,8 @@ function Get-ReportHeaders {
         [ValidateSet('ByUser', 'ByDomain', 'Licensing')]
         [string] $Type,
         [switch] $CheckAppAssignments,
-        [switch] $IncludeDeprovisioned
+        [switch] $IncludeDeprovisioned,
+        [switch] $UseAttributeFilter
     )
 
     switch ($Type) {
@@ -608,7 +699,11 @@ function Get-ReportHeaders {
                 SyncFromAD              = 'Synch from AD'
                 CloudOnly               = 'Cloud Only'
                 LicensedIdentity        = 'Licensed Identity'
+                IsDuplicate             = 'Duplicate Identity'
                 ADSourceDomain          = 'Source AD'
+            }
+            if ($UseAttributeFilter) {
+                $baseHeaders['FilterMatch'] = 'Attribute Filter Match'
             }
             if ($IncludeDeprovisioned) {
                 $baseHeaders['Deprovisioned'] = 'Deprovisioned'
@@ -621,8 +716,9 @@ function Get-ReportHeaders {
 
         'Licensing' {
             return [PSCustomObject][ordered]@{
-                Domain             = 'Directory'
-                LicensedIdentities = 'Licensed Identities'
+                Domain              = 'Directory'
+                LicensedIdentities  = 'Licensed Identities'
+                DuplicateIdentities = 'Duplicate Identities'
             }
         }
 
@@ -641,6 +737,7 @@ function Get-ReportHeaders {
                 SyncFromADCount               = 'Synch from AD'
                 CloudOnlyCount                = 'Cloud Only'
                 LicensedIdentities            = 'Licensed Identities'
+                DuplicateIdentities           = 'Duplicate Identities'
                 ADSourceDomainCounts          = 'Source AD'
             }
             if ($IncludeDeprovisioned) {
@@ -678,9 +775,14 @@ function Get-ByUserData {
         Write-Verbose "Inactivity cutoff date: $cutoff"
 
         $output = [System.Collections.Generic.List[object]]::new()
+        $seenKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $duplicateCount = 0
     }
 
     process {
+        if ($useAttributeFilter) {
+            Write-Log "Filter active: attribute '$FilterAttribute' contains '$FilterValue' (delimiter: $(if ($FilterDelimiter) { "'$FilterDelimiter'" } else { 'none' }))" "INFO" "Cyan"
+        }
         Write-Log "Retrieving users from Okta..." "INFO" "Cyan"
         $users = Invoke-OktaPagedRequest -Uri "$($script:OktaBaseUrl)/api/v1/users?limit=200"
         Write-Log "Retrieved $($users.Count) users." "INFO" "Cyan"
@@ -779,6 +881,21 @@ function Get-ByUserData {
 
             $isDeprovisioned = $u.status -eq 'DEPROVISIONED'
 
+            $filterMatch = if ($useAttributeFilter) {
+                $attrVal = Get-NestedProperty $u $FilterAttribute
+                Test-FilterMatch -AttributeValue "$attrVal" -FilterValue $FilterValue -Delimiter $FilterDelimiter
+            } else { $true }
+
+            $wouldBeLicensed = $isInternal -and $isEnabled -and $isActive -and -not $patternMatched -and $filterMatch
+            $isDuplicate = $false
+            if ($wouldBeLicensed) {
+                $dedupKey = Get-DeduplicateKey -User $u -DeduplicateOn $DeduplicateOn -DefaultAttribute 'profile.login' -FirstNameProp 'profile.firstName' -LastNameProp 'profile.lastName'
+                if ($dedupKey -and -not $seenKeys.Add($dedupKey)) {
+                    $isDuplicate = $true
+                    $duplicateCount++
+                }
+            }
+
             $record = [ordered]@{
                 Directory               = $directory
                 User                    = $user
@@ -792,8 +909,12 @@ function Get-ByUserData {
                 PatternMatchedUser      = [int]$patternMatched
                 SyncFromAD              = [int]$syncFromAD
                 CloudOnly               = $cloudOnly
-                LicensedIdentity        = [int]($isInternal -and $isEnabled -and $isActive -and -not $patternMatched)
+                LicensedIdentity        = [int]($wouldBeLicensed -and -not $isDuplicate)
+                IsDuplicate             = [int]$isDuplicate
                 ADSourceDomain          = $adSourceDomain
+            }
+            if ($useAttributeFilter) {
+                $record['FilterMatch'] = [int]$filterMatch
             }
             if ($IncludeDeprovisioned) {
                 $record['Deprovisioned'] = [int]$isDeprovisioned
@@ -809,6 +930,9 @@ function Get-ByUserData {
     end {
         Write-Verbose "Built $($output.Count) user records. Calculating totals..."
         Write-Log "Successfully built $($output.Count) user records." "INFO" "Green"
+        $licensedCount = ($output | Where-Object { $_.LicensedIdentity -eq 1 }).Count
+        $noKeyCount = $licensedCount - $seenKeys.Count
+        Write-Log "Deduplication: $($licensedCount + $duplicateCount) eligible accounts, $duplicateCount duplicates removed, $licensedCount licensed identities ($noKeyCount of them have no deduplication key and are never deduplicated)." "INFO" "Cyan"
 
         # Build a grand-total row
         $totals = [ordered]@{ Directory = "TOTAL"; User = "" }
@@ -863,6 +987,7 @@ function Get-ByDomainData {
                     SyncFromADCount               = ($grpUsers | Where-Object { $_.SyncFromAD -eq 1 }).Count
                     CloudOnlyCount                = ($grpUsers | Where-Object { $_.CloudOnly -eq 1 }).Count
                     LicensedIdentities            = ($grpUsers | Where-Object { $_.LicensedIdentity -eq 1 }).Count
+                    DuplicateIdentities           = ($grpUsers | Where-Object { $_.IsDuplicate -eq 1 }).Count
                     ADSourceDomainCounts          = @(
                         $grpUsers |
                         Where-Object { $_.SyncFromAD -eq 1 -and -not [string]::IsNullOrWhiteSpace($_.ADSourceDomain) -and $_.ADSourceDomain -ne 'N/A' } |
@@ -990,19 +1115,20 @@ function Export-HtmlReport {
 </svg>
 "@
 
-            $html = "<div class='table-header'>"
-            $html += "<div class='table-header-logo'>$svgContent</div>"
-            $html += "<h2>$TableTitle</h2>"
-            $html += "</div>"
-            $html += "<div class='table-scroll'><table>"
+            $sb = [System.Text.StringBuilder]::new()
+            [void]$sb.Append("<div class='table-header'>")
+            [void]$sb.Append("<div class='table-header-logo'>$svgContent</div>")
+            [void]$sb.Append("<h2>$TableTitle</h2>")
+            [void]$sb.Append("</div>")
+            [void]$sb.Append("<div class='table-scroll'><table>")
 
-            $html += '<thead><tr>'
+            [void]$sb.Append('<thead><tr>')
             foreach ($header in $TableColumns.PSObject.Properties.Value) {
                 $safeHeader = [System.Net.WebUtility]::HtmlEncode($header)
-                $html += "<th>$safeHeader</th>"
+                [void]$sb.Append("<th>$safeHeader</th>")
             }
-            $html += '</tr></thead>'
-            $html += '<tbody>'
+            [void]$sb.Append('</tr></thead>')
+            [void]$sb.Append('<tbody>')
 
             foreach ($row in $TableData) {
                 $isTotalRow = ($row.Directory -eq 'TOTAL' -or $row.Domain -eq 'TOTAL')
@@ -1011,17 +1137,17 @@ function Export-HtmlReport {
                 if ($isTotalRow) {
                     $rowClass = ' class="total"'
                 }
-                $html += "<tr$rowClass>"
+                [void]$sb.Append("<tr$rowClass>")
 
                 foreach ($colName in $TableColumns.PSObject.Properties.Name) {
                     $value = [System.Net.WebUtility]::HtmlEncode("$($row."$colName")")
-                    $html += "<td>$value</td>"
+                    [void]$sb.Append("<td>$value</td>")
                 }
-                $html += '</tr>'
+                [void]$sb.Append('</tr>')
             }
 
-            $html += '</tbody></table></div>'
-            return $html
+            [void]$sb.Append('</tbody></table></div>')
+            return $sb.ToString()
         }
 
         $base64DataUri = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjM4IiB2aWV3Qm94PSIwIDAgMTIwIDM4IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTk1LjczMzMgMTIuNjkyMkM5NC4zMzE1IDEyLjY5MjIgOTMuNjk5NCAxMy4wOTcxIDkyLjQwMTggMTQuNzE3VjE0LjAxNzZDOTIuNDAxOCAxMy4xNzA2IDkyLjI5NjQgMTMuMDYwNiA5MS40ODk3IDEzLjA2MDZIOTAuODI0MkM5MC4wMTc2IDEzLjA2MDYgODkuOTEyMSAxMy4xNzA2IDg5LjkxMjEgMTQuMDE3NlYyNy4zNzc3Qzg5LjkxMjEgMjguMjI0NyA5MC4wMTc2IDI4LjMzNDcgOTAuODI0MiAyOC4zMzQ3SDkxLjQ4OTdDOTIuMjk2NCAyOC4zMzQ3IDkyLjQwMTggMjguMjI0NyA5Mi40MDE4IDI3LjM3NzdWMjAuMjc0MkM5Mi40MDE4IDE4LjQzMzggOTIuNTc3NiAxNy4zMzAzIDkyLjk2MyAxNi41OTQzQzkzLjQ5NTggMTUuNTc4IDk0LjY1NTggMTUuMDY4NyA5NS43Mjg1IDE1LjIyNTlDOTUuOTc4OCAxNS4yNjE5IDk2LjIgMTUuMzUwNCA5Ni40MzgyIDE1LjQzNDVDOTYuNTI2NyAxNS40NjUzIDk2LjYyODUgMTUuNDg4NiA5Ni43MTY0IDE1LjQ0ODVDOTYuODA2MSAxNS40MDcyIDk2Ljg3NjQgMTUuMzMyOCA5Ni45MzUyIDE1LjI1MjdDOTcuMDc3NiAxNS4wNjEyIDk3LjE2OTcgMTQuODMwMSA5Ny4yNzgyIDE0LjYxNjZDOTcuMzQ3MyAxNC40NzkzIDk3LjQxNjQgMTQuMzQyIDk3LjQ4NjcgMTQuMjAxMUM5Ny42Mjg1IDEzLjkwNjYgOTcuNzMzMyAxMy42ODYxIDk3LjczMzMgMTMuNTc2Qzk3Ljc2NzMgMTMuMDk3MSA5Ni44MjEyIDEyLjY5MjIgOTUuNzMzMyAxMi42OTIyWiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTUxLjQxNzIgMTIuNjkyMkM1MC4wMTUyIDEyLjY5MjIgNDkuMzgzMSAxMy4wOTcxIDQ4LjA4NTggMTQuNzE3VjE0LjAxNzZDNDguMDg1OCAxMy4xNzA2IDQ3Ljk4MDYgMTMuMDYwNiA0Ny4xNzM2IDEzLjA2MDZINDYuNTA3NUM0NS43MDA2IDEzLjA2MDYgNDUuNTk1NyAxMy4xNzA2IDQ1LjU5NTcgMTQuMDE3NlYyNy4zNzc3QzQ1LjU5NTcgMjguMjI0NyA0NS43MDA2IDI4LjMzNDcgNDYuNTA3NSAyOC4zMzQ3SDQ3LjE3MzZDNDcuOTgwNiAyOC4zMzQ3IDQ4LjA4NTggMjguMjI0NyA0OC4wODU4IDI3LjM3NzdWMjAuMjc0MkM0OC4wODU4IDE4LjQzMzggNDguMjYwNyAxNy4zMzAzIDQ4LjY0NjYgMTYuNTk0M0M0OS4xNzg4IDE1LjU3OCA1MC4zMzkzIDE1LjA2ODcgNTEuNDExOCAxNS4yMjU5QzUxLjY2MTggMTUuMjYxOSA1MS44ODM2IDE1LjM1MDQgNTIuMTIxNSAxNS40MzQ1QzUyLjIwOTUgMTUuNDY1MyA1Mi4zMTE1IDE1LjQ4ODYgNTIuMzk5NSAxNS40NDg1QzUyLjQ4ODkgMTUuNDA3MiA1Mi41NTk4IDE1LjMzMjggNTIuNjE4NSAxNS4yNTI3QzUyLjc2MSAxNS4wNjEyIDUyLjg1MzMgMTQuODMwMSA1Mi45NjEyIDE0LjYxNjZDNTMuMDMwMyAxNC40NzkzIDUzLjA5OTkgMTQuMzQyIDUzLjE3MDQgMTQuMjAxMUM1My4zMTEzIDEzLjkwNjYgNTMuNDE2MiAxMy42ODYxIDUzLjQxNjIgMTMuNTc2QzUzLjQ1MTQgMTMuMDk3MSA1Mi41MDQ0IDEyLjY5MjIgNTEuNDE3MiAxMi42OTIyWiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTU4LjYzMDIgMjEuOTY2OUM1OC42MzAyIDIzLjQwMTkgNTguNzcwNyAyNC4xNzU3IDU5LjA4NTcgMjQuODM4MkM1OS41NzY0IDI1Ljc5NTUgNjAuNjYzOCAyNi4zODQxIDYxLjkyNjMgMjYuMzg0MUM2My4xNTM1IDI2LjM4NDEgNjQuMjQwOCAyNS43OTU1IDY0LjczMjMgMjQuODM4MkM2NS4wNDc1IDI0LjE3NTcgNjUuMTg4MSAyMy40MDE5IDY1LjE4ODEgMjEuOTY2OVYxNC4wMTczQzY1LjE4ODEgMTMuMTcwNCA2NS4yOTM1IDEzLjA2MDQgNjYuMTAwMiAxMy4wNjA0SDY2Ljc2NjNDNjcuNTcyOSAxMy4wNjA0IDY3LjY3NzggMTMuMTcwNCA2Ny42Nzc4IDE0LjAxNzNWMjIuMjYxNEM2Ny42Nzc4IDI0LjUwNzIgNjcuMzI3NSAyNS43MjE2IDY2LjM0NTcgMjYuODYyMUM2NS4yOTM1IDI4LjExMzkgNjMuNzE0OCAyOC43NzU1IDYxLjkyNjMgMjguNzc1NUM2MC4xMDI0IDI4Ljc3NTUgNTguNTI1NCAyOC4xMTM5IDU3LjQ3MyAyNi44NjIxQzU2LjQ5MDcgMjUuNzIxNiA1Ni4xNDAxIDI0LjUwNzIgNTYuMTQwMSAyMi4yNjE0VjE0LjAxNzNDNTYuMTQwMSAxMy4xNzA0IDU2LjI0NSAxMy4wNjA0IDU3LjA1MiAxMy4wNjA0SDU3LjcxOEM1OC41MjU0IDEzLjA2MDQgNTguNjMwMiAxMy4xNzA0IDU4LjYzMDIgMTQuMDE3M1YyMS45NjY5WiIgZmlsbD0iIzA3MEY1MiIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTc0LjA3NiAyMC42NzkxQzc0LjA3NiAyNC4wNjU4IDc2LjA3NiAyNi4zODQ3IDc4Ljk1MTggMjYuMzg0N0M4MS43MjIxIDI2LjM4NDcgODMuNzIwOSAyMy45NTQ5IDgzLjcyMDkgMjAuNjA1NkM4My43MjA5IDE3LjUxNDIgODEuNjUxOCAxNS4xMjE0IDc4LjkxNjYgMTUuMTIxNEM3Ni4wNzYgMTUuMTIxNCA3NC4wNzYgMTcuNDAzNyA3NC4wNzYgMjAuNjc5MVpNNzQuMjUyNCAxNS4yMzI0Qzc1LjY4OTQgMTMuNTAyNCA3Ny4yMzMgMTIuNzI5MSA3OS4zMzcyIDEyLjcyOTFDODMuMzM0OCAxMi43MjkxIDg2LjI4MDkgMTYuMDc4NCA4Ni4yODA5IDIwLjY3OTFDODYuMjgwOSAyNS4zNTM3IDgzLjI5OTcgMjguNzc2MSA3OS4yNjY5IDI4Ljc3NjFDNzcuMjMzIDI4Ljc3NjEgNzUuNjE5NyAyNy45NjYyIDc0LjI1MjQgMjYuMjM3NlYyNy4zNzc2Qzc0LjI1MjQgMjguMjI0NiA3NC4xNDY5IDI4LjMzNDYgNzMuMzM5NyAyOC4zMzQ2SDcyLjY3NDJDNzEuODY2OSAyOC4zMzQ2IDcxLjc2MTUgMjguMjI0NiA3MS43NjE1IDI3LjM3NzZWMi40NTk3OUM3MS43NjE1IDEuNjEzNzcgNzEuODY2OSAxLjUwMzcyIDcyLjY3NDIgMS41MDM3Mkg3My4zMzk3Qzc0LjE0NjkgMS41MDM3MiA3NC4yNTI0IDEuNjEzNzcgNzQuMjUyNCAyLjQ1OTc5VjE1LjIzMjRaIiBmaWxsPSIjMDcwRjUyIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTAzLjQ3MyAyNy4zNzc3QzEwMy40NzMgMjguMjI0NyAxMDMuMzY3IDI4LjMzNDcgMTAyLjU2MSAyOC4zMzQ3SDEwMS44OTRDMTAxLjA4NyAyOC4zMzQ3IDEwMC45ODMgMjguMjI0NyAxMDAuOTgzIDI3LjM3NzdWMTQuMDE3MUMxMDAuOTgzIDEzLjE3MTEgMTAxLjA4NyAxMy4wNjAxIDEwMS44OTQgMTMuMDYwMUgxMDIuNTYxQzEwMy4zNjcgMTMuMDYwMSAxMDMuNDczIDEzLjE3MTEgMTAzLjQ3MyAxNC4wMTcxVjI3LjM3NzdaTTEwNC4wMzQgNy4yODQwNkMxMDQuMDM0IDguMzE2MSAxMDMuMjI3IDkuMTYzMDUgMTAyLjI0NSA5LjE2MzA1QzEwMS4yNjMgOS4xNjMwNSAxMDAuNDU3IDguMzE2MSAxMDAuNDU3IDcuMjQ3MDdDMTAwLjQ1NyA2LjI1MjQ4IDEwMS4yNjMgNS40MDUwOSAxMDIuMjQ1IDUuNDA1MDlDMTAzLjIyNyA1LjQwNTA5IDEwNC4wMzQgNi4yNTI0OCAxMDQuMDM0IDcuMjg0MDZaIiBmaWxsPSIjMDcwRjUyIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNMTE1LjQ0OCAxMy41MDI1QzExNS44NjggMTMuMDYwNSAxMTUuODY4IDEzLjA2MDUgMTE2LjQ2NSAxMy4wNjA1SDExNy41NTJDMTE4LjE4MyAxMy4wNjA1IDExOC40MjkgMTMuMjQ0OSAxMTguNDI5IDEzLjY0OTVDMTE4LjQyOSAxMy43OTY1IDExOC4yODggMTQuMDE3NSAxMTguMDA4IDE0LjMxMkwxMTIuOTkyIDE5LjU3NTZMMTE5LjM0IDI3LjA4MzZDMTE5LjU4NiAyNy40MTQ3IDExOS43MjcgMjcuNjM2IDExOS43MjcgMjcuNzgzMUMxMTkuNzI3IDI4LjE1MTEgMTE5LjQ0NiAyOC4zMzUxIDExOC44MTQgMjguMzM1MUgxMTcuNzI3QzExNy4wOTYgMjguMzM1MSAxMTcuMDk2IDI4LjMzNTEgMTE2LjcxIDI3Ljg1NjZMMTExLjIzOSAyMS4zNzg1TDExMC42MDcgMjIuMDQxVjI3LjM3ODFDMTEwLjYwNyAyOC4yMjQ2IDExMC41MDIgMjguMzM1MSAxMDkuNjk2IDI4LjMzNTFIMTA5LjAzQzEwOC4yMjMgMjguMzM1MSAxMDguMTE4IDI4LjIyNDYgMTA4LjExOCAyNy4zNzgxVjIuNDYwMjJDMTA4LjExOCAxLjYxMzc2IDEwOC4yMjMgMS41MDM3MiAxMDkuMDMgMS41MDM3MkgxMDkuNjk2QzExMC41MDIgMS41MDM3MiAxMTAuNjA3IDEuNjEzNzYgMTEwLjYwNyAyLjQ2MDIyVjE4LjY5MjFMMTE1LjQ0OCAxMy41MDI1WiIgZmlsbD0iIzA3MEY1MiIvPgo8L3N2Zz4K"
@@ -1226,10 +1352,10 @@ $byDomain = Get-ByDomainData `
 
 #— 3b) Licensing: extract from domain data
 Write-Log "Preparing Rubrik licensing data..." "INFO" "Cyan"
-$licensingData = $byDomain | Select-Object Domain, LicensedIdentities
+$licensingData = $byDomain | Select-Object Domain, LicensedIdentities, DuplicateIdentities
 
 #— 4) Prepare report headers
-$userCols      = Get-ReportHeaders -Type ByUser -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned
+$userCols      = Get-ReportHeaders -Type ByUser -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned -UseAttributeFilter:$useAttributeFilter
 $domainCols    = Get-ReportHeaders -Type ByDomain -CheckAppAssignments:$CheckAppAssignments -IncludeDeprovisioned:$IncludeDeprovisioned
 $licensingCols = Get-ReportHeaders -Type Licensing
 
