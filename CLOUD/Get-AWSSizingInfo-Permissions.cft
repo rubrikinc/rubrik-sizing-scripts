@@ -57,6 +57,7 @@ Resources:
                   - 'ec2:DescribeVolumes'
                   - 'ec2:DescribeVpcs'
                   - 'eks:DescribeCluster'
+                  - 'eks:DescribeNodegroup'
                   - 'eks:ListClusters'
                   - 'eks:ListNodegroups'
                   - 'elasticloadbalancing:DescribeLoadBalancers'
