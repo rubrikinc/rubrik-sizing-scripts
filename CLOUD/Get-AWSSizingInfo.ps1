@@ -419,7 +419,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.3.1"
+$scriptVersion = "1.3.2"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
@@ -4609,6 +4609,13 @@ function Invoke-CECall {
             Write-CEFailureWarningOnce -AccountInfo $AccountInfo -Reason 'AccessDenied'
             return $null
         }
+        # DNS / network failure (e.g. endpoint not found) -- treat as unavailable rather
+        # than crashing the script.  The GovCloud guard upstream prevents this path for
+        # intentional GovCloud runs; this catch is a safety net for unexpected CE outages.
+        if ("$($_.Exception.Message)" -match 'Name or service not known|Unable to connect|NameResolutionFailure|No such host') {
+            Write-CEFailureWarningOnce -AccountInfo $AccountInfo -Reason 'CostExplorerNotEnabled'
+            return $null
+        }
         throw
     }
 }
@@ -5426,7 +5433,9 @@ function getAWSData($cred) {
   # Collect backup costs once per account (Cost Explorer API returns account-level data).
   # Skip when region discovery yielded nothing -- matches master's per-region loop, which
   # would have iterated 0 times in this scenario and never made the call.
-  if ($awsRegions.Count -gt 0 -and -not $SkipBackupCosts) {
+  # AWS Cost Explorer has no GovCloud endpoint; GovCloud billing is accessed through
+  # the linked commercial account, so skip CE calls when running with -Partition GovCloud.
+  if ($awsRegions.Count -gt 0 -and -not $SkipBackupCosts -and $Partition -ne 'GovCloud') {
     $sharedTimePeriod = Get-CEDefaultTimeWindow
     $backupCostsResult = Get-AWSBackupCosts -Credential $cred -Region $awsRegions[0] -AccountInfo $awsAccountInfo `
         -AccountAlias $awsAccountAlias
