@@ -97,6 +97,10 @@ Note that we currently anonymize the following fields:
 "Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName"
 Additionally, you can specify "Tags" to exclude all tag/label fields (properties starting with "Tag:" or "Label/Tag:") from anonymization.
 
+.PARAMETER SkipBigQuery
+Skip BigQuery collection. BigQuery collection runs one bq command per table, so it can take a long time in projects with many tables.
+The BigQuery CSV is still created, but it is empty.
+
 
 .NOTES
 Written by Steven Tong for community usage
@@ -151,11 +155,15 @@ param (
   # Choose to not anonymize certain fields
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
-  [string]$NotAnonymizeFields
+  [string]$NotAnonymizeFields,
+
+  # Skip BigQuery collection
+  [Parameter(Mandatory=$false)]
+  [switch]$SkipBigQuery
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.4"
+$scriptVersion = "1.0.5"
 
 # Save the current culture so it can be restored later
 $CurrentCulture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -269,13 +277,48 @@ function Get-GCPEnabledAPIs {
         [string]$ProjectId
     )
     $enabledApis = gcloud services list --enabled --project=$ProjectId `
-        --filter="config.name:(compute.googleapis.com OR sqladmin.googleapis.com OR spanner.googleapis.com)" `
+        --filter="config.name:(compute.googleapis.com OR sqladmin.googleapis.com OR spanner.googleapis.com OR bigquery.googleapis.com)" `
         --format="value(config.name)" --quiet 2>$null
 
     return @{
         Compute  = $enabledApis -contains 'compute.googleapis.com'
         CloudSQL = $enabledApis -contains 'sqladmin.googleapis.com'
         Spanner  = $enabledApis -contains 'spanner.googleapis.com'
+        BigQuery = $enabledApis -contains 'bigquery.googleapis.com'
+    }
+}
+
+# Mirrors the ConvertTo-SizeUnits helper in Get-AWSSizingInfo.ps1 / Get-AzureSizingInfo.ps1.
+# Supports two input units:
+#   'GiB'   — Compute Engine sizeGb. Google defines Compute Engine "GB" as binary (1 GB = 2^30 bytes), so it is GiB.
+#   'Bytes' — raw byte counts as returned by the BigQuery API (numBytes).
+function ConvertTo-GCPSizeUnits {
+    param(
+        [double]$Value,
+        [string]$Prefix,
+        [ValidateSet('Bytes', 'GiB')]
+        [string]$InputUnit = 'Bytes',
+        [int]$GiBPrecision = 4,
+        [int]$TiBPrecision = 4,
+        [int]$GBPrecision  = 4,
+        [int]$TBPrecision  = 4
+    )
+    if ($InputUnit -eq 'Bytes') {
+        $gib = $Value / 1073741824
+        $tib = $gib  / 1024
+        $gb  = $Value / 1000000000
+        $tb  = $gb   / 1000
+    } else {
+        $gib = $Value
+        $tib = $gib  / 1024
+        $gb  = $Value * 1.073741824
+        $tb  = $gb   / 1000
+    }
+    @{
+        "${Prefix}GiB" = [math]::Round($gib, $GiBPrecision)
+        "${Prefix}TiB" = [math]::Round($tib, $TiBPrecision)
+        "${Prefix}GB"  = [math]::Round($gb,  $GBPrecision)
+        "${Prefix}TB"  = [math]::Round($tb,  $TBPrecision)
     }
 }
 
@@ -327,14 +370,17 @@ function Get-GCEInstancesAndDisks {
             if (-not $diskInfo) { continue }
 
             $diskSizeGbCurrent = [double]$diskInfo.sizeGb
+            $attachedDiskSizes = ConvertTo-GCPSizeUnits -Value $diskSizeGbCurrent -Prefix "Size" -InputUnit 'GiB'
             $diskObj = [PSCustomObject] @{
                 "Project" = $ProjectId
                 "Zone" = if ($diskInfo.zone) { $diskInfo.zone.split('/')[-1] } else { $diskInfo.region.split('/')[-1] }
                 "VMName" = $instance.name
                 "DiskName" = $diskInfo.name
                 "Id" = $diskInfo.id
-                "SizeGb" = $diskSizeGbCurrent
-                "SizeTb" = $diskSizeGbCurrent / 1000
+                "SizeGb"  = $diskSizeGbCurrent
+                "SizeTb"  = $diskSizeGbCurrent / 1000
+                "SizeGiB" = $attachedDiskSizes["SizeGiB"]
+                "SizeTiB" = $attachedDiskSizes["SizeTiB"]
                 "DiskEncryptionKey" = $diskInfo.diskEncryptionKey -ne $null
                 "SourceImageSource" = $null
                 "SourceImageName" = $null
@@ -361,16 +407,22 @@ function Get-GCEInstancesAndDisks {
             $attachedDiskList.Add($diskObj) | Out-Null
         }
 
+        $totalDiskSizes     = ConvertTo-GCPSizeUnits -Value $diskSizeGb          -Prefix "TotalDiskSize"      -InputUnit 'GiB'
+        $encryptedDiskSizes = ConvertTo-GCPSizeUnits -Value $sizeEncryptedDisksGb -Prefix "EncryptedDisksSize" -InputUnit 'GiB'
         $instanceObj = [PSCustomObject] @{
             "Project" = $ProjectId
             "Zone" = $instance.zone.split('/')[-1]
             "Name" = $instance.name
-            "TotalDiskCount" = $diskCount
-            "TotalDiskSizeGb" = $diskSizeGb
-            "TotalDiskSizeTb" = $diskSizeGb / 1000
-            "EncryptedDisksCount" = $numDiskEncryption
-            "EncryptedDisksSizeGb" = $sizeEncryptedDisksGb
-            "EncryptedDisksSizeTb" = $sizeEncryptedDisksGb / 1000
+            "TotalDiskCount"         = $diskCount
+            "TotalDiskSizeGb"        = $diskSizeGb
+            "TotalDiskSizeTb"        = $diskSizeGb / 1000
+            "TotalDiskSizeGiB"       = $totalDiskSizes["TotalDiskSizeGiB"]
+            "TotalDiskSizeTiB"       = $totalDiskSizes["TotalDiskSizeTiB"]
+            "EncryptedDisksCount"    = $numDiskEncryption
+            "EncryptedDisksSizeGb"   = $sizeEncryptedDisksGb
+            "EncryptedDisksSizeTb"   = $sizeEncryptedDisksGb / 1000
+            "EncryptedDisksSizeGiB"  = $encryptedDiskSizes["EncryptedDisksSizeGiB"]
+            "EncryptedDisksSizeTiB"  = $encryptedDiskSizes["EncryptedDisksSizeTiB"]
             "Status" = $instance.status
         }
         if ($instance.labels) {
@@ -411,13 +463,16 @@ function Get-GCEUnattachedDisks {
         $diskCounter++
         if (-not $disk.users){
             $diskSizeGbCurrent = [double]$disk.sizeGb
+            $unattachedDiskSizes = ConvertTo-GCPSizeUnits -Value $diskSizeGbCurrent -Prefix "Size" -InputUnit 'GiB'
             $diskObj = [PSCustomObject] @{
                 "Project" = $ProjectId
                 "Zone" = if ($disk.zone) { $disk.zone.split('/')[-1] } else { $disk.region.split('/')[-1] }
                 "DiskName" = $disk.name
                 "Id" = $disk.id
-                "SizeGb" = $diskSizeGbCurrent
-                "SizeTb" = $diskSizeGbCurrent / 1000
+                "SizeGb"  = $diskSizeGbCurrent
+                "SizeTb"  = $diskSizeGbCurrent / 1000
+                "SizeGiB" = $unattachedDiskSizes["SizeGiB"]
+                "SizeTiB" = $unattachedDiskSizes["SizeTiB"]
                 "DiskEncryptionKey" = $disk.diskEncryptionKey
                 "SourceImageSource" = $null
                 "SourceImageName" = $null
@@ -592,6 +647,29 @@ function Get-GCPSpannerInstances {
     return , $spannerList
 }
 
+function Add-LabelsToObject {
+    param(
+        $obj,
+        $labels,
+        [string]$prefix = "Label/Tag: ",
+        [hashtable]$WarnedCollisions,
+        [string]$CollisionContext
+    )
+    if (-not $labels) { return }
+    foreach ($prop in $labels.PSObject.Properties) {
+        $key = $prop.Name -replace '[^a-zA-Z0-9]', '_'
+        $columnName = "$prefix$key"
+        if ($null -ne $WarnedCollisions -and $obj.PSObject.Properties[$columnName]) {
+            $warnKey = "$CollisionContext|$columnName"
+            if (-not $WarnedCollisions.ContainsKey($warnKey)) {
+                $WarnedCollisions[$warnKey] = $true
+                Write-Host "WARNING: Column '$columnName' is produced by both a dataset label and a table label in $CollisionContext; the table label value overwrites the dataset label value." -ForegroundColor Yellow
+            }
+        }
+        $obj | Add-Member -MemberType NoteProperty -Name $columnName -Value $prop.Value -Force
+    }
+}
+
 function Add-TagsToAllObjectsInList($list) {
     # Determine all unique tag keys
     $allTagKeys = @{}
@@ -614,6 +692,202 @@ function Add-TagsToAllObjectsInList($list) {
             }
         }
     }
+}
+
+# bq ls returns only 50 results unless --max_results is set; bq follows page tokens up to that limit and then
+# stops without printing a next-page token. 2147483647 (signed 32-bit maximum) is the largest value bq accepts.
+$BQ_MAX_RESULTS = 2147483647
+
+# bq writes some error text to stdout (unlinked datasets) and some to stderr (missing credentials), so the
+# exit code is checked before parsing stdout and the failure message includes both streams
+function Invoke-BqJson {
+    param(
+        [string[]]$BqArgs
+    )
+    try {
+        $global:LASTEXITCODE = 0
+        $merged = @(bq @BqArgs 2>&1)
+        $exitCode = $global:LASTEXITCODE
+        $output = @($merged | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+        $errorLines = @($merged | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+        if ($exitCode -ne 0) {
+            $details = (@($output | ForEach-Object { "$_" }) + $errorLines) -join ' '
+            return [PSCustomObject]@{ Success = $false; Data = @(); Error = "exit code ${exitCode}: $details" }
+        }
+        $data = @()
+        if ($output) {
+            $data = @(($output -join '') | ConvertFrom-Json)
+        }
+        return [PSCustomObject]@{ Success = $true; Data = $data; Error = $null }
+    } catch {
+        return [PSCustomObject]@{ Success = $false; Data = @(); Error = "$_" }
+    }
+}
+
+# bq returns fewer items than --max_results only when the list has ended, so a count equal to the limit may be truncated
+function Write-BqTruncationWarning {
+    param(
+        $Items,
+        [string]$What
+    )
+    if (@($Items).Count -ge $BQ_MAX_RESULTS) {
+        Write-Host "WARNING: The list of $What reached the limit of $BQ_MAX_RESULTS items and may be truncated; the BigQuery totals may be incomplete." -ForegroundColor Yellow
+        $script:bqCollectionWarnings++
+    }
+}
+
+function Get-GCPBigQueryInventory {
+    param(
+        [string]$ProjectId
+    )
+    $tableRowList = New-Object collections.arraylist
+    $labelCollisionsWarned = @{}
+
+    $datasetsResult = Invoke-BqJson -BqArgs @('ls', '--format=json', "--max_results=$BQ_MAX_RESULTS", "--project_id=$ProjectId")
+    $datasets = $null
+    if ($datasetsResult.Success) {
+        $datasets = $datasetsResult.Data
+        Write-BqTruncationWarning -Items $datasets -What "datasets in project $ProjectId"
+    } else {
+        Write-Host "ERROR: Failed to list BigQuery datasets in project $($ProjectId) (is 'bq' on PATH?): $($datasetsResult.Error)" -ForegroundColor Red
+        $script:bqCollectionWarnings++
+    }
+
+    $datasetCounter = 1
+    $datasetTotal = @($datasets).Count
+    foreach ($dataset in $datasets) {
+        $datasetId = $dataset.datasetReference.datasetId
+        Write-Progress -ID 6 -Activity "Processing BigQuery dataset: $datasetId" -Status "Dataset $datasetCounter of $datasetTotal" -PercentComplete (($datasetCounter / $datasetTotal) * 100)
+        $datasetCounter++
+        $script:bqDatasetCount++
+
+        # Get dataset details for location and dataset-level labels
+        $location = ""
+        $datasetLabels = $null
+        $datasetInfoResult = Invoke-BqJson -BqArgs @('show', '--format=prettyjson', "${ProjectId}:${datasetId}")
+        if ($datasetInfoResult.Success) {
+            if ($datasetInfoResult.Data) {
+                $location = $datasetInfoResult.Data[0].location
+                $datasetLabels = $datasetInfoResult.Data[0].labels
+            }
+        } else {
+            Write-Host "WARNING: Failed to get details for BigQuery dataset $datasetId in project ${ProjectId}: $($datasetInfoResult.Error)" -ForegroundColor Yellow
+            $script:bqCollectionWarnings++
+        }
+
+        # List tables and emit one row per table/view
+        $tablesResult = Invoke-BqJson -BqArgs @('ls', '--format=prettyjson', "--max_results=$BQ_MAX_RESULTS", "${ProjectId}:${datasetId}")
+        if (-not $tablesResult.Success) {
+            Write-Host "WARNING: Failed to list tables in BigQuery dataset ${ProjectId}:${datasetId}: $($tablesResult.Error)" -ForegroundColor Yellow
+            $script:bqCollectionWarnings++
+        }
+        try {
+            if ($tablesResult.Success -and $tablesResult.Data) {
+                $tables = $tablesResult.Data
+                Write-BqTruncationWarning -Items $tables -What "tables in BigQuery dataset ${ProjectId}:${datasetId}"
+                foreach ($table in $tables) {
+                    $tableId   = $table.tableReference.tableId
+                    $tableType = $table.type  # TABLE, VIEW, MATERIALIZED_VIEW, EXTERNAL or SNAPSHOT
+
+                    # Per-table details from bq show
+                    $sizeBytes            = 0L
+                    $longTermBytes        = 0L
+                    $numRows              = 0L
+                    $numberOfColumns      = 0
+                    $creationTimeStr      = ""
+                    $lastModifiedStr      = ""
+                    $externalSourceFormat = ""
+                    $externalSourceUri    = ""
+                    $tableLabels          = $null
+
+                    $tableInfoResult = Invoke-BqJson -BqArgs @('show', '--format=prettyjson', "${ProjectId}:${datasetId}.${tableId}")
+                    if (-not $tableInfoResult.Success) {
+                        Write-Host "WARNING: Failed to get details for BigQuery table ${datasetId}.${tableId} in project ${ProjectId}; its size is reported as 0: $($tableInfoResult.Error)" -ForegroundColor Yellow
+                        $script:bqCollectionWarnings++
+                    }
+                    try {
+                        if ($tableInfoResult.Success -and $tableInfoResult.Data) {
+                            $tableInfo = $tableInfoResult.Data[0]
+                            if ($tableInfo.numBytes)         { $sizeBytes     = [long]$tableInfo.numBytes }
+                            if ($tableInfo.numLongTermBytes) { $longTermBytes  = [long]$tableInfo.numLongTermBytes }
+                            if ($tableInfo.numRows)          { $numRows        = [long]$tableInfo.numRows }
+                            if ($tableInfo.schema -and $tableInfo.schema.fields) {
+                                $numberOfColumns = @($tableInfo.schema.fields).Count
+                            }
+                            if ($tableInfo.creationTime)     { $creationTimeStr = ([System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$tableInfo.creationTime)).ToString("yyyy-MM-ddTHH:mm:ssZ") }
+                            if ($tableInfo.lastModifiedTime) { $lastModifiedStr = ([System.DateTimeOffset]::FromUnixTimeMilliseconds([long]$tableInfo.lastModifiedTime)).ToString("yyyy-MM-ddTHH:mm:ssZ") }
+                            if ($tableInfo.externalDataConfiguration) {
+                                $externalSourceFormat = $tableInfo.externalDataConfiguration.sourceFormat
+                                $sourceUris = @($tableInfo.externalDataConfiguration.sourceUris)
+                                if ($sourceUris.Count -gt 0) {
+                                    $externalSourceUri = $sourceUris -join '; '
+                                }
+                            }
+                            $tableLabels = $tableInfo.labels
+                        }
+                    } catch {
+                        Write-Host "WARNING: Failed to read details for BigQuery table ${datasetId}.${tableId} in project ${ProjectId}; some of its values may be reported as 0 or empty: $_" -ForegroundColor Yellow
+                        $script:bqCollectionWarnings++
+                    }
+
+                    $activeBytes = [math]::Max(0L, $sizeBytes - $longTermBytes)
+
+                    $totalLogicalSizes    = ConvertTo-GCPSizeUnits -Value $sizeBytes    -Prefix "TotalLogicalSize"    -InputUnit 'Bytes' -GBPrecision 4 -TBPrecision 6 -GiBPrecision 4 -TiBPrecision 6
+                    $activeLogicalSizes   = ConvertTo-GCPSizeUnits -Value $activeBytes  -Prefix "ActiveLogicalSize"   -InputUnit 'Bytes' -GBPrecision 4 -TBPrecision 6 -GiBPrecision 4 -TiBPrecision 6
+                    $longTermLogicalSizes = ConvertTo-GCPSizeUnits -Value $longTermBytes -Prefix "LongTermLogicalSize" -InputUnit 'Bytes' -GBPrecision 4 -TBPrecision 6 -GiBPrecision 4 -TiBPrecision 6
+
+                    $totalLogicalSizeGb    = $totalLogicalSizes["TotalLogicalSizeGB"]
+                    $totalLogicalSizeTb    = $totalLogicalSizes["TotalLogicalSizeTB"]
+                    $activeLogicalSizeGb   = $activeLogicalSizes["ActiveLogicalSizeGB"]
+                    $activeLogicalSizeTb   = $activeLogicalSizes["ActiveLogicalSizeTB"]
+                    $longTermLogicalSizeGb = $longTermLogicalSizes["LongTermLogicalSizeGB"]
+                    $longTermLogicalSizeTb = $longTermLogicalSizes["LongTermLogicalSizeTB"]
+
+                    $tableObj = [PSCustomObject]@{
+                        "Project"                = $ProjectId
+                        "DatasetId"              = $datasetId
+                        "Location"               = $location
+                        "TableId"                = $tableId
+                        "TableType"              = $tableType
+                        "NumRows"                = $numRows
+                        "NumberOfColumns"        = $numberOfColumns
+                        "TotalLogicalSizeBytes"   = $sizeBytes
+                        "TotalLogicalSizeGb"      = $totalLogicalSizeGb
+                        "TotalLogicalSizeTb"      = $totalLogicalSizeTb
+                        "TotalLogicalSizeGiB"     = $totalLogicalSizes["TotalLogicalSizeGiB"]
+                        "TotalLogicalSizeTiB"     = $totalLogicalSizes["TotalLogicalSizeTiB"]
+                        "ActiveLogicalSizeBytes"  = $activeBytes
+                        "ActiveLogicalSizeGb"     = $activeLogicalSizeGb
+                        "ActiveLogicalSizeTb"     = $activeLogicalSizeTb
+                        "ActiveLogicalSizeGiB"    = $activeLogicalSizes["ActiveLogicalSizeGiB"]
+                        "ActiveLogicalSizeTiB"    = $activeLogicalSizes["ActiveLogicalSizeTiB"]
+                        "LongTermLogicalSizeBytes" = $longTermBytes
+                        "LongTermLogicalSizeGb"   = $longTermLogicalSizeGb
+                        "LongTermLogicalSizeTb"   = $longTermLogicalSizeTb
+                        "LongTermLogicalSizeGiB"  = $longTermLogicalSizes["LongTermLogicalSizeGiB"]
+                        "LongTermLogicalSizeTiB"  = $longTermLogicalSizes["LongTermLogicalSizeTiB"]
+                        "ExternalSourceFormat"   = $externalSourceFormat
+                        "ExternalSourceUri"      = $externalSourceUri
+                        "CreationTime"           = $creationTimeStr
+                        "LastModifiedTime"       = $lastModifiedStr
+                    }
+
+                    # Dataset-level labels (Label/Tag: prefix so -Anonymize redacts both key and value)
+                    Add-LabelsToObject $tableObj $datasetLabels "Label/Tag: dataset_"
+                    # Table-level labels (table wins on key collision)
+                    Add-LabelsToObject $tableObj $tableLabels "Label/Tag: " -WarnedCollisions $labelCollisionsWarned -CollisionContext "BigQuery dataset ${ProjectId}:${datasetId}"
+
+                    $tableRowList.Add($tableObj) | Out-Null
+                }
+            }
+        } catch {
+            Write-Host "ERROR: Failed to process tables for BigQuery dataset $datasetId in project ${ProjectId}: $_" -ForegroundColor Red
+            $script:bqCollectionWarnings++
+        }
+    }
+    Write-Progress -ID 6 -Activity "Processing BigQuery datasets" -Completed
+
+    return , $tableRowList
 }
 
 function Compress-SizingArchive {
@@ -660,6 +934,7 @@ $outputAttachedDisks = "gce_attached_disk_info-$date_string.csv"
 $outputUnattachedDisks = "gce_unattached_disk_info-$date_string.csv"
 $outputCloudSQL = "gce_cloudsql_info-$date_string.csv"
 $outputSpanner = "gce_spanner_info-$date_string.csv"
+$outputBigQuery = "gce_bigquery_info-$date_string.csv"
 
 $archiveFile = "gcp_sizing_results_$date_string.zip"
 
@@ -670,6 +945,7 @@ $outputFiles = @(
     $outputUnattachedDisks,
     $outputCloudSQL,
     $outputSpanner,
+    $outputBigQuery,
     $output_log
 )
 
@@ -684,6 +960,14 @@ $attachedDiskList = New-Object collections.arraylist
 $unattachedDiskList = New-Object collections.arraylist
 $cloudSQLList = New-Object collections.arraylist
 $spannerList = New-Object collections.arraylist
+$bigQueryList = New-Object collections.arraylist
+$script:bqCollectionWarnings = 0
+$script:bqDatasetCount = 0
+$bqAvailable = [bool](Get-Command bq -ErrorAction SilentlyContinue)
+$bqMissingReported = $false
+if ($SkipBigQuery) {
+  Write-Host "BigQuery collection is skipped because -SkipBigQuery was specified." -ForegroundColor Yellow
+}
 # Loop through each project and grab the VM and disk info
 $projectCounter = 1
 foreach ($project in $projectList)
@@ -691,7 +975,7 @@ foreach ($project in $projectList)
   Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Status "Project: $($projectCounter) of $($projectList.Count)"  -PercentComplete (($projectCounter / $projectList.Count) * 100)
   $projectCounter++
 
-  # Proactive API enablement check — one call per project, filtered to the 3 APIs we need
+  # Proactive API enablement check — one call per project, filtered to the 4 APIs we need
   $apis = Get-GCPEnabledAPIs -ProjectId $project.projectId
 
   if (-not $apis.Compute) {
@@ -702,6 +986,9 @@ foreach ($project in $projectList)
   }
   if (-not $apis.Spanner) {
     Write-Host "WARNING: Cloud Spanner API is not enabled on project [$($project.projectId)]. Skipping Spanner data collection." -ForegroundColor Yellow
+  }
+  if (-not $apis.BigQuery) {
+    Write-Host "WARNING: BigQuery API is not enabled on project [$($project.projectId)]. Skipping BigQuery data collection." -ForegroundColor Yellow
   }
 
   if ($apis.Compute) {
@@ -722,12 +1009,23 @@ foreach ($project in $projectList)
     $spanner = Get-GCPSpannerInstances -ProjectId $project.projectId
     $spannerList.AddRange($spanner)
   }
+
+  if ($apis.BigQuery -and -not $SkipBigQuery) {
+    if ($bqAvailable) {
+      $bigQuery = Get-GCPBigQueryInventory -ProjectId $project.projectId
+      $bigQueryList.AddRange([System.Collections.ArrayList]$bigQuery)
+    } elseif (-not $bqMissingReported) {
+      Write-Host "ERROR: 'bq' was not found on PATH, so BigQuery collection is skipped for all projects. Install it with 'gcloud components install bq' and rerun." -ForegroundColor Red
+      $bqMissingReported = $true
+      $script:bqCollectionWarnings++
+    }
+  }
 }
 Write-Progress -ID 1 -Activity "Processing project: $($project.projectId)" -Completed
 
 
 if ($Anonymize) {
-  $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName")
+  $global:anonymizeProperties = @("Name", "Project", "VMName", "DiskName", "Id", "DiskEncryptionKey", "InstanceName", "DisplayName", "DatasetId", "TableId", "ExternalSourceUri")
 
   if($AnonymizeFields){
     [string[]]$anonFieldsList = $AnonymizeFields.split(',')
@@ -867,6 +1165,7 @@ if ($Anonymize) {
   $unattachedDiskList = Anonymize-Collection -Collection $unattachedDiskList
   $cloudSQLList = Anonymize-Collection -Collection $cloudSQLList
   $spannerList = Anonymize-Collection -Collection $spannerList
+  $bigQueryList = Anonymize-Collection -Collection $bigQueryList
 }
 
 $totalGB = ($attachedDiskList.sizeGb | Measure -Sum).sum + ($unattachedDiskList.sizeGb | Measure -Sum).sum
@@ -883,6 +1182,24 @@ Write-Host "Total capacity of all disks: $totalGB GB or $totalTB TB" -foreground
 Write-Host "Total # of Cloud SQL instances: $($cloudSQLList.count)" -foregroundcolor green
 Write-Host "Total Cloud SQL storage: $cloudSQLStorageGB GB or $cloudSQLStorageTB TB" -foregroundcolor green
 Write-Host "Total # of Spanner instances: $($spannerList.count)" -foregroundcolor green
+$totalBQDatasets       = $script:bqDatasetCount
+$totalBQTables        = ($bigQueryList | Where-Object { $_.TableType -eq 'TABLE' }).Count
+$totalBQMatViews       = ($bigQueryList | Where-Object { $_.TableType -eq 'MATERIALIZED_VIEW' }).Count
+$totalBQViews          = ($bigQueryList | Where-Object { $_.TableType -eq 'VIEW' }).Count
+$totalBQExternal       = ($bigQueryList | Where-Object { $_.TableType -eq 'EXTERNAL' }).Count
+$totalBQSnapshots      = ($bigQueryList | Where-Object { $_.TableType -eq 'SNAPSHOT' }).Count
+$totalBQLogicalBytes   = ($bigQueryList | Where-Object { $_.TableType -in @('TABLE', 'MATERIALIZED_VIEW') } | Measure-Object -Property TotalLogicalSizeBytes -Sum).Sum
+$totalBQLogicalTb      = [math]::Round($totalBQLogicalBytes / 1000000000000, 4)
+Write-Host "Total # of BigQuery datasets: $totalBQDatasets" -foregroundcolor green
+Write-Host "Total # of BigQuery native tables: $totalBQTables" -foregroundcolor green
+Write-Host "Total # of BigQuery materialized views: $totalBQMatViews" -foregroundcolor green
+Write-Host "Total # of BigQuery views (not protected): $totalBQViews" -foregroundcolor green
+Write-Host "Total # of BigQuery external tables (not protected — data not in BQ): $totalBQExternal" -foregroundcolor yellow
+Write-Host "Total # of BigQuery table snapshots (not included in the protectable size below): $totalBQSnapshots" -foregroundcolor yellow
+Write-Host "Total logical size of protectable BQ data (TABLE + MATERIALIZED_VIEW): $totalBQLogicalTb TB" -foregroundcolor green
+if ($script:bqCollectionWarnings -gt 0) {
+  Write-Host "WARNING: $($script:bqCollectionWarnings) BigQuery call(s) failed; the BigQuery totals above may be incomplete. See the warnings above." -foregroundcolor yellow
+}
 
 # Export to CSV
 Write-Host
@@ -905,6 +1222,10 @@ Write-Host
 Add-TagsToAllObjectsInList($spannerList)
 Write-Host "CSV file output to: $outputSpanner" -foregroundcolor green
 $spannerList | Export-CSV -path $outputSpanner
+Write-Host
+Add-TagsToAllObjectsInList($bigQueryList)
+Write-Host "CSV file output to: $outputBigQuery" -foregroundcolor green
+$bigQueryList | Export-CSV -path $outputBigQuery
 
 Write-Host
 Write-Host

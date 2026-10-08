@@ -375,13 +375,20 @@ To run the GCP sizing script, ensure you have the following:
     | Compute Engine API (`compute.googleapis.com`) | VMs, attached disks, unattached disks | No VM or disk data collected for that project |
     | Cloud SQL Admin API (`sqladmin.googleapis.com`) | Cloud SQL instances, databases, storage | No Cloud SQL data collected for that project |
     | Cloud Spanner API (`spanner.googleapis.com`) | Spanner instances, databases, node counts | No Spanner data collected for that project |
+    | BigQuery API (`bigquery.googleapis.com`) | Datasets, tables/views, sizes, external table sources, labels | No BigQuery data collected for that project |
 
     The script automatically detects which APIs are enabled per project. If an API is not enabled, the script skips that service and displays a warning — it will not prompt or fail. To enable an API, run:
     ```shell
     gcloud services enable compute.googleapis.com --project=PROJECT_ID
     gcloud services enable sqladmin.googleapis.com --project=PROJECT_ID
     gcloud services enable spanner.googleapis.com --project=PROJECT_ID
+    gcloud services enable bigquery.googleapis.com --project=PROJECT_ID
     ```
+
+    > **Note:** BigQuery collection uses the `bq` CLI in addition to `gcloud`. The `bq` CLI is included with the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) — no separate installation is required. If `bq` is missing after installing the SDK (e.g. minimal install), run:
+    > ```shell
+    > gcloud components install bq
+    > ```
 
 ### Running the GCP Script
 
@@ -422,7 +429,7 @@ To run the GCP sizing script, ensure you have the following:
         .\Get-GCPSizingInfo.ps1
         ```
 
-3. The script will output a summary to the console and create a zip file with CSV files for VMs, disks, Cloud SQL instances, and Spanner instances, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
+3. The script will output a summary to the console and create a zip file with CSV files for VMs, disks, Cloud SQL instances, Spanner instances, and BigQuery datasets, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
 
 **Output files:**
 - `gce_vm_info-<timestamp>.csv` - GCE VM information
@@ -430,7 +437,17 @@ To run the GCP sizing script, ensure you have the following:
 - `gce_unattached_disk_info-<timestamp>.csv` - Unattached disk information
 - `gce_cloudsql_info-<timestamp>.csv` - Cloud SQL instance information
 - `gce_spanner_info-<timestamp>.csv` - Spanner instance information
+- `gce_bigquery_info-<timestamp>.csv` - BigQuery table/view information (one row per table)
+  - Dataset labels appear as `Label/Tag: dataset_<key>` columns and table labels as `Label/Tag: <key>`. A table label named `dataset_<key>` maps to the same column as the dataset label `<key>`; the table value is kept and the script prints a warning.
+  - A table with several external source URIs lists them separated by `; ` in `ExternalSourceUri`.
 - `output_gcp_<timestamp>.log` - Console output log
+
+**Size columns and units:**
+- **Compute Engine (VM and disk CSVs):** Google defines Compute Engine "GB" as binary (1 GB = 2^30 bytes), so the `sizeGb` value the API returns is already GiB ([Compute Engine disk and image pricing](https://cloud.google.com/compute/disks-image-pricing)). `SizeGb` holds that value as returned (`TotalDiskSizeGb` and `EncryptedDisksSizeGb` are sums of it across a VM's disks), and `SizeTb` (and the other `...Tb` columns) is the same number divided by 1000. `SizeGiB` equals `SizeGb`, and `SizeTiB` is `SizeGiB` divided by 1024. So `SizeTb` and `SizeTiB` differ by design; use the `...GiB` and `...TiB` columns for binary units and do not read `SizeGb` as decimal gigabytes.
+- **Cloud SQL:** `StorageSizeGb` is `dataDiskSizeGb` as returned, and `StorageSizeTb` is that value divided by 1000. Google does not define whether `dataDiskSizeGb` is decimal or binary, so the Cloud SQL CSV has no GiB or TiB columns.
+- **BigQuery:** Sizes come from byte counts, so the `...Gb` and `...Tb` columns are decimal and the `...GiB` and `...TiB` columns are binary.
+
+**BigQuery run time:** The script runs one `bq show` call per table, one after another, so a project with thousands of tables can take a long time. There is no timeout, and progress is shown per dataset, not per table, so a large dataset can look stalled while it is still working. Run the script from a session that will not disconnect. To skip BigQuery collection, add `-SkipBigQuery`; the BigQuery CSV is still created, but it is empty.
 
 ### GCP Troubleshooting
 
