@@ -26,6 +26,13 @@ param (
     [string]$directoryPath = "./"
 )
 
+function Protect-CsvValue {
+  param($Value)
+  if ($null -eq $Value) { return $Value }
+  if ($Value -match '^[=+\-@\t\r\n]') { return "'" + $Value }
+  return $Value
+}
+
 function addNullValuesForFields($list) {
     # Determine all unique fields
     $allFields = @{}
@@ -78,6 +85,15 @@ foreach ($prefix in $prefixes) {
 
     # Make sure every field is reported
     addNullValuesForFields($combinedData)
+
+    # Sanitize string values to prevent CSV formula injection before export
+    foreach ($row in $combinedData) {
+        foreach ($prop in $row.PSObject.Properties) {
+            if ($prop.Value -is [string]) {
+                $prop.Value = Protect-CsvValue $prop.Value
+            }
+        }
+    }
 
     # Write the combined data to a new CSV file in the directory the script is run from
     $combinedData | Export-Csv -Path "${prefix}_combined.csv" -NoTypeInformation

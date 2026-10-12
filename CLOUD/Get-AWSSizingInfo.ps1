@@ -580,6 +580,13 @@ $outputFiles = @(
     $output_log
 )
 
+function Protect-CsvValue {
+  param($Value)
+  if ($null -eq $Value) { return $Value }
+  if ($Value -match '^[=+\-@\t\r\n]') { return "'" + $Value }
+  return $Value
+}
+
 function Get-CWMetricStatisticsForAllVersion {
   [CmdletBinding()]
   param(
@@ -1143,7 +1150,7 @@ function Get-AWSS3Inventory {
         # This may cause small subtle changes from the tagname in AWS
         # Same applies to all other types of objects
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
-        Add-Member -InputObject $s3obj -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+        Add-Member -InputObject $s3obj -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
       }
 
       $s3Result.Add($s3obj) | Out-Null
@@ -1183,7 +1190,7 @@ function Get-AWSEC2Inventory {
       $volumes = $blockDeviceMappings.ebs
 
       # Get EC2 instance name for reference in attached volumes
-      $ec2InstanceName = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+      $ec2InstanceName = $ec2.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output (Protect-CsvValue $_.Value)}}
 
       # Iterate through each volume and sum up the volume size, also collect individual volume details
       foreach ($blockDevice in $blockDeviceMappings) {
@@ -1203,7 +1210,7 @@ function Get-AWSEC2Inventory {
             "ResourceArn" = "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($volumeDetails.VolumeId)"
             "InstanceId" = $ec2.InstanceId
             "InstanceName" = $ec2InstanceName
-            "Name" = $volumeDetails.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+            "Name" = $volumeDetails.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output (Protect-CsvValue $_.Value)}}
             "DeviceName" = $blockDevice.DeviceName
             "SizeGiB" = $volSizes["SizeGiB"]
             "SizeTiB" = $volSizes["SizeTiB"]
@@ -1226,7 +1233,7 @@ function Get-AWSEC2Inventory {
           foreach ($tag in $volumeDetails.Tags) {
             $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
             if($key -ne "Name"){
-              $attachedVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+              $attachedVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
             }
           }
 
@@ -1267,7 +1274,7 @@ function Get-AWSEC2Inventory {
         # Same applies to all other types of objects
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $ec2obj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -1294,7 +1301,7 @@ function Get-AWSEC2Inventory {
         "AwsAccountAlias" = $AccountAlias
         "VolumeId" = $ec2UnattachedVolume.VolumeId
         "ResourceArn" = "arn:$($partitionId):ec2:$($Region):$($AccountInfo.Account):volume/$($ec2UnattachedVolume.VolumeId)"
-        "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+        "Name" = $ec2UnattachedVolume.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output (Protect-CsvValue $_.Value)}}
         "SizeGiB" = $unVolSizes["SizeGiB"]
         "SizeTiB" = $unVolSizes["SizeTiB"]
         "SizeGB" = $unVolSizes["SizeGB"]
@@ -1310,7 +1317,7 @@ function Get-AWSEC2Inventory {
       foreach ($tag in $ec2UnattachedVolume.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $ec2UnVolObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -1391,7 +1398,7 @@ function Get-AWSRDSInventory {
       foreach ($tag in $rds.TagList) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $rdsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $rdsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -1470,7 +1477,7 @@ function Get-AWSRDSInventory {
       foreach ($tag in $cluster.TagList) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $clusterObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $clusterObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -1533,7 +1540,7 @@ function Get-AWSEFSInventory {
       foreach ($tag in $efs.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $efsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $efsObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -1590,7 +1597,7 @@ function Get-AWSEKSInventory {
       foreach($key in $eks.Tags.Keys){
         $value = $eks.Tags.Values.Split('\n')[$tagCounter]
         $key = $key -replace '[^a-zA-Z0-9]', '_'
-        $eksObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force
+        $eksObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $value) -Force
         $tagCounter++
       }
 
@@ -1631,7 +1638,7 @@ function Get-AWSEKSInventory {
         foreach($key in $eksNodeGroup.Tags.Keys){
           $value = $eksNodeGroup.Tags.Values.Split('\n')[$tagCounter]
           $key = $key -replace '[^a-zA-Z0-9]', '_'
-          $eksNodeGroupObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $value -Force
+          $eksNodeGroupObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $value) -Force
           $tagCounter++
         }
 
@@ -1679,7 +1686,7 @@ function Get-AWSVPCInventory {
             # rare (only if a resource has tags whose names differ only
             # in non-alphanumeric characters, e.g. "cost-center" and
             # "cost_center").
-            $vpcObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+            $vpcObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
         $vpcResult.Add($vpcObj) | Out-Null
     }
@@ -1717,7 +1724,7 @@ function Get-AWSLoadBalancerInventory {
                     foreach ($tag in $desc.Tags) {
                         $key = $tag.Key -replace '[^a-zA-Z0-9-]', '_'
                         if ($key -ne "Name") {
-                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
                         }
                     }
                 }
@@ -1753,7 +1760,7 @@ function Get-AWSLoadBalancerInventory {
                     foreach ($tag in $desc.Tags) {
                         $key = $tag.Key -replace '[^a-zA-Z0-9-]', '_'
                         if ($key -ne "Name") {
-                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+                            $lbObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
                         }
                     }
                 }
@@ -1902,7 +1909,7 @@ function Get-AWSFSxInventory {
         "FileSystemTypeVersion" = $filesystem.FileSystemTypeVersion
         "FileSystemOwnerId" = $filesystem.OwnerId
         "FileSystemStorageType" = $filesystem.StorageType
-        "Name" = $filesystem.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output $_.Value}}
+        "Name" = $filesystem.Tags | ForEach-Object {if ($_.Key -ceq "Name") {Write-Output (Protect-CsvValue $_.Value)}}
         "OnTapType" = ($null -ne $filesystem.OntapConfiguration)
         "WindowsType" = ($null -ne $filesystem.WindowsConfiguration)
         "LustreType" = ($null -ne $filesystem.LustreConfiguration)
@@ -2040,7 +2047,7 @@ function Get-AWSFSxInventory {
       foreach ($tag in $fileSystem.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
       $fsxFileSystemResult.Add($fsxObj) | Out-Null
@@ -2136,7 +2143,7 @@ function Get-AWSFSxInventory {
       foreach ($tag in $fsx.Tags) {
         $key = $tag.Key -replace '[^a-zA-Z0-9]', '_'
         if($key -ne "Name"){
-          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value $tag.Value -Force
+          $fsxObj | Add-Member -MemberType NoteProperty -Name "Tag: $key" -Value (Protect-CsvValue $tag.Value) -Force
         }
       }
 
@@ -2438,7 +2445,7 @@ function Get-AWSS3TablesInventory {
             foreach ($tag in $tableTags.GetEnumerator()) {
                 $sanitizedKey = $tag.Key -replace '[^a-zA-Z0-9]', '_'
                 $s3tObj | Add-Member -MemberType NoteProperty -Name "Tag: $sanitizedKey" `
-                                     -Value $tag.Value -Force
+                                     -Value (Protect-CsvValue $tag.Value) -Force
             }
 
             [void]$result.Add($s3tObj)
@@ -4038,7 +4045,7 @@ function Get-AWSEBSAndAMIInventory {
             SizeGiB         = [math]::Round($imageSize / 1GB, 4)
             CreationDate    = $image.CreationDate
             Name            = $image.Name
-            Description     = $image.Description
+            Description     = (Protect-CsvValue $image.Description)
             State           = $image.State
         })
     }
@@ -4092,7 +4099,7 @@ function Get-AWSEBSAndAMIInventory {
             SizeGiB         = [math]::Round($sizeBytes / 1GB, 4)
             CreationDate    = $snap.StartTime
             Name            = ""
-            Description     = $snap.Description
+            Description     = (Protect-CsvValue $snap.Description)
             State           = $snap.State
         })
     }
