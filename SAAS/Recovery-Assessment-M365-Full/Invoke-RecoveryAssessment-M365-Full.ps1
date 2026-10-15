@@ -611,7 +611,7 @@ function Get-UserEnrichmentIndex {
     # enrichment index, and the common (non-Groups) path can never trigger
     # this specific Graph restriction at all.
     try {
-        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled' -ExpandProperty 'Manager' -ErrorAction Stop
+        $users = Get-MgUser -All -Property 'Id,UserPrincipalName,DisplayName,JobTitle,Department,EmployeeType,OfficeLocation,Country,UsageLocation,AccountEnabled,AssignedLicenses' -ExpandProperty 'Manager' -ErrorAction Stop
     }
     catch {
         Write-Warning "User profile enrichment failed ($($_.Exception.Message)). Continuing without it."
@@ -669,6 +669,11 @@ function Get-UserEnrichmentIndex {
             Country           = $u.Country
             UsageLocation     = $u.UsageLocation
             AccountEnabled    = $u.AccountEnabled
+            # NEW v3.17.0: effective license SKU ids (direct + group-based) from
+            # assignedLicenses - covered by User.Read.All, no extra scope. Drives
+            # the licensed / shared mailbox classification (see
+            # Add-MailboxTypeHeuristic) and the license-plan breakdown.
+            LicenseSkuIds     = @($u.AssignedLicenses | ForEach-Object { [string]$_.SkuId } | Where-Object { $_ })
             Manager           = $managerName
             ManagerId         = $managerId
             ManagerChain      = @()
@@ -701,6 +706,116 @@ function Get-UserEnrichmentIndex {
         Write-Host "Group membership enrichment: $groupResolvedCount of $($indexByUpn.Count) users have >=1 Entra ID group resolved." -ForegroundColor Gray
     }
     return $indexByUpn
+}
+
+# NEW v3.17.0: built-in map of license SKU ids -> plan label, used for the
+# "licensed users by plan" breakdown. Needs no extra Graph scope (the tenant's
+# own /subscribedSkus would, via LicenseAssignment.Read.All). Any SKU not in
+# this table is reported as "Other (unrecognized)" and its raw id is listed in
+# the report so it can be added here. Rank = precedence when a user holds more
+# than one plan: the HIGHEST rank wins so each user is counted once.
+$script:LicensePlanMap = @{
+    '9a18296a-025f-4e37-9ffa-30bf8d1ce775' = @{ Plan = 'E7'; Family = 'Enterprise'; Rank = 60 }   # Microsoft 365 E7 (MICROSOFT_365_E7)
+    '06ebc4ee-1bb5-47dd-8120-11324bc54e06' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 (SPE_E5)
+    'db684ac5-c0e7-4f92-8284-ef9ebde75d33' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 (500 seats min)_HUB (Microsoft_365_E5)
+    '18a4bd3f-0b5b-4887-b04f-61dd0ee15f5e' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 (no Teams) (Microsoft_365_E5_(no_Teams))
+    '3271cf8e-2be5-4a09-a549-70fd05baaa17' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 EEA (no Teams) (O365_w/o_Teams_Bundle_M5)
+    '1e988bf3-8b7c-4731-bec0-4e2a2946600c' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 EEA (no Teams) (500 seats min)_HUB (O365_w/o_Teams_Bundle_M5_(500_seats_min)_HUB)
+    '6ee4114a-9b2d-4577-9e7a-49fa43d222d3' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 EEA (no Teams) with Calling Minutes (Microsoft_365_E5_EEA_(no_Teams)_with_Calling_Minutes)
+    '90277bc7-a6fe-4181-99d8-712b08b8d32b' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 EEA (no Teams) without Audio Conferencing (Microsoft_365_E5_EEA_(no_Teams)_without_Audio_Conferencing)
+    'a640eead-25f6-4bec-97e3-23cfd382d7c2' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 EEA (no Teams) without Audio Conferencing (500 seats min)_HUB (Microsoft_365_E5_EEA_(no_Teams)without_Audio_Conferencing(500_seats_min)_HUB)
+    'a91fc4e0-65e5-4266-aa76-4037509c1626' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 with Calling Minutes (SPE_E5_CALLINGMINUTES)
+    'cd2925a3-5076-4233-8931-638a8c94f773' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 without Audio Conferencing (SPE_E5_NOPSTNCONF)
+    '2113661c-6509-4034-98bb-9c47bd28d63c' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5 without Audio Conferencing (500 seats min)_HUB (Microsoft_365_E5_without_Audio_Conferencing)
+    '4eb45c5b-0d19-4e33-b87c-adfc25268f20' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Microsoft 365 E5_USGOV_GCCHIGH (SPE_E5_USGOV_GCCHIGH)
+    'c7df2760-2c81-4ef7-b578-5b5392b571df' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Office 365 E5 (ENTERPRISEPREMIUM)
+    'cf50bae9-29e8-4775-b07c-56ee10e3776d' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Office 365 E5 EEA (no Teams) (Office_365_w/o_Teams_Bundle_E5)
+    '71772aeb-4bb8-4f74-9dd4-36c7a9b5ca74' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Office 365 E5 EEA (no Teams) without Audio Conferencing (Office_365_E5_EEA_(no_Teams)_without_Audio_Conferencing)
+    '26d45bd9-adf1-46cd-a9e1-51e9a5524128' = @{ Plan = 'E5'; Family = 'Enterprise'; Rank = 50 }   # Office 365 E5 without Audio Conferencing (ENTERPRISEPREMIUM_NOPSTNCONF)
+    '8900a2c0-edba-4079-bdf3-b276e293b6a8' = @{ Plan = 'G5'; Family = 'Government'; Rank = 48 }   # Office 365 G5 GCC (ENTERPRISEPREMIUM_GOV)
+    'e97c048c-37a4-45fb-ab50-922fbf07a370' = @{ Plan = 'A5'; Family = 'Education'; Rank = 45 }   # Microsoft 365 A5 for faculty (M365EDU_A5_FACULTY)
+    '46c119d4-0379-4a9d-85e4-97c66d3f909e' = @{ Plan = 'A5'; Family = 'Education'; Rank = 45 }   # Microsoft 365 A5 for students (M365EDU_A5_STUDENT)
+    'a4585165-0533-458a-97e3-c400570268c4' = @{ Plan = 'A5'; Family = 'Education'; Rank = 45 }   # Office 365 A5 for faculty (ENTERPRISEPREMIUM_FACULTY)
+    'ee656612-49fa-43e5-b67e-cb1fdf7699df' = @{ Plan = 'A5'; Family = 'Education'; Rank = 45 }   # Office 365 A5 for students (ENTERPRISEPREMIUM_STUDENT)
+    '05e9a617-0261-4cee-bb44-138d3ef5d965' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3 (SPE_E3)
+    '0c21030a-7e60-4ec7-9a0f-0042e0e0211a' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3 (500 seats min)_HUB (Microsoft_365_E3)
+    'dcf0408c-aaec-446c-afd4-43e3683943ea' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3 (no Teams) (Microsoft_365_E3_(no_Teams))
+    'c2fe850d-fbbb-4858-b67d-bd0c6e746da3' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3 EEA (no Teams) (O365_w/o Teams Bundle_M3)
+    '602e6573-55a3-46b1-a1a0-cc267991501a' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3 EEA (no Teams) (500 seats min)_HUB (O365_w/o Teams Bundle_M3_(500_seats_min)_HUB)
+    'd61d61cc-f992-433f-a577-5bd016037eeb' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3_USGOV_DOD (SPE_E3_USGOV_DOD)
+    'ca9d1dd9-dfe9-4fef-b97c-9bc1ea3c3658' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Microsoft 365 E3_USGOV_GCCHIGH (SPE_E3_USGOV_GCCHIGH)
+    '6fd2c87f-b296-42f0-b197-1e91e994b900' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Office 365 E3 (ENTERPRISEPACK)
+    '46c3a859-c90d-40b3-9551-6178a48d5c18' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Office 365 E3 (no Teams) (Office_365_E3_(no_Teams))
+    'd711d25a-a21c-492f-bd19-aae1e8ebaf30' = @{ Plan = 'E3'; Family = 'Enterprise'; Rank = 40 }   # Office 365 E3 EEA (no Teams) (O365_w/o_Teams_Bundle_E3)
+    'e823ca47-49c4-46b3-b38d-ca11d5abe3d2' = @{ Plan = 'G3'; Family = 'Government'; Rank = 38 }   # Microsoft 365 G3 GCC (M365_G3_GOV)
+    '535a3a29-c5f0-42fe-8215-d3b9e1f38c4a' = @{ Plan = 'G3'; Family = 'Government'; Rank = 38 }   # Office 365 G3 GCC (ENTERPRISEPACK_GOV)
+    '4b590615-0888-425a-a965-b3bf7789848d' = @{ Plan = 'A3'; Family = 'Education'; Rank = 35 }   # Microsoft 365 A3 for faculty (M365EDU_A3_FACULTY)
+    '7cfd9a2b-e110-4c39-bf20-c6a3f36a3121' = @{ Plan = 'A3'; Family = 'Education'; Rank = 35 }   # Microsoft 365 A3 for students (M365EDU_A3_STUDENT)
+    'e578b273-6db4-4691-bba0-8d691f4da603' = @{ Plan = 'A3'; Family = 'Education'; Rank = 35 }   # Office 365 A3 for Faculty (ENTERPRISEPACKPLUS_FACULTY)
+    '98b6e773-24d4-4c0d-a968-6e787a1f8204' = @{ Plan = 'A3'; Family = 'Education'; Rank = 35 }   # Office 365 A3 for Students (ENTERPRISEPACKPLUS_STUDENT)
+    '18181a46-0d4e-45cd-891e-60aabd171b4e' = @{ Plan = 'E1'; Family = 'Enterprise'; Rank = 30 }   # Office 365 E1 (STANDARDPACK)
+    'f8ced641-8e17-4dc5-b014-f5a2d53f6ac8' = @{ Plan = 'E1'; Family = 'Enterprise'; Rank = 30 }   # Office 365 E1 (no Teams) (Office_365_E1_(no_Teams))
+    'b57282e3-65bd-4252-9502-c0eae1e5ab7f' = @{ Plan = 'E1'; Family = 'Enterprise'; Rank = 30 }   # Office 365 E1 EEA (no Teams) (Office_365_w/o_Teams_Bundle_E1)
+    '6634e0ce-1a9f-428c-a498-f84ec7b8aa2e' = @{ Plan = 'E1'; Family = 'Enterprise'; Rank = 30 }   # Office 365 E2 (STANDARDWOFFPACK)
+    '3f4babde-90ec-47c6-995d-d223749065d1' = @{ Plan = 'G1'; Family = 'Government'; Rank = 28 }   # Office 365 G1 GCC (STANDARDPACK_GOV)
+    'b17653a4-2443-4e8c-a550-18249dda78bb' = @{ Plan = 'A1'; Family = 'Education'; Rank = 25 }   # Microsoft 365 A1 (M365EDU_A1)
+    '78e66a63-337a-4a9a-8959-41c6654dfb56' = @{ Plan = 'A1'; Family = 'Education'; Rank = 25 }   # Office 365 A1 Plus for Faculty (STANDARDWOFFPACK_IW_FACULTY)
+    'e82ae690-a2d5-4d76-8d30-7c6e01e6022e' = @{ Plan = 'A1'; Family = 'Education'; Rank = 25 }   # Office 365 A1 Plus for Students (STANDARDWOFFPACK_IW_STUDENT)
+    '94763226-9b3c-4e75-a931-5c89701abe66' = @{ Plan = 'A1'; Family = 'Education'; Rank = 25 }   # Office 365 A1 for faculty (STANDARDWOFFPACK_FACULTY)
+    '314c4481-f395-4525-be8b-2ec4bb1e9d91' = @{ Plan = 'A1'; Family = 'Education'; Rank = 25 }   # Office 365 A1 for students (STANDARDWOFFPACK_STUDENT)
+    '66b55226-6b4f-492c-910c-a3b7a3c9d993' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Microsoft 365 F3 (SPE_F1)
+    'f7ee79a7-7aec-4ca4-9fb9-34d6b930ad87' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Microsoft 365 F3 EEA (no Teams) (Microsoft_365_F3_EEA_(no_Teams))
+    '2a914830-d700-444a-b73c-e3f31980d833' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Microsoft 365 F3 GCC (M365_F1_GOV)
+    '4b585984-651b-448a-9e53-3b10f069cf7f' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Office 365 F3 (DESKLESSPACK)
+    'd1f0495b-cb7b-4e11-8b85-daee7e7e5664' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Office 365 F3 EEA (no Teams) (Office_365_F3_EEA_(no_Teams))
+    '74039b88-bd62-4b5c-9d9c-7a92bbc0bfdf' = @{ Plan = 'F3'; Family = 'Frontline'; Rank = 20 }   # Office 365 F3_USGOV_GCCHIGH (DESKLESSPACK_USGOV_GCCHIGH)
+    '44575883-256e-4a79-9da4-ebe9acabe2b2' = @{ Plan = 'F1'; Family = 'Frontline'; Rank = 18 }   # Microsoft 365 F1 (M365_F1)
+    '50f60901-3181-4b75-8a2c-4c8e4c1d5a72' = @{ Plan = 'F1'; Family = 'Frontline'; Rank = 18 }   # Microsoft 365 F1 (M365_F1_COMM)
+    '0666269f-b167-4c5b-a76f-fc574f2b1118' = @{ Plan = 'F1'; Family = 'Frontline'; Rank = 18 }   # Microsoft 365 F1 EEA (no Teams) (Microsoft_365_F1_EEA_(no_Teams))
+    'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46' = @{ Plan = 'Business Premium'; Family = 'Business'; Rank = 15 }   # Microsoft 365 Business Premium (SPB)
+    '00e1ec7b-e4a3-40d1-9441-b69b597ab222' = @{ Plan = 'Business Premium'; Family = 'Business'; Rank = 15 }   # Microsoft 365 Business Premium (no Teams) (Microsoft_365_ Business_ Premium_(no Teams))
+    '24c35284-d768-4e53-84d9-b7ae73dddf69' = @{ Plan = 'Business Premium'; Family = 'Business'; Rank = 15 }   # Microsoft 365 Business Premium Donation (Microsoft_365_Business_Premium_Donation_(Non_Profit_Pricing))
+    'a3f586b6-8cce-4d9b-99d6-55238397f77a' = @{ Plan = 'Business Premium'; Family = 'Business'; Rank = 15 }   # Microsoft 365 Business Premium EEA (no Teams) (Office_365_w/o_Teams_Bundle_Business_Premium)
+    'fc14ec4a-4169-49a4-a51e-2c852931814b' = @{ Plan = 'Business Premium'; Family = 'Business'; Rank = 15 }   # Office 365 Small Business Premium (LITEPACK_P2)
+    'f245ecc8-75af-4f8e-b61f-27d8114de5f3' = @{ Plan = 'Business Standard'; Family = 'Business'; Rank = 14 }   # Microsoft 365 Business Standard (O365_BUSINESS_PREMIUM)
+    '5a1c7b8d-0739-4ca8-bf69-ec87e69133ac' = @{ Plan = 'Business Standard'; Family = 'Business'; Rank = 14 }   # Microsoft 365 Business Standard (no Teams) (MICROSOFT_365_BUSINESS_STANDARD_NO_TEAMS)
+    'ac5cef5d-921b-4f97-9ef3-c99076e5470f' = @{ Plan = 'Business Standard'; Family = 'Business'; Rank = 14 }   # Microsoft 365 Business Standard - Prepaid Legacy (SMB_BUSINESS_PREMIUM)
+    'c1f79c29-5d7a-4bec-a2c1-1a76774864c0' = @{ Plan = 'Business Standard'; Family = 'Business'; Rank = 14 }   # Microsoft 365 Business Standard EEA (no Teams) (Office_365_w/o_Teams_Bundle_Business_Standard)
+    'ffa3a2a0-3820-462a-aa81-8a4d741f0cba' = @{ Plan = 'Business Standard'; Family = 'Business'; Rank = 14 }   # Microsoft 365 Business Standard EEA (no Teams) (Microsoft_365_Business_Standard_EEA_(no_Teams))
+    '3b555118-da6a-4418-894f-7df1e2096870' = @{ Plan = 'Business Basic'; Family = 'Business'; Rank = 13 }   # Microsoft 365 Business Basic (O365_BUSINESS_ESSENTIALS)
+    'dab7782a-93b1-4074-8bb1-0e61318bea0b' = @{ Plan = 'Business Basic'; Family = 'Business'; Rank = 13 }   # Microsoft 365 Business Basic (SMB_BUSINESS_ESSENTIALS)
+    '21502a13-c8dc-4744-be9c-177fd9d2eafc' = @{ Plan = 'Business Basic'; Family = 'Business'; Rank = 13 }   # Microsoft 365 Business Basic (no Teams) (Microsoft_365_Business_Basic_(no Teams))
+    'b1f3042b-a390-4b56-ab61-b88e7e767a97' = @{ Plan = 'Business Basic'; Family = 'Business'; Rank = 13 }   # Microsoft 365 Business Basic EEA (no Teams) (Microsoft_365_Business_Basic_EEA_(no_Teams))
+    '19ec0d23-8335-4cbd-94ac-6050e30712fa' = @{ Plan = 'Exchange Online (Plan 2)'; Family = 'Exchange'; Rank = 12 }   # Exchange Online (PLAN 2) (EXCHANGEENTERPRISE)
+    '0b7b15a8-7fd2-4964-bb96-5a566d4e3c15' = @{ Plan = 'Exchange Online (Plan 2)'; Family = 'Exchange'; Rank = 12 }   # Exchange Online (Plan 2) for Faculty (EXCHANGEENTERPRISE_FACULTY)
+    '7be8dc28-4da4-4e6d-b9b9-c60f2806df8a' = @{ Plan = 'Exchange Online (Plan 2)'; Family = 'Exchange'; Rank = 12 }   # Exchange Online (Plan 2) for GCC (EXCHANGEENTERPRISE_GOV)
+    '4b9405b0-7788-4568-add1-99614e613b69' = @{ Plan = 'Exchange Online (Plan 1)'; Family = 'Exchange'; Rank = 11 }   # Exchange Online (Plan 1) (EXCHANGESTANDARD)
+    'aa0f9eb7-eff2-4943-8424-226fb137fcad' = @{ Plan = 'Exchange Online (Plan 1)'; Family = 'Exchange'; Rank = 11 }   # Exchange Online (Plan 1) for Alumni with Yammer (EXCHANGESTANDARD_ALUMNI)
+    'f37d5ebf-4bf1-4aa2-8fa3-50c51059e983' = @{ Plan = 'Exchange Online (Plan 1)'; Family = 'Exchange'; Rank = 11 }   # Exchange Online (Plan 1) for GCC (EXCHANGESTANDARD_GOV)
+    'ad2fe44a-915d-4e2b-ade1-6766d50a9d9c' = @{ Plan = 'Exchange Online (Plan 1)'; Family = 'Exchange'; Rank = 11 }   # Exchange Online (Plan 1) for Students (EXCHANGESTANDARD_STUDENT)
+    '80b2d799-d2ba-4d2a-8842-fb0d0f3a4b82' = @{ Plan = 'Exchange Online Kiosk'; Family = 'Exchange'; Rank = 10 }   # Exchange Online Kiosk (EXCHANGEDESKLESS)
+    'e8f81a67-bd96-4074-b108-cf193eb9433b' = @{ Plan = 'Exchange Online Essentials'; Family = 'Exchange'; Rank = 9 }   # Exchange Online Essentials (EXCHANGE_S_ESSENTIALS)
+    '7fc0182e-d107-4556-8329-7caaa511197b' = @{ Plan = 'Exchange Online Essentials'; Family = 'Exchange'; Rank = 9 }   # Exchange Online Essentials (ExO P1 Based) (EXCHANGEESSENTIALS)
+}
+# Standalone Exchange Online Archiving add-on SKUs (reported separately; not a base plan).
+# Free / non-mailbox SKUs that do NOT make a mailbox a licensed user mailbox
+# (Fabric/Power BI free, Power Automate free, Power Apps Developer, Copilot and M365 Apps add-ons). Ignored for classification and plan.
+$script:LicenseNonMailboxSkus = @('a403ebcc-fae0-4ca2-8c8c-7a907fd6c235', 'f30db892-07e9-47e9-837c-80727f46fd3d', '5b631642-bd26-49fe-bd20-1daaa972ef80', '639dec6b-bb19-468b-871c-c5c441c4b0cb', 'c2273bd0-dff7-4215-9ef5-2c7bcfb06425')
+# Counts of license SKU ids NOT in the map above (mailboxes only), surfaced in the report so they can be identified and added.
+$script:UnmappedSkuCounts = @{}
+$script:LicenseArchiveAddonSkus = @('ee02fd1b-340e-4a4b-b355-4a514e4c8943', '90b5e015-709a-4b8b-b08e-3200f994494c')
+
+function Get-LicensePlan {
+    <# Returns the highest-ranked recognized plan label for a user's SKU ids; 'Other (unrecognized)' when licensed but none match; '' when unlicensed. #>
+    param([AllowEmptyCollection()] [string[]] $SkuIds)
+    if (-not $SkuIds -or $SkuIds.Count -eq 0) { return '' }
+    $best = $null
+    foreach ($id in $SkuIds) {
+        $hit = $script:LicensePlanMap[$id.ToLowerInvariant()]
+        if ($hit -and (-not $best -or $hit.Rank -gt $best.Rank)) { $best = $hit }
+    }
+    if ($best) { return $best.Plan }
+    return 'Other (unrecognized)'
 }
 
 function Add-UserEnrichment {
@@ -736,49 +851,112 @@ function Add-UserEnrichment {
         Add-Member -InputObject $row -NotePropertyName 'GroupIds'       -NotePropertyValue @(if ($enrich) { $enrich.GroupIds } else { @() })      -Force
         Add-Member -InputObject $row -NotePropertyName 'OfficeLocation' -NotePropertyValue $(if ($enrich) { $enrich.OfficeLocation } else { '' }) -Force
         Add-Member -InputObject $row -NotePropertyName 'AccountEnabled' -NotePropertyValue $(if ($enrich) { $enrich.AccountEnabled } else { $null }) -Force
+        # NEW v3.17.0: license join. EntraMatched distinguishes "no user
+        # account at all" (group mailbox, orphan) from "user, unlicensed".
+        $rawSkuIds = @(if ($enrich) { $enrich.LicenseSkuIds } else { @() })
+        $skuIds = @($rawSkuIds | Where-Object { $script:LicenseNonMailboxSkus -notcontains ([string]$_).ToLowerInvariant() })
+        Add-Member -InputObject $row -NotePropertyName 'EntraMatched' -NotePropertyValue ([bool]$enrich) -Force
+        Add-Member -InputObject $row -NotePropertyName 'IsLicensed'   -NotePropertyValue ($skuIds.Count -gt 0) -Force
+        Add-Member -InputObject $row -NotePropertyName 'LicensePlan'  -NotePropertyValue (Get-LicensePlan -SkuIds $skuIds) -Force
+        if ($UpnField -eq 'Identifier') {
+            foreach ($id in $skuIds) {
+                $lid = $id.ToLowerInvariant()
+                if (-not $script:LicensePlanMap.ContainsKey($lid) -and ($script:LicenseArchiveAddonSkus -notcontains $lid)) {
+                    $script:UnmappedSkuCounts[$lid] = 1 + [int]$script:UnmappedSkuCounts[$lid]
+                }
+            }
+        }
+        Add-Member -InputObject $row -NotePropertyName 'HasArchiveAddon' -NotePropertyValue (@($skuIds | Where-Object { $script:LicenseArchiveAddonSkus -contains $_.ToLowerInvariant() }).Count -gt 0) -Force
     }
     return $Data
 }
 
 function Add-MailboxTypeHeuristic {
     <#
-        v3.0.0: the mailbox usage report (Get-MgReportMailboxUsageDetail,
-        already pulled with no extra scope) includes a real 'Recipient Type'
-        column (e.g. "User Mailbox", "Shared Mailbox", "Room Mailbox",
-        "Equipment Mailbox"). Validated against real customer data: the OLD
-        proxy below (AccountEnabled=$false => "likely Shared/Resource")
-        caught 0 of 2 real Shared mailboxes in that data - both had
-        AccountEnabled=$true - i.e. it was worse than a coin flip. Recipient
-        Type is now the AUTHORITATIVE signal and is populated by
-        Get-MailboxCriticality on every run. The old AccountEnabled-based
-        guess is kept ONLY as a last-resort fallback for the rare tenant/
-        report export where Recipient Type comes back blank, and only runs
-        in that case.
+        v3.17.0: the Graph mailbox usage report NO LONGER returns a usable
+        'Recipient Type' column (confirmed blank/absent on every customer
+        export checked), so the old Recipient-Type-first classification
+        counted every mailbox as a user and reported 0 shared mailboxes.
+        Classification is now license-based (assignedLicenses, joined in
+        Add-UserEnrichment; User.Read.All, no new scope):
+
+          Shared    - confirmed Shared/Room/Equipment by Exchange Online
+                      (-DetailedSizing, authoritative, wins over everything),
+                      OR a Recipient Type that says so (older tenants), OR no
+                      matching Entra user (group mailbox / orphan), OR
+                      DISABLED and unlicensed (shared mailboxes are normally
+                      created with sign-in blocked), OR unlicensed with the
+                      50 GB mailbox limit (v3.17.1: shared mailboxes whose
+                      sign-in was left enabled).
+                      Protected and sized, but needs NO Rubrik license.
+          Licensed  - at least one assigned license (enabled OR disabled).
+                      Counts toward the Rubrik license quote.
+          Unlicensed- ENABLED and unlicensed. Rubrik does not protect these;
+                      the caller excludes them from the report entirely.
+          Unknown   - license data wasn't collected (enrichment failed or
+                      returned nothing), so nothing is excluded or guessed.
+
+        MailboxClass drives the Sizing tab; MailboxTypeHeuristic is the
+        human-readable label shown in the Mailbox Type column/filter.
     #>
-    param([AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data)
+    param(
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Data,
+        [System.Collections.Generic.HashSet[string]] $SharedUpnSet = $null,
+        [bool] $LicenseDataAvailable = $true
+    )
     foreach ($row in $Data) {
         $recipientType = [string]$row.RecipientType
-        $type = if ($recipientType) {
-            switch -Regex ($recipientType) {
-                'Shared'    { 'Shared Mailbox (Recipient Type)'; break }
-                'Room'      { 'Room Mailbox (Recipient Type)'; break }
-                'Equipment' { 'Equipment Mailbox (Recipient Type)'; break }
-                'User'      { 'User Mailbox (Recipient Type)'; break }
-                default     { "$recipientType (Recipient Type)" }
-            }
+        $class = $null; $label = $null
+        if ($null -ne $SharedUpnSet -and $SharedUpnSet.Contains([string]$row.Identifier)) {
+            $class = 'Shared'; $label = 'Shared / resource mailbox (confirmed via Exchange Online)'
         }
-        elseif ($null -eq $row.AccountEnabled -or $row.AccountEnabled -eq '') {
-            'Unknown (Recipient Type and AccountEnabled both blank for this object)'
+        elseif ($recipientType -match 'Shared|Room|Equipment') {
+            $class = 'Shared'; $label = "$recipientType (Recipient Type)"
+        }
+        elseif (-not $LicenseDataAvailable) {
+            $class = 'Unknown'; $label = 'Unclassified (license data not collected)'
+        }
+        elseif ($row.PSObject.Properties.Name -contains 'EntraMatched' -and -not $row.EntraMatched) {
+            $class = 'Shared'; $label = 'Shared / group / other (no matching user account)'
+        }
+        elseif ($row.IsLicensed) {
+            $class = 'Licensed'; $label = 'Licensed user mailbox'
         }
         elseif ($row.AccountEnabled -eq $false) {
-            'Likely Shared/Resource (AccountEnabled fallback - Recipient Type was blank; low confidence, see Methodology tab)'
+            $class = 'Shared'; $label = 'Shared / other (disabled, unlicensed)'
+        }
+        elseif ($row.SendReceiveQuotaBytes -gt 0 -and [math]::Abs($row.SendReceiveQuotaBytes - 53687091200) -lt 1073741824) {
+            # Unlicensed but still sign-in enabled, with the 50 GB limit Exchange gives
+            # unlicensed shared/room/equipment mailboxes (a real user mailbox that lost
+            # its license keeps its old limit). Seen on a real tenant: both genuine
+            # shared mailboxes were enabled+unlicensed and carried exactly this limit.
+            $class = 'Shared'; $label = 'Shared / resource (unlicensed, 50 GB mailbox limit)'
         }
         else {
-            'User (AccountEnabled fallback - Recipient Type was blank)'
+            $class = 'Unlicensed'; $label = 'Unlicensed user (enabled) - not protected'
         }
-        Add-Member -InputObject $row -NotePropertyName 'MailboxTypeHeuristic' -NotePropertyValue $type -Force
+        Add-Member -InputObject $row -NotePropertyName 'MailboxClass' -NotePropertyValue $class -Force
+        Add-Member -InputObject $row -NotePropertyName 'MailboxTypeHeuristic' -NotePropertyValue $label -Force
     }
     return $Data
+}
+
+function Get-SharedMailboxUpnSet {
+    <# -DetailedSizing only. Authoritative shared/room/equipment mailbox list from Exchange Online. Leaves the Exchange Online connection OPEN for Get-DetailedSizingInfo to reuse (that function always disconnects). Returns $null (with a warning) on any failure so the license-based classification still runs. #>
+    param([string]$TenantId, [string]$ClientId, [string]$CertificateThumbprint)
+    try {
+        Connect-ExchangeOnlineForSizing -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
+        $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($m in (Get-EXOMailbox -RecipientTypeDetails SharedMailbox, RoomMailbox, EquipmentMailbox -ResultSize Unlimited -ErrorAction Stop)) {
+            if ($m.UserPrincipalName) { [void]$set.Add([string]$m.UserPrincipalName) }
+        }
+        Write-Host ("Exchange Online: {0:N0} shared/room/equipment mailbox(es) confirmed." -f $set.Count) -ForegroundColor Gray
+        return ,$set
+    }
+    catch {
+        Write-Warning "Shared mailbox lookup via Exchange Online failed ($($_.Exception.Message)). Falling back to the license-based estimate."
+        return $null
+    }
 }
 
 function Add-TitleWeightScore {
@@ -1507,6 +1685,7 @@ function Build-RecoveryModel {
     $cumODObjs = 0; $cumODItems = 0.0; $cumODStorage = 0.0
     $cumEXObjs = 0; $cumEXItems = 0.0; $cumEXStorage = 0.0
     $milestones = [ordered]@{}
+    $prevWall = 0.0
     foreach ($tierName in $tierOrder) {
         $spSlice = TierSlice $SharePoint 'FileCount' 'StorageBytes' $tierName
         $odSlice = TierSlice $OneDrive   'FileCount' 'StorageBytes' $tierName
@@ -1531,11 +1710,22 @@ function Build-RecoveryModel {
         $massEXTime = Get-RecoveryTimeMinutes -WorkloadType EX -ObjectCount $cumEXObjs -ItemCount $cumEXItems -StorageAmount $cumEXStorage -AvgItemSize $exAvgItemSize -SPODTier $spodTier -EXBenchmark $script:EXBenchmark -IncludeOverhead $false
         $massCumMin = [math]::Max([math]::Max($massSPTime,$massODTime),$massEXTime)
 
+        # v3.17.0: cap ABR at Mass for the SAME scope (ABR restores only the hot
+        # slice of these groups, so it can never exceed mass-restoring them).
+        # Raw ABR carries per-object scheduling overhead Mass doesn't model.
+        # Kept monotonic across tiers.
+        $abrRawCum    = [math]::Max([math]::Max($cumSP,$cumOD),$cumEX)
+        $cappedByMass = ($abrRawCum -gt $massCumMin)
+        $cappedWall   = [math]::Max($prevWall, [math]::Min($abrRawCum, $massCumMin))
+        $prevWall     = $cappedWall
+
         $milestones[$tierName] = [ordered]@{
             SP = [ordered]@{ ObjectCount = $spSlice.ObjectCount; ItemCount = $spSlice.ItemCount; Storage = $spSlice.Storage; TimeMin = [math]::Round($spTime,2); CumulativeMin = [math]::Round($cumSP,2); MassTimeMin = [math]::Round($massSPTime,2) }
             OD = [ordered]@{ ObjectCount = $odSlice.ObjectCount; ItemCount = $odSlice.ItemCount; Storage = $odSlice.Storage; TimeMin = [math]::Round($odTime,2); CumulativeMin = [math]::Round($cumOD,2); MassTimeMin = [math]::Round($massODTime,2) }
             EX = [ordered]@{ ObjectCount = $exSlice.ObjectCount; ItemCount = $exSlice.ItemCount; Storage = $exSlice.Storage; TimeMin = [math]::Round($exTime,2); CumulativeMin = [math]::Round($cumEX,2); MassTimeMin = [math]::Round($massEXTime,2) }
-            WallClockCumulativeMin = [math]::Round([math]::Max([math]::Max($cumSP,$cumOD),$cumEX), 2)
+            WallClockCumulativeMin = [math]::Round($cappedWall, 2)
+            AbrRawCumulativeMin = [math]::Round($abrRawCum, 2)
+            CappedByMass = $cappedByMass
             MassRecoveryCumulativeMin = [math]::Round($massCumMin, 2)
             ExceedsTarget = $false
             TargetGapMin  = 0.0
@@ -1799,6 +1989,9 @@ function Connect-ExchangeOnlineForSizing {
         [string]$ClientId,
         [string]$CertificateThumbprint
     )
+    # NEW v3.17.0: the shared-mailbox lookup connects early and leaves the
+    # session open; reuse it instead of prompting/authenticating twice.
+    if ($script:ExoConnected) { return }
     $useAppOnly = $TenantId -and $ClientId -and $CertificateThumbprint
     if ($useAppOnly) {
         Write-Host "Connecting to Exchange Online via Enterprise App (application permissions) as $ClientId..." -ForegroundColor Cyan
@@ -1807,6 +2000,7 @@ function Connect-ExchangeOnlineForSizing {
         Write-Host "Connecting to Exchange Online (delegated, interactive) for -DetailedSizing..." -ForegroundColor Cyan
         Connect-ExchangeOnline -ShowBanner:$false
     }
+    $script:ExoConnected = $true
 }
 
 function Get-RecoverableItemsInfo {
@@ -1920,6 +2114,7 @@ function Get-DetailedSizingInfo {
     }
     finally {
         try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch { }
+        $script:ExoConnected = $false
     }
 
     return $result
@@ -1981,6 +2176,10 @@ function Get-MailboxCriticality {
         # separate Exchange Online connection and a per-mailbox loop - see
         # -DetailedSizing - and is intentionally NOT gathered here.
         $hasArchive = (Get-ColumnValue $u @('Has Archive') '') -eq 'TRUE'
+        # NEW v3.17.1: mailbox limit from the same usage report. A mailbox with no
+        # license and a 50 GB limit is a shared/resource mailbox (Exchange's
+        # default for unlicensed mailboxes) - see Add-MailboxTypeHeuristic.
+        $sendRecvQuota = [double](Get-ColumnValue $u @('Prohibit Send/Receive Quota (Byte)', 'Prohibit Send/Receive Quota (Bytes)') 0)
 
         [PSCustomObject]@{
             Workload          = 'Mailbox'
@@ -1992,6 +2191,7 @@ function Get-MailboxCriticality {
             StorageUsedMB     = [math]::Round($storageBytes / 1MB, 2)
             RecipientType     = $recipientType
             HasArchive        = $hasArchive
+            SendReceiveQuotaBytes = $sendRecvQuota
             SendCount         = $sendCount
             ReceiveCount      = $receiveCount
             ReadCount         = $readCount
@@ -2488,13 +2688,13 @@ h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25re
 .rl-track { position: absolute; top: 42px; left: 0; right: 0; height: 10px; border-radius: 6px; overflow: hidden; display: flex; box-shadow: inset 0 1px 2px rgba(0,0,0,.08); }
 .rl-seg { height: 100%; }
 .rl-seg.mass { background-color: #D7DCE1; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.6) 0, rgba(255,255,255,.6) 6px, transparent 6px, transparent 12px); }
-.rl-flag { position: absolute; top: 0; width: 160px; transform: translateX(-50%); text-align: center; }
-.rl-flag .rl-time { position: absolute; top: 0; left: 0; right: 0; font-weight: 800; font-size: 1.05rem; color: var(--navy); }
-.rl-flag .rl-pin { position: absolute; top: 36px; left: 50%; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1.5px rgba(9,53,101,.15); }
+.rl-flag { position: absolute; top: 0; width: 132px; transform: translateX(-50%); text-align: center; }
+.rl-flag .rl-time { position: absolute; top: 0; left: 0; right: 0; font-weight: 800; font-size: 1.05rem; color: var(--navy); white-space: nowrap; }
+.rl-flag.mass .rl-time { color: var(--dark-gray); }
+.rl-pin { position: absolute; top: 36px; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1.5px rgba(9,53,101,.15); z-index: 2; }
+.rl-pin.mass { background: #fff; border-color: #8A97A6; box-shadow: none; width: 14px; height: 14px; top: 37px; }
 .rl-flag .rl-label { position: absolute; top: 62px; left: 0; right: 0; font-size: .76rem; color: var(--dark-gray); line-height: 1.25; }
-.rl-mass-label { position: absolute; top: 0; right: 0; width: 190px; text-align: right; }
-.rl-mass-label .rl-time { font-weight: 800; font-size: 1.05rem; color: var(--dark-gray); }
-.rl-mass-label .rl-label { font-size: .76rem; color: var(--dark-gray); margin-top: .2rem; }
+.rl-note { margin-top: .6rem; font-size: .8rem; color: var(--dark-gray); line-height: 1.4; background: #F4F7FA; border-radius: 8px; padding: .55rem .8rem; }
 /* NEW v3.5.0: Downtime Cost Avoided by Group table (Report tab) - extends
    the existing Group-1-vs-Full comparison to show cost avoided at every
    milestone, not just Group 1. */
@@ -3338,6 +3538,7 @@ function computeRecoveryModel() {
   var cumODObjs = 0, cumODItems = 0, cumODStorage = 0;
   var cumEXObjs = 0, cumEXItems = 0, cumEXStorage = 0;
   var milestones = {};
+  var prevWall = 0;
   TIER_ORDER.forEach(function (tierName) {
     var spSlice = sliceTotals(sp, "FileCount", "StorageBytes", RECENT_FIELD.sharepoint, tierName);
     var odSlice = sliceTotals(od, "FileCount", "StorageBytes", RECENT_FIELD.onedrive, tierName);
@@ -3362,11 +3563,23 @@ function computeRecoveryModel() {
     var massEXTime = recoveryTimeMinutes("EX", cumEXObjs, cumEXItems, cumEXStorage, exAvg, spodTier, false);
     var massCumMin = Math.max(massSPTime, massODTime, massEXTime);
 
+    // v3.17.0: ABR for a scope can never be slower than mass-restoring that
+    // SAME scope (ABR restores only the hot slice of those groups). The raw
+    // ABR figure carries per-object job-scheduling overhead that Mass does not
+    // model, so on object-heavy tenants it can overshoot. Cap at Mass for the
+    // same scope and keep milestones monotonic.
+    var abrRawCum = Math.max(cumSP, cumOD, cumEX);
+    var cappedByMass = abrRawCum > massCumMin;
+    var cappedWall = Math.max(prevWall, Math.min(abrRawCum, massCumMin));
+    prevWall = cappedWall;
+
     milestones[tierName] = {
       sp: { objectCount: spSlice.objectCount, itemCount: spSlice.itemCount, storage: spSlice.storage, timeMin: spTime, cumMin: cumSP, massTimeMin: massSPTime },
       od: { objectCount: odSlice.objectCount, itemCount: odSlice.itemCount, storage: odSlice.storage, timeMin: odTime, cumMin: cumOD, massTimeMin: massODTime },
       ex: { objectCount: exSlice.objectCount, itemCount: exSlice.itemCount, storage: exSlice.storage, timeMin: exTime, cumMin: cumEX, massTimeMin: massEXTime },
-      wallClockCumMin: Math.max(cumSP, cumOD, cumEX),
+      wallClockCumMin: cappedWall,
+      abrRawCumMin: abrRawCum,
+      cappedByMass: cappedByMass,
       massRecoveryCumMin: massCumMin,
       exceedsTarget: false,
       targetGapMin: 0
@@ -3788,37 +4001,73 @@ function buildRecoveryLadderHtml(model) {
 
   if (milestones.length === 0) { return ""; }
 
-  // Track segments: true-to-scale, sequential deltas summing to 100%.
+  // The axis is max(Mass Recovery baseline, last ABR milestone) as a safety
+  // net. computeRecoveryModel caps every ABR milestone at the Mass Recovery
+  // time for the same scope, so milestones should never pass the baseline;
+  // everything is plotted on one true axis and the baseline is just another
+  // pin on it (right edge).
+  var lastCum = milestones[milestones.length - 1].cumMin;
+  var scaleMax = Math.max(full, lastCum);
+  function pctOf(min) { return Math.max(0, Math.min(100, (min / scaleMax) * 100)); }
+
+  // Track segments: true-to-scale, sequential deltas, then the hatched
+  // "Mass Recovery only" remainder (zero-width when ABR runs past baseline).
   var prevPct = 0;
   milestones.forEach(function (m) {
-    var pct = Math.max(0, Math.min(100, (m.cumMin / full) * 100));
+    var pct = pctOf(m.cumMin);
     m.segWidth = Math.max(0, pct - prevPct);
     m.truePct = pct;
     prevPct = pct;
   });
   var massSegWidth = Math.max(0, 100 - prevPct);
 
-  // Label anchors: same order, minimum-spaced so times stay readable even
-  // when milestones land close together on a compressed axis.
-  var MIN_GAP = 13, MAX_POS = 86, lastPos = -999;
-  milestones.forEach(function (m, i) {
-    var pos = i === 0 ? Math.max(m.truePct, 6) : Math.max(m.truePct, lastPos + MIN_GAP);
-    pos = Math.min(pos, MAX_POS);
-    m.labelPos = pos;
+  // Flags = the ABR milestones plus the Mass Recovery baseline, left to right.
+  var flags = milestones.map(function (m) {
+    return { time: fmtMin(m.cumMin), color: m.color, label: esc(m.short) + "<br>" + esc(m.verb), truePct: m.truePct, mass: false };
+  });
+  flags.push({ time: fmtMin(full), color: "#8A97A6", label: "Mass Recovery baseline<br>(no prioritization)", truePct: pctOf(full), mass: true });
+  flags.sort(function (a, b) { return a.truePct - b.truePct; });
+
+  // Label anchors: minimum-spaced in PIXELS (not %) so text can't collide at
+  // any width. The pin always stays at its true position; only the text
+  // block shifts, with a thin leader line back to the pin when it does.
+  var wrapEl = document.getElementById("exec-lean");
+  var wrapPx = Math.max(480, ((wrapEl && wrapEl.clientWidth) || 900) - 72);
+  var FLAG_PX = 132;
+  var minGap = ((FLAG_PX + 2) / wrapPx) * 100;
+  var halfPct = (FLAG_PX / 2 / wrapPx) * 100;
+  var lo = halfPct, hi = 100 - halfPct;
+  var lastPos = -999;
+  flags.forEach(function (fl) {
+    var pos = Math.max(fl.truePct, lo, lastPos + minGap);
+    fl.labelPos = pos;
     lastPos = pos;
   });
+  // If the run of labels overflowed the right edge, pull them back left
+  // (right-to-left) while keeping the minimum spacing.
+  var limit = hi;
+  for (var i = flags.length - 1; i >= 0; i--) {
+    if (flags[i].labelPos > limit) { flags[i].labelPos = limit; }
+    limit = flags[i].labelPos - minGap;
+  }
 
   var segHtml = milestones.map(function (m) {
     return '<div class="rl-seg" style="width:' + m.segWidth + '%;background:' + m.color + ';"></div>';
-  }).join("") + '<div class="rl-seg mass" style="width:' + massSegWidth + '%;"></div>';
+  }).join("") + (massSegWidth > 0 ? '<div class="rl-seg mass" style="width:' + massSegWidth + '%;"></div>' : "");
 
-  var flagsHtml = milestones.map(function (m) {
-    return '<div class="rl-flag" style="left:' + m.labelPos + '%;">' +
-      '<div class="rl-time">' + fmtMin(m.cumMin) + '</div>' +
-      '<div class="rl-pin" style="background:' + m.color + ';"></div>' +
-      '<div class="rl-label">' + esc(m.short) + '<br>' + esc(m.verb) + '</div>' +
-    '</div>';
+  var flagsHtml = flags.map(function (fl) {
+    return '<div class="rl-pin' + (fl.mass ? ' mass' : '') + '" style="left:' + fl.truePct + '%;' + (fl.mass ? '' : 'background:' + fl.color + ';') + '"></div>' +
+      '<div class="rl-flag' + (fl.mass ? ' mass' : '') + '" style="left:' + fl.labelPos + '%;">' +
+        '<div class="rl-time">' + fl.time + '</div>' +
+        '<div class="rl-label">' + fl.label + '</div>' +
+      '</div>';
   }).join("");
+
+  var noteHtml = "";
+  var anyCapped = TIER_ORDER.some(function (t) { return model.milestones[t] && model.milestones[t].cappedByMass; });
+  if (anyCapped) {
+    noteHtml = '<div class="rl-note">ABR is never slower than bulk-restoring the same groups: where per-object job scheduling would push a milestone past the Mass Recovery time for that scope, the milestone is held at the Mass Recovery time. Mission-Critical data is still back <b>' + fmtMin(Math.max(0, full - milestones[0].cumMin)) + ' sooner</b> than a bulk restore of the whole tenant.</div>';
+  }
 
   return '<div class="recovery-ladder">' +
     '<div class="rl-title">Recovery Ladder</div>' +
@@ -3826,8 +4075,8 @@ function buildRecoveryLadderHtml(model) {
     '<div class="rl-track-wrap">' +
       '<div class="rl-track">' + segHtml + '</div>' +
       flagsHtml +
-      '<div class="rl-mass-label"><div class="rl-time">' + fmtMin(full) + '</div><div class="rl-label">Mass Recovery baseline<br>(no prioritization)</div></div>' +
     '</div>' +
+    noteHtml +
   '</div>';
 }
 
@@ -4817,7 +5066,7 @@ function buildGlossaryHtml() {
   html += "<dt>Export Criticality Groups (CSV)</dt><dd>One CSV listing every object in every workload with its final tier - including any manual overrides or mass-reassignments made in this page, since it reads the live, on-screen state at export time, not just what the underlying PowerShell run originally computed. Meant as a hand-off file: identifier, tier, and enrichment (department/manager/Entra ID groups) per row for a downstream automation to consume.</dd>";
   html += "<dt>Job title weight</dt><dd>Job title is matched (case-insensitive substring) against a customer-editable keyword table; the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
   html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
-  html += "<dt>Mailbox type</dt><dd>NEW v3.0.0: uses the real Exchange \"Recipient Type\" column from the mailbox usage report (no extra scope) as the authoritative signal (User / Shared / Room / Equipment). The old proxy - a disabled Entra account flagged as \"likely Shared/Resource\" - was validated against real customer data and caught 0 of 2 real Shared mailboxes, so it is now only a last-resort fallback for the rare case where Recipient Type comes back blank.</dd>";
+  html += "<dt>Mailbox type</dt><dd>NEW v3.17.0: classified from <b>assigned licenses</b> (the usage report no longer returns a usable Recipient Type column, so the earlier approach counted every mailbox as a user). <b>Licensed</b> = at least one license assigned (counts toward the Rubrik license quote). <b>Shared / group / other</b> = unlicensed accounts that are disabled or have the 50 GB mailbox limit Exchange gives shared/resource mailboxes, mailboxes with no matching user account, and (with -DetailedSizing in the Full script) mailboxes confirmed as Shared/Room/Equipment by Exchange Online: protected and sized, but no Rubrik license needed. <b>Enabled, unlicensed</b> users are not protected and are excluded from the report. Without Exchange Online this is an estimate: a shared mailbox that is enabled, unlicensed, and has a non-default limit would be counted as an unlicensed user.</dd>";
   html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. Use the \"Filter to org under manager\" box to isolate or mass-tier everyone reporting up through a given leader.</dd>";
   html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved via its own separate directory pull alongside manager enrichment (Microsoft Graph only allows one property to be expanded per user query, so this is one extra bulk call, not per-user lookups). Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
   html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
@@ -4862,15 +5111,20 @@ function buildSizingSummary() {
   function metric(r, f) { return (r.metrics && typeof r.metrics[f] === "number") ? r.metrics[f] : 0; }
   function sumMetric(rows, f) { return rows.reduce(function (s, r) { return s + metric(r, f); }, 0); }
 
-  // NOTE: case-insensitive SUBSTRING match on RecipientType (not exact
-  // equality) - matches Add-MailboxTypeHeuristic's own `-Regex` switch on
-  // this same field, which the codebase already validated against real
-  // tenant data. The standalone sizing script's original `-eq 'Shared'`
-  // exact check is NOT assumed reliable here, since the field's real-world
-  // values aren't guaranteed to be the bare word "Shared".
-  function isSharedMailbox(r) { return /shared/i.test(r.RecipientType || ""); }
-  var userMb = mbRows.filter(function (r) { return !isSharedMailbox(r); });
-  var sharedMb = mbRows.filter(isSharedMailbox);
+  // v3.17.0: classification is LICENSE-based (see Add-MailboxTypeHeuristic):
+  // the Graph usage report no longer returns a Recipient Type column, so the
+  // old RecipientType filter counted every mailbox as a user. RecipientType
+  // is kept only as the fallback for reports generated before 3.17.0.
+  var ci = mailboxClassInfo();
+  function isSharedLegacy(r) { return /shared/i.test(r.RecipientType || ""); }
+  var userMb, sharedMb;
+  if (ci.known) {
+    sharedMb = mbRows.filter(function (r) { return r.MailboxClass === "Shared"; });
+    userMb = mbRows.filter(function (r) { return r.MailboxClass !== "Shared"; });
+  } else {
+    userMb = mbRows.filter(function (r) { return !isSharedLegacy(r); });
+    sharedMb = mbRows.filter(isSharedLegacy);
+  }
   var archiveMb = mbRows.filter(function (r) { return r.HasArchive === true; });
 
   var ex = {
@@ -4881,6 +5135,10 @@ function buildSizingSummary() {
     sharedStorageBytes: sumMetric(sharedMb, "StorageBytes"),
     sharedItems: sumMetric(sharedMb, "ItemCount"),
     archiveCount: archiveMb.length,
+    classKnown: ci.known,
+    userLabel: ci.known ? "Licensed user mailboxes" : "User Mailboxes",
+    sharedLabel: ci.known ? "Shared / group / other (no license needed)" : "Shared Mailboxes",
+    totalLabel: ci.known ? "Total protected mailboxes" : "Total",
     totalCount: mbRows.length,
     totalStorageBytes: sumMetric(mbRows, "StorageBytes"),
     totalItems: sumMetric(mbRows, "ItemCount")
@@ -4895,9 +5153,80 @@ function buildSizingSummary() {
   // License estimate mirrors the original sizing script's own logic exactly
   // (max of User Mailboxes, Shared Mailboxes, OneDrive Accounts) - not
   // "corrected" here, since the ask was to port what that script produces.
-  var licenseEstimate = Math.max(ex.userCount, ex.sharedCount, od.count);
+  // v3.17.0: with license data, the license basis is LICENSED users only (shared/group mailboxes need no Rubrik license).
+  var licenseEstimate = ci.known ? Math.max(ex.userCount, od.count) : Math.max(ex.userCount, ex.sharedCount, od.count);
 
   return { ex: ex, od: od, sp: sp, totalObjects: totalObjects, totalStorageBytes: totalStorageBytes, totalItemsFiles: totalItemsFiles, licenseEstimate: licenseEstimate };
+}
+
+// ==================== NEW v3.17.0: license-based mailbox classification + plan breakdown ====================
+// MailboxClass (Licensed / Shared / Unknown) and LicensePlan come from the
+// PowerShell side (Add-MailboxTypeHeuristic / Get-LicensePlan, from
+// assignedLicenses - User.Read.All, no new scope). Unlicensed ENABLED users'
+// mailboxes are excluded before the data is embedded (Rubrik doesn't protect
+// them); meta.mailboxClassification carries their count/size for the note
+// below. Reports generated before 3.17.0 have no such meta and keep the old
+// Recipient Type behavior.
+var PLAN_FAMILY = { "E7": "Enterprise", "E5": "Enterprise", "E3": "Enterprise", "E1": "Enterprise", "F3": "Frontline", "F1": "Frontline", "G5": "Government", "G3": "Government", "G1": "Government", "A5": "Education", "A3": "Education", "A1": "Education", "Business Premium": "Business", "Business Standard": "Business", "Business Basic": "Business", "Exchange Online (Plan 2)": "Exchange only", "Exchange Online (Plan 1)": "Exchange only", "Exchange Online Essentials": "Exchange only", "Exchange Online Kiosk": "Exchange only", "Other (unrecognized)": "Other" };
+var PLAN_ORDER = ["E7", "E5", "E3", "E1", "F3", "F1", "G5", "G3", "G1", "A5", "A3", "A1", "Business Premium", "Business Standard", "Business Basic", "Exchange Online (Plan 2)", "Exchange Online (Plan 1)", "Exchange Online Essentials", "Exchange Online Kiosk", "Other (unrecognized)"];
+
+function mailboxClassInfo() {
+  var mc = (DATA.meta && DATA.meta.mailboxClassification) || null;
+  return { mc: mc, known: !!(mc && mc.licenseDataAvailable) };
+}
+
+function buildLicenseNoteHtml(s, cssClass) {
+  var ci = mailboxClassInfo();
+  var note;
+  if (ci.known) {
+    var mc = ci.mc;
+    note = "<b>Licensed users (Rubrik license basis): " + fmtNum(s.ex.userCount) + ".</b> Shared / group / other mailboxes (" + fmtNum(s.ex.sharedCount) +
+      ") are protected and sized here but need no Rubrik license. ";
+    if (mc.excludedCount > 0) {
+      note += fmtNum(mc.excludedCount) + " mailboxes belonging to enabled, unlicensed users (" + fmtGB(mc.excludedStorageBytes) + " GB, " + fmtNum(mc.excludedItems) +
+        " items) are not protected by Rubrik and are excluded from every figure in this report. ";
+    }
+    note += mc.exoConfirmedShared
+      ? "Shared mailboxes were confirmed via Exchange Online (" + fmtNum(mc.exoSharedCount) + ")."
+      : "Shared mailboxes are an <b>estimate</b> from license data: unlicensed accounts that are disabled or carry the 50 GB mailbox limit Exchange gives shared/resource mailboxes, plus mailboxes with no matching user account. A shared mailbox that is enabled, unlicensed, and has a non-default limit would be counted as an unlicensed user; run with -DetailedSizing to confirm shared mailboxes via Exchange Online.";
+  } else {
+    note = "Licensed vs. shared mailboxes <b>could not be classified from license data</b> (user profile enrichment failed or returned nothing, or this report predates license-based classification). The split above relies on the Exchange Recipient Type field, which Microsoft's usage report no longer reliably returns, so Shared Mailboxes may be understated and no unlicensed mailboxes were excluded.";
+  }
+  return '<div class="' + cssClass + '">' + note + "</div>";
+}
+
+function buildLicensePlanTableHtml(printMode) {
+  var ci = mailboxClassInfo();
+  if (!ci.known) { return ""; }
+  var rows = (DATA.workloads.mailboxes || []).filter(function (r) { return r.MailboxClass === "Licensed"; });
+  if (rows.length === 0) { return ""; }
+  var by = {}, archiveAddon = 0;
+  rows.forEach(function (r) {
+    var k = r.LicensePlan || "Other (unrecognized)";
+    if (!by[k]) { by[k] = { users: 0, bytes: 0 }; }
+    by[k].users++;
+    by[k].bytes += (r.metrics && typeof r.metrics.StorageBytes === "number") ? r.metrics.StorageBytes : 0;
+    if (r.HasArchiveAddon) { archiveAddon++; }
+  });
+  var keys = PLAN_ORDER.filter(function (k) { return by[k]; });
+  Object.keys(by).forEach(function (k) { if (keys.indexOf(k) < 0) { keys.push(k); } });
+  var tcls = printMode ? "pr-table" : "exec-cost-table";
+  var nc = printMode ? ' class="num"' : "";
+  var body = keys.map(function (k) {
+    return "<tr><td>" + esc(PLAN_FAMILY[k] || "Other") + "</td><td>" + esc(k) + "</td><td" + nc + ">" + fmtNum(by[k].users) + "</td><td" + nc + ">" + fmtGB(by[k].bytes) + "</td><td" + nc + ">" +
+      (100 * by[k].users / rows.length).toFixed(1) + "%</td></tr>";
+  }).join("");
+  body += '<tr class="total-row"><td colspan="2">Total licensed users</td><td' + nc + ">" + fmtNum(rows.length) + "</td><td" + nc + ">" + fmtGB(rows.reduce(function (a, r) { return a + ((r.metrics && r.metrics.StorageBytes) || 0); }, 0)) + "</td><td" + nc + ">100%</td></tr>";
+  var h = (printMode ? '<div class="pr-section-title" style="font-size:1rem">' : "<h3>") + "Licensed users by plan" + (printMode ? "</div>" : "</h3>");
+  h += '<table class="' + tcls + '"><thead><tr><th>Family</th><th>Plan</th><th' + nc + '>Users</th><th' + nc + '>Mailbox storage (GB)</th><th' + nc + '>% of licensed</th></tr></thead><tbody>' + body + "</tbody></table>";
+  var um = (ci.mc && ci.mc.unmappedSkus) || [];
+  if (um.length > 0 && by["Other (unrecognized)"]) {
+    h += '<div class="' + (printMode ? "pr-note" : "sizing-footnote") + '">Unrecognized license SKU ids (users holding them): ' +
+      um.map(function (u) { return esc(u.skuId) + " (" + fmtNum(u.users) + ")"; }).join(", ") + ".</div>";
+  }
+  h += '<div class="' + (printMode ? "pr-note" : "sizing-footnote") + '">Each licensed user is counted once, under their highest plan (E5 over E3, etc.). Counts cover users with a mailbox. Plan names come from a built-in table of Microsoft license SKU ids; anything not in that table is listed as "Other (unrecognized)". ' +
+    "Exchange Online Archiving add-on (standalone SKU): " + fmtNum(archiveAddon) + " user(s). E3/E5/F3/A-series plans already include the In-Place Archive, so this add-on count is separate from the Archive Mailboxes count above.</div>";
+  return h;
 }
 
 function buildSizingExchangeTableHtml(s) {
@@ -4929,13 +5258,14 @@ function buildSizingExchangeTableHtml(s) {
   if (detailed && DATA.meta.sizing) { totalStorageForAvg += (DATA.meta.sizing.archiveStorageBytes || 0) + (DATA.meta.sizing.recoverableItemsStorageBytes || 0); }
 
   var tableHtml = '<table class="exec-cost-table"><thead><tr><th>Mailbox Type</th><th>Count</th><th>Storage (GB)</th><th>Items</th><th>Avg per Mailbox (GB)</th></tr></thead><tbody>' +
-    "<tr><td>User Mailboxes</td><td>" + fmtNum(s.ex.userCount) + "</td><td>" + fmtGB(s.ex.userStorageBytes) + "</td><td>" + fmtNum(s.ex.userItems) + "</td><td>" + (s.ex.userCount > 0 ? fmtGB(s.ex.userStorageBytes / s.ex.userCount) : "0.00") + "</td></tr>" +
-    "<tr><td>Shared Mailboxes</td><td>" + fmtNum(s.ex.sharedCount) + "</td><td>" + fmtGB(s.ex.sharedStorageBytes) + "</td><td>" + fmtNum(s.ex.sharedItems) + "</td><td>" + (s.ex.sharedCount > 0 ? fmtGB(s.ex.sharedStorageBytes / s.ex.sharedCount) : "0.00") + "</td></tr>" +
+    "<tr><td>" + s.ex.userLabel + "</td><td>" + fmtNum(s.ex.userCount) + "</td><td>" + fmtGB(s.ex.userStorageBytes) + "</td><td>" + fmtNum(s.ex.userItems) + "</td><td>" + (s.ex.userCount > 0 ? fmtGB(s.ex.userStorageBytes / s.ex.userCount) : "0.00") + "</td></tr>" +
+    "<tr><td>" + s.ex.sharedLabel + "</td><td>" + fmtNum(s.ex.sharedCount) + "</td><td>" + fmtGB(s.ex.sharedStorageBytes) + "</td><td>" + fmtNum(s.ex.sharedItems) + "</td><td>" + (s.ex.sharedCount > 0 ? fmtGB(s.ex.sharedStorageBytes / s.ex.sharedCount) : "0.00") + "</td></tr>" +
     "<tr><td>Archive Mailboxes</td><td>" + fmtNum(s.ex.archiveCount) + "</td><td>" + archiveStorageCell + "</td><td>" + archiveItemsCell + "</td><td>" + archiveAvgCell + "</td></tr>" +
     rifRow +
-    '<tr class="total-row"><td>Total</td><td>' + fmtNum(s.ex.totalCount) + "</td><td>" + fmtGB(totalStorageForAvg) + "</td><td>" + fmtNum(s.ex.totalItems) + "</td><td>" + (s.ex.totalCount > 0 ? fmtGB(totalStorageForAvg / s.ex.totalCount) : "0.00") + "</td></tr>" +
+    '<tr class="total-row"><td>' + s.ex.totalLabel + '</td><td>' + fmtNum(s.ex.totalCount) + "</td><td>" + fmtGB(totalStorageForAvg) + "</td><td>" + fmtNum(s.ex.totalItems) + "</td><td>" + (s.ex.totalCount > 0 ? fmtGB(totalStorageForAvg / s.ex.totalCount) : "0.00") + "</td></tr>" +
     "</tbody></table>";
 
+  tableHtml += buildLicenseNoteHtml(s, "sizing-footnote");
   if (!detailed) {
     tableHtml += '<div class="sizing-footnote">*Note: Not collected - run script with the -DetailedSizing switch to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>';
   }
@@ -4950,6 +5280,9 @@ function renderSizingTab() {
     '<p style="color:var(--dark-gray);font-size:.9rem;max-width:70ch;margin:-1rem 0 1.5rem;">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups elsewhere in this report. Pulled from the same Graph usage reports already used for this assessment; no extra permissions required for the totals below. Send this tab along with your recovery metrics for Rubrik sizing.</p>';
 
   html += '<div class="sizing-section"><h3>Exchange Online</h3>' + buildSizingExchangeTableHtml(s) + "</div>";
+
+  var planHtml = buildLicensePlanTableHtml(false);
+  if (planHtml) { html += '<div class="sizing-section">' + planHtml + "</div>"; }
 
   html += '<div class="sizing-section"><h3>OneDrive</h3><table class="exec-cost-table"><thead><tr><th>Accounts</th><th>Storage (GB)</th><th>Files</th><th>Avg per Account (GB)</th></tr></thead><tbody>' +
     "<tr><td>" + fmtNum(s.od.count) + "</td><td>" + fmtGB(s.od.storageBytes) + "</td><td>" + fmtNum(s.od.files) + "</td><td>" + (s.od.count > 0 ? fmtGB(s.od.storageBytes / s.od.count) : "0.00") + "</td></tr>" +
@@ -5235,16 +5568,19 @@ function buildSizingPdfHtml() {
   }
 
   html += '<table class="pr-table"><thead><tr><th>Mailbox Type</th><th class="num">Count</th><th class="num">Storage (GB)</th><th class="num">Items</th></tr></thead><tbody>' +
-    "<tr><td>User Mailboxes</td><td class=\"num\">" + fmtNum(s.ex.userCount) + "</td><td class=\"num\">" + fmtGB(s.ex.userStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.userItems) + "</td></tr>" +
-    "<tr><td>Shared Mailboxes</td><td class=\"num\">" + fmtNum(s.ex.sharedCount) + "</td><td class=\"num\">" + fmtGB(s.ex.sharedStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.sharedItems) + "</td></tr>" +
+    "<tr><td>" + s.ex.userLabel + "</td><td class=\"num\">" + fmtNum(s.ex.userCount) + "</td><td class=\"num\">" + fmtGB(s.ex.userStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.userItems) + "</td></tr>" +
+    "<tr><td>" + s.ex.sharedLabel + "</td><td class=\"num\">" + fmtNum(s.ex.sharedCount) + "</td><td class=\"num\">" + fmtGB(s.ex.sharedStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.sharedItems) + "</td></tr>" +
     "<tr><td>Archive Mailboxes</td><td class=\"num\">" + fmtNum(s.ex.archiveCount) + "</td><td class=\"num\">" + archiveStorageCell + "</td><td class=\"num\">" + archiveItemsCell + "</td></tr>" +
     rifRow +
-    '<tr class="total-row"><td>Total</td><td class="num">' + fmtNum(s.ex.totalCount) + "</td><td class=\"num\">" + fmtGB(totalStorageForAvg) + "</td><td class=\"num\">" + fmtNum(s.ex.totalItems) + "</td></tr>" +
+    '<tr class="total-row"><td>' + s.ex.totalLabel + '</td><td class="num">' + fmtNum(s.ex.totalCount) + "</td><td class=\"num\">" + fmtGB(totalStorageForAvg) + "</td><td class=\"num\">" + fmtNum(s.ex.totalItems) + "</td></tr>" +
     "</tbody></table>";
 
   if (!detailed) {
     html += '<div class="pr-note">*Note: Not collected - run script with the -DetailedSizing switch to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>';
   }
+
+  html += buildLicenseNoteHtml(s, "pr-note");
+  html += buildLicensePlanTableHtml(true);
 
   html += '<table class="pr-table"><tbody>' +
     "<tr><td>OneDrive accounts</td><td class=\"num\">" + fmtNum(s.od.count) + "</td></tr>" +
@@ -5962,7 +6298,7 @@ function ConvertTo-ReportRows {
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]    $Data,
         [Parameter(Mandatory)] [string[]] $MetricFields
     )
-    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate')
+    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','MailboxClass','LicensePlan','HasArchiveAddon','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate')
     $rows = foreach ($row in $Data) {
         $metrics = @{}
         foreach ($f in $MetricFields) {
@@ -6214,6 +6550,7 @@ function New-M365HtmlReport {
             # connection and a per-mailbox loop - see -DetailedSizing/
             # Get-DetailedSizingInfo. $Sizing is $null when not requested, in
             # which case the JS shows its "not collected" note instead.
+            mailboxClassification        = $script:MailboxClassification
             detailedSizingRequested      = [bool]$DetailedSizingRequested
             sizing                       = if ($Sizing) {
                 [ordered]@{
@@ -6427,8 +6764,21 @@ function New-M365SummaryHtmlReport {
     $body += '<div class="pr-section-title">M365 Sizing</div>'
     $body += '<div class="pr-subnote">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups above.</div>'
 
-    $userMb = @($Mailboxes | Where-Object { $_.RecipientType -notmatch 'shared' })
-    $sharedMb = @($Mailboxes | Where-Object { $_.RecipientType -match 'shared' })
+    # v3.17.0: license-based classification (see Add-MailboxTypeHeuristic);
+    # falls back to the old Recipient Type split only when license data
+    # wasn't available for this run.
+    $mcInfo = $script:MailboxClassification
+    $classKnown = [bool]($mcInfo -and $mcInfo.licenseDataAvailable)
+    if ($classKnown) {
+        $sharedMb = @($Mailboxes | Where-Object { $_.MailboxClass -eq 'Shared' })
+        $userMb   = @($Mailboxes | Where-Object { $_.MailboxClass -ne 'Shared' })
+    } else {
+        $userMb = @($Mailboxes | Where-Object { $_.RecipientType -notmatch 'shared' })
+        $sharedMb = @($Mailboxes | Where-Object { $_.RecipientType -match 'shared' })
+    }
+    $userLabel   = if ($classKnown) { 'Licensed user mailboxes' } else { 'User Mailboxes' }
+    $sharedLabel = if ($classKnown) { 'Shared / group / other (no license needed)' } else { 'Shared Mailboxes' }
+    $totalLabel  = if ($classKnown) { 'Total protected mailboxes' } else { 'Total' }
     $archiveMb = @($Mailboxes | Where-Object { $_.HasArchive -eq $true })
 
     $exUserStorage = Get-FieldSum $userMb 'StorageBytes'
@@ -6457,15 +6807,48 @@ function New-M365SummaryHtmlReport {
     }
 
     $body += '<table class="pr-table"><thead><tr><th>Mailbox Type</th><th class="num">Count</th><th class="num">Storage (GB)</th><th class="num">Items</th></tr></thead><tbody>' +
-        "<tr><td>User Mailboxes</td><td class=""num"">$(fmtNum $userMb.Count)</td><td class=""num"">$(fmtGB $exUserStorage)</td><td class=""num"">$(fmtNum $exUserItems)</td></tr>" +
-        "<tr><td>Shared Mailboxes</td><td class=""num"">$(fmtNum $sharedMb.Count)</td><td class=""num"">$(fmtGB $exSharedStorage)</td><td class=""num"">$(fmtNum $exSharedItems)</td></tr>" +
+        "<tr><td>$userLabel</td><td class=""num"">$(fmtNum $userMb.Count)</td><td class=""num"">$(fmtGB $exUserStorage)</td><td class=""num"">$(fmtNum $exUserItems)</td></tr>" +
+        "<tr><td>$sharedLabel</td><td class=""num"">$(fmtNum $sharedMb.Count)</td><td class=""num"">$(fmtGB $exSharedStorage)</td><td class=""num"">$(fmtNum $exSharedItems)</td></tr>" +
         "<tr><td>Archive Mailboxes</td><td class=""num"">$(fmtNum $archiveMb.Count)</td><td class=""num"">$archiveStorageCell</td><td class=""num"">$archiveItemsCell</td></tr>" +
         $rifRow +
-        "<tr class=""total-row""><td>Total</td><td class=""num"">$(fmtNum $Mailboxes.Count)</td><td class=""num"">$(fmtGB $totalStorageForAvg)</td><td class=""num"">$(fmtNum $exTotalItems)</td></tr>" +
+        "<tr class=""total-row""><td>$totalLabel</td><td class=""num"">$(fmtNum $Mailboxes.Count)</td><td class=""num"">$(fmtGB $totalStorageForAvg)</td><td class=""num"">$(fmtNum $exTotalItems)</td></tr>" +
         '</tbody></table>'
 
     if (-not $detailed) {
         $body += '<div class="pr-note">*Note: Not collected - run the script with -DetailedSizing to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>'
+    }
+
+    # NEW v3.17.0: licensing note + licensed users by plan (aggregate only)
+    if ($classKnown) {
+        $licNote = "<b>Licensed users (Rubrik license basis): $(fmtNum $userMb.Count).</b> Shared / group / other mailboxes ($(fmtNum $sharedMb.Count)) are protected and sized here but need no Rubrik license. "
+        if ($mcInfo.excludedCount -gt 0) {
+            $licNote += "$(fmtNum $mcInfo.excludedCount) mailboxes belonging to enabled, unlicensed users ($(fmtGB $mcInfo.excludedStorageBytes) GB, $(fmtNum $mcInfo.excludedItems) items) are not protected by Rubrik and are excluded from every figure in this report. "
+        }
+        $licNote += if ($mcInfo.exoConfirmedShared) { "Shared mailboxes were confirmed via Exchange Online ($(fmtNum $mcInfo.exoSharedCount))." }
+                    else { "Shared mailboxes are an <b>estimate</b> from license data (unlicensed accounts that are disabled or have the 50 GB shared-mailbox limit, plus mailboxes with no matching user account); run with -DetailedSizing to confirm via Exchange Online." }
+        $body += "<div class=""pr-note"">$licNote</div>"
+
+        $licensedRows = @($Mailboxes | Where-Object { $_.MailboxClass -eq 'Licensed' })
+        if ($licensedRows.Count -gt 0) {
+            $familyOf = @{ 'E7'='Enterprise';'E5'='Enterprise';'E3'='Enterprise';'E1'='Enterprise';'F3'='Frontline';'F1'='Frontline';'G5'='Government';'G3'='Government';'G1'='Government';'A5'='Education';'A3'='Education';'A1'='Education';'Business Premium'='Business';'Business Standard'='Business';'Business Basic'='Business';'Exchange Online (Plan 2)'='Exchange only';'Exchange Online (Plan 1)'='Exchange only';'Exchange Online Essentials'='Exchange only';'Exchange Online Kiosk'='Exchange only';'Other (unrecognized)'='Other' }
+            $planOrder = @('E7','E5','E3','E1','F3','F1','G5','G3','G1','A5','A3','A1','Business Premium','Business Standard','Business Basic','Exchange Online (Plan 2)','Exchange Online (Plan 1)','Exchange Online Essentials','Exchange Online Kiosk','Other (unrecognized)')
+            $byPlan = $licensedRows | Group-Object { if ($_.LicensePlan) { $_.LicensePlan } else { 'Other (unrecognized)' } }
+            $planBody = ''
+            foreach ($pl in $planOrder) {
+                $g = $byPlan | Where-Object { $_.Name -eq $pl }
+                if ($g) {
+                    $fam = $familyOf[$pl]
+                    $planBody += "<tr><td>$fam</td><td>$pl</td><td class=""num"">$(fmtNum $g.Count)</td><td class=""num"">$(fmtGB (Get-FieldSum $g.Group 'StorageBytes'))</td><td class=""num"">$([math]::Round(100.0 * $g.Count / $licensedRows.Count, 1))%</td></tr>"
+                }
+            }
+            $archiveAddonCount = @($licensedRows | Where-Object { $_.HasArchiveAddon }).Count
+            $body += '<div class="pr-section-title" style="font-size:1rem">Licensed users by plan</div>'
+            $body += '<table class="pr-table"><thead><tr><th>Family</th><th>Plan</th><th class="num">Users</th><th class="num">Mailbox storage (GB)</th><th class="num">% of licensed</th></tr></thead><tbody>' + $planBody +
+                "<tr class=""total-row""><td colspan=""2"">Total licensed users</td><td class=""num"">$(fmtNum $licensedRows.Count)</td><td class=""num"">$(fmtGB (Get-FieldSum $licensedRows 'StorageBytes'))</td><td class=""num"">100%</td></tr></tbody></table>"
+            $body += "<div class=""pr-note"">Each licensed user is counted once, under their highest plan. Plan names come from a built-in table of Microsoft license SKU ids; anything else is listed as 'Other (unrecognized)'. Exchange Online Archiving add-on (standalone SKU): $(fmtNum $archiveAddonCount) user(s).</div>"
+        }
+    } else {
+        $body += '<div class="pr-note">Licensed vs. shared mailboxes <b>could not be classified from license data</b> for this run (user profile enrichment failed or returned nothing). The split above relies on the Exchange Recipient Type field, which the Microsoft usage report no longer reliably returns, so Shared Mailboxes may be understated and no unlicensed mailboxes were excluded.</div>'
     }
 
     $odStorage = Get-FieldSum $OneDrive 'StorageBytes'
@@ -6484,7 +6867,7 @@ function New-M365SummaryHtmlReport {
 
     $totalStorageAll = $totalStorageForAvg + $odStorage + $spStorage
     $totalItemsFiles = $exTotalItems + $odFiles + $spFiles
-    $licenseEstimate = [math]::Max([math]::Max($userMb.Count, $sharedMb.Count), $OneDrive.Count)
+    $licenseEstimate = if ($classKnown) { [math]::Max($userMb.Count, $OneDrive.Count) } else { [math]::Max([math]::Max($userMb.Count, $sharedMb.Count), $OneDrive.Count) }
     $body += "<div class=""pr-note"">Discovery Summary - Total Users/Accounts: $(fmtNum $licenseEstimate), Total Storage: $(fmtGB $totalStorageAll) GB, Total Items &amp; Files: $(fmtNum $totalItemsFiles).</div>"
 
     $body += '<div class="pr-page-break"></div>'
@@ -6536,7 +6919,7 @@ __BODY__
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.16.13) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v3.17.1) ===" -ForegroundColor Cyan
 
 # NEW 2026-09-22: found via a real customer - a very large tenant
 # (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
@@ -6614,6 +6997,55 @@ $results = @{}
 Write-Host "`n--- Collecting raw usage data ---" -ForegroundColor Yellow
 $mailboxesRaw = @(Get-MailboxCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Mailboxes', $mailboxesRaw.Count) -ForegroundColor Gray
+
+# NEW v3.17.0: license-based mailbox classification, done HERE (before the
+# Auto-RTO estimate and every tiering/recovery calc below) so unlicensed
+# mailboxes never influence any figure. See Add-MailboxTypeHeuristic.
+$sharedUpnSet = $null
+if ($DetailedSizing) {
+    Write-Host "Looking up shared/room/equipment mailboxes via Exchange Online (-DetailedSizing)..." -ForegroundColor Gray
+    $sharedUpnSet = Get-SharedMailboxUpnSet -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
+}
+$licenseDataAvailable = [bool]($userEnrichment -and $userEnrichment.Count -gt 0)
+$mailboxesRaw = @(Add-UserEnrichment -Data $mailboxesRaw -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
+# Safety: if almost no mailbox matched a user, the usage report's names are
+# probably concealed (tenant setting "Display concealed user, group, and site
+# names in all reports") or the directory pull was partial - classifying on
+# that would wrongly call everything shared. Treat as "license data not collected".
+if ($licenseDataAvailable -and $mailboxesRaw.Count -gt 0) {
+    $mbMatched = @($mailboxesRaw | Where-Object { $_.EntraMatched }).Count
+    if (($mbMatched / $mailboxesRaw.Count) -lt 0.2) {
+        Write-Warning ("Only {0:N0} of {1:N0} mailboxes matched a user account - report names may be concealed (Microsoft 365 admin center > Settings > Org settings > Reports). Mailboxes can't be classified as licensed vs shared this run." -f $mbMatched, $mailboxesRaw.Count)
+        $licenseDataAvailable = $false
+    }
+}
+$mailboxesRaw = @(Add-MailboxTypeHeuristic -Data $mailboxesRaw -SharedUpnSet $sharedUpnSet -LicenseDataAvailable $licenseDataAvailable)
+$mbLicensed   = @($mailboxesRaw | Where-Object { $_.MailboxClass -eq 'Licensed' })
+$mbShared     = @($mailboxesRaw | Where-Object { $_.MailboxClass -eq 'Shared' })
+$mbExcluded   = @($mailboxesRaw | Where-Object { $_.MailboxClass -eq 'Unlicensed' })
+$mbUnknown    = @($mailboxesRaw | Where-Object { $_.MailboxClass -eq 'Unknown' })
+$script:MailboxClassification = [ordered]@{
+    licenseDataAvailable = $licenseDataAvailable
+    exoConfirmedShared   = ($null -ne $sharedUpnSet)
+    exoSharedCount       = if ($null -ne $sharedUpnSet) { $sharedUpnSet.Count } else { 0 }
+    licensedCount        = $mbLicensed.Count
+    sharedCount          = $mbShared.Count
+    unknownCount         = $mbUnknown.Count
+    excludedCount        = $mbExcluded.Count
+    excludedStorageBytes = [double](Get-FieldSum $mbExcluded 'StorageBytes')
+    excludedItems        = [double](Get-FieldSum $mbExcluded 'ItemCount')
+    unmappedSkus         = @($script:UnmappedSkuCounts.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 10 | ForEach-Object { [ordered]@{ skuId = $_.Key; users = $_.Value } })
+}
+if ($script:UnmappedSkuCounts.Count -gt 0) {
+    Write-Host ("License SKUs not in the built-in plan table (shown as 'Other (unrecognized)'): " + (($script:MailboxClassification.unmappedSkus | ForEach-Object { "$($_.skuId) ($($_.users) users)" }) -join ', ')) -ForegroundColor Gray
+}
+if ($licenseDataAvailable) {
+    Write-Host ("Mailbox classification: {0:N0} licensed user, {1:N0} shared/group/other (no license needed), {2:N0} unlicensed enabled users EXCLUDED (not protected)." -f $mbLicensed.Count, $mbShared.Count, $mbExcluded.Count) -ForegroundColor Cyan
+    $mailboxesRaw = @($mailboxesRaw | Where-Object { $_.MailboxClass -ne 'Unlicensed' })
+}
+else {
+    Write-Warning "License data was not available (user enrichment failed or returned nothing), so mailboxes could not be classified as licensed vs shared. All mailboxes are included and shown as Unclassified; Licensed users and Shared Mailboxes will show as not collected."
+}
 $onedriveRaw = @(Get-OneDriveCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'OneDrive', $onedriveRaw.Count) -ForegroundColor Gray
 
@@ -6748,10 +7180,7 @@ $mailboxes = $mailboxesRaw
 $mailboxes = @(Add-UserEnrichment -Data $mailboxes -EnrichmentIndex $userEnrichment -UpnField 'Identifier')
 $mailboxes = @(Add-TitleWeightScore -Data $mailboxes -TitleWeights $TitleWeights)
 $MailboxWeights = $MailboxWeights + @{ TitleWeight = $TitleWeightContribution }
-# Recipient Type (authoritative, from the mailbox usage report) runs
-# regardless; the AccountEnabled fallback inside only has data to fall
-# back to when the enrichment lookup above didn't find this user.
-$mailboxes = @(Add-MailboxTypeHeuristic -Data $mailboxes)
+# NEW v3.17.0: mailbox classification (Add-MailboxTypeHeuristic) already ran right after raw collection, before exclusion of unlicensed mailboxes.
 $mailboxes = @(Add-RecentDataEstimate -Data $mailboxes -TotalItemField 'ItemCount' -TotalStorageField 'StorageUsedMB' -RecentItemField 'SendRecvActivity7d')
 $mailboxes = @(Add-CompositeScore -Data $mailboxes -MetricWeights $MailboxWeights)
 $mailboxes = @(Add-CriteriaTags -Data $mailboxes -MetricWeights $MailboxWeights)
@@ -6904,7 +7333,7 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.16.13)
+Recovery Assessment - M365 - Run Manifest (v3.17.1)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')

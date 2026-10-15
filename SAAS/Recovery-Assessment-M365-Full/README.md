@@ -94,6 +94,21 @@ Raises the Microsoft Graph client timeout beyond the default of 900 seconds (15 
 - `EnterpriseApp-Setup-Guide.md` — setup steps for unattended/scheduled use, written every run.
 - `_RunManifest.txt`, `_ReportData.json`, `raw\` — run metadata and untouched source data, useful for auditing or for a later run's `-CompareTo`.
 
+
+## Licensed users, shared mailboxes, and unlicensed mailboxes
+
+Microsoft's mailbox usage report no longer returns a usable `Recipient Type`, so the assessment classifies mailboxes from **assigned licenses** (`assignedLicenses`, covered by `User.Read.All` - no extra permission):
+
+| Mailbox | Treated as | In the report |
+|---|---|---|
+| Has at least one license (enabled or disabled) | Licensed user | Counts toward the Rubrik license quote; sized |
+| No license and either the account is disabled, or the mailbox has the 50 GB limit Exchange gives shared/resource mailboxes; or no matching user account (group mailbox) | Shared / group / other | Protected and sized, **no Rubrik license needed** |
+| No license, account enabled | Unlicensed user | **Excluded** from every figure (Rubrik does not protect these); shown as a single excluded count on the Sizing tab |
+
+The Sizing tab shows **Licensed users** (license basis), **Total protected mailboxes** (count, storage, items for onboarding estimates), and **Licensed users by plan** (E1/E3/E5/E7, F1/F3, A1/A3/A5, Business Basic/Standard/Premium, GCC G1/G3/G5, Exchange-only plans, including the no-Teams and EEA variants, plus the standalone Exchange Online Archiving add-on count). Each user is counted once, under their highest plan. The plan map is built from Microsoft's licensing reference; any SKU not in it is listed under "Other (unrecognized)" with its SKU id so it can be added. Free and add-on SKUs (Power BI/Fabric free, Power Automate free, Copilot, Microsoft 365 Apps) don't count as a mailbox license.
+
+Without Exchange Online, shared mailboxes are an **estimate**: a shared mailbox that is enabled, unlicensed, and has a non-default mailbox limit looks like an unlicensed user and is excluded. Running with `-DetailedSizing` also looks up shared, room, and equipment mailboxes in Exchange Online (`Get-EXOMailbox`) and uses that list as the authority, so those mailboxes are always counted as shared and protected. If license data can't be collected (or almost no mailbox matches a user, e.g. when Microsoft 365 report names are concealed), nothing is excluded, mailboxes are shown as unclassified, and the report says so.
+
 ## The Interactive Report
 
 A single, self-contained HTML file — no server or installation needed to view it. Scoring weights, RTO targets, recovery window, and downtime cost all recompute live in your browser, so you can explore "what if" scenarios without re-running the script.
