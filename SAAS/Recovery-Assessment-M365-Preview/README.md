@@ -22,6 +22,8 @@ A separate, complete, unredacted build of this assessment exists for real custom
 
 **Extremely large tenants (~900,000+ mailbox/OneDrive/SharePoint/Teams objects combined) and the Interactive report:** the Interactive report embeds each workload's row data as its own block inside the HTML file, and every browser (Chrome, Edge, and every other Chromium/V8-based browser) has a hard-coded ~512 MiB limit on how long a single piece of that data can be — a limit no amount of RAM works around. As of v3.15.14, each workload is embedded separately, comfortably covering every tenant seen to date (largest so far: ~327MB for one workload). A tenant with a single workload significantly larger than that (very roughly, 1,000,000+ objects in one workload alone) could still hit this ceiling and show a blank/broken Interactive report; if that happens, reach out — a further chunking fix would be needed. The Summary report never carries this risk (it has no per-object data at all).
 
+**Tenants where a workload isn't used (e.g. no Teams, or a division with no SharePoint sites):** as of v3.15.16, the script handles a workload coming back with zero objects cleanly - it's tiered and reported as an empty workload (0 rows, real numbers everywhere else) rather than erroring out.
+
 Getting an assembly-load error like `Could not load file or assembly 'Microsoft.Graph.Authentication, Version=...'`, or another module-related failure? → [Updating PowerShell Modules](#updating-powershell-modules) has copy-paste commands to fix it.
 
 **Required tenant setting:** in the M365 admin center, go to Settings → Org settings → Reports, and turn on **"Displayed concealed user, group, and site names in all reports."** Without this, usage reports return anonymized identifiers instead of real names, and the redaction contrast won't render meaningfully.
@@ -179,3 +181,17 @@ Get-InstalledModule -Name Microsoft.Graph.Authentication, Microsoft.Graph.Users,
 ```
 
 Open a brand-new PowerShell window before running the assessment again. (This build doesn't use `ExchangeOnlineManagement` - that's only needed for `-DetailedSizing` in the full script.)
+
+## Licensed users, shared mailboxes, and unlicensed mailboxes
+
+Microsoft's mailbox usage report no longer returns a usable `Recipient Type`, so the assessment classifies mailboxes from **assigned licenses** (`assignedLicenses`, covered by `User.Read.All` - no extra permission):
+
+| Mailbox | Treated as | In the report |
+|---|---|---|
+| Has at least one license (enabled or disabled) | Licensed user | Counts toward the Rubrik license quote; sized |
+| No license and either the account is disabled, or the mailbox has the 50 GB limit Exchange gives shared/resource mailboxes; or no matching user account (group mailbox) | Shared / group / other | Protected and sized, **no Rubrik license needed** |
+| No license, account enabled | Unlicensed user | **Excluded** from every figure (Rubrik does not protect these); shown as a single excluded count on the Sizing tab |
+
+The Sizing tab shows **Licensed users** (license basis), **Total protected mailboxes** (count, storage, items for onboarding estimates), and **Licensed users by plan** (E1/E3/E5/E7, F1/F3, A1/A3/A5, Business Basic/Standard/Premium, GCC G1/G3/G5, Exchange-only plans, including the no-Teams and EEA variants, plus the standalone Exchange Online Archiving add-on count). Each user is counted once, under their highest plan. The plan map is built from Microsoft's licensing reference; any SKU not in it is listed under "Other (unrecognized)" with its SKU id so it can be added. Free and add-on SKUs (Power BI/Fabric free, Power Automate free, Copilot, Microsoft 365 Apps) don't count as a mailbox license.
+
+Without Exchange Online, shared mailboxes are an **estimate**: a shared mailbox that is enabled, unlicensed, and has a non-default mailbox limit looks like an unlicensed user and is excluded. The full script run with `-DetailedSizing` can confirm shared mailboxes via Exchange Online. If license data can't be collected (or almost no mailbox matches a user, e.g. when Microsoft 365 report names are concealed), nothing is excluded, mailboxes are shown as unclassified, and the report says so.
