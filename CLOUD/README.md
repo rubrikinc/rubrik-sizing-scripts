@@ -317,6 +317,19 @@ To run the Azure sizing script, ensure you have the following:
     ```powershell
     Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement,Az.CosmosDB
     ```
+- Optional modules. If one is missing, the script prints a warning and skips only that collection:
+    ```powershell
+    # Azure PostgreSQL Flexible Server inventory
+    Install-Module Az.PostgreSqlFlexibleServer
+    # Azure Backup for Blobs and PostgreSQL (stored in Backup Vaults, not Recovery Services Vaults)
+    Install-Module Az.DataProtection
+    ```
+- PostgreSQL `SizeBucket` says which of the two sizer size ranges a server's provisioned size falls in: `Under 1 TiB`
+  or `1 TiB and over` (1 TiB is 1024 GiB, and a server of exactly 1 TiB is in the larger range). It is blank when Azure
+  returns no size.
+- PostgreSQL utilized size (`Utilized_Bytes` and the `Utilized_*` columns) is the peak `storage_used` value over the
+  last 24 hours, not the latest value. It is blank when Azure Monitor returns no data, for example for a stopped
+  server.
 
 ### Running the Azure Script
 
@@ -326,9 +339,14 @@ To run the Azure sizing script, ensure you have the following:
         ```shell
         pwsh
         ```
-    - Install the necessary module:
+    - Install the necessary module not pre-installed in Azure Cloud Shell:
         ```powershell
         Install-Module Az.CostManagement
+        ```
+    - Optionally, to report PostgreSQL Flexible Servers and Azure Backup for Blobs and PostgreSQL:
+        ```powershell
+        Install-Module Az.PostgreSqlFlexibleServer
+        Install-Module Az.DataProtection
         ```
     - Upload and run the script:
         ```powershell
@@ -347,6 +365,45 @@ To run the Azure sizing script, ensure you have the following:
         ```
 
 4. The script will output a summary to the console and create a zip file with CSV and JSON files, along with a LOG of the console output. Please download the ZIP file and send it to your Rubrik representative.
+
+**Output files:**
+- `azure_vmdisk_info-<timestamp>.csv` - Azure VM and Managed Disk information
+- `azure_sql_info-<timestamp>.csv` - Azure SQL Database information
+- `azure_mi_sql_info-<timestamp>.csv` - Azure SQL Managed Instance information
+- `azure_postgres_info-<timestamp>.csv` - Azure PostgreSQL Flexible Server information
+- `azure_storage_account_info-<timestamp>.csv` - Azure Storage Account information
+- `azure_file_share_info-<timestamp>.csv` - Azure File Share information
+- `azure_backup_vault_info-<timestamp>.csv` - Azure Backup Vault information
+- `azure_backup_data_protection_vaults-<timestamp>.csv` - Backup Vaults (Blob and PostgreSQL backup); needs `Az.DataProtection`
+- `azure_backup_data_protection_policies-<timestamp>.json` - Blob and PostgreSQL backup policies; needs `Az.DataProtection`
+- `azure_backup_data_protection_items-<timestamp>.csv` - Blob storage accounts and PostgreSQL servers protected by Azure Backup;
+  needs `Az.DataProtection`. One row per protected datasource. For database-level PostgreSQL backups there is one row per
+  database, all sharing the server's `DatasourceName`, with the database in `DatasourceDatabase`.
+- `azure_cosmos_db-<timestamp>.csv` - Azure CosmosDB information
+- `azure_aks_info-<timestamp>.csv` - Azure Kubernetes Service cluster information
+- `azure_sizing_summary-<timestamp>.csv` - Per-region capacity summary
+- `output_azure_<timestamp>.log` - Console output log
+
+**Backup columns on storage accounts, file shares and PostgreSQL servers:** `azure_storage_account_info`,
+`azure_file_share_info` and `azure_postgres_info` have `BackupPolicies` and `InBackupPolicy` columns, like the Azure VM file.
+- A **file share** is flagged when Azure Backup protects it (Recovery Services Vault, Azure Files).
+- A **storage account** is flagged when its Blob is protected by Azure Backup (Backup Vault, needs `Az.DataProtection`)
+  or any of its file shares is protected.
+- A **PostgreSQL Flexible Server** is flagged when a Backup Vault server-level backup instance points at it (needs
+  `Az.DataProtection`). A database-level backup item does not flag the server.
+- `BackupPolicies` lists the distinct policy names, comma separated, or `-` when there are none.
+- The columns stay `-` / `false` when `-SkipAzureBackup` is set. Blob and PostgreSQL protection also stay unflagged when
+  `Az.DataProtection` is not installed, so `false` there means "not found", not "confirmed unprotected".
+
+**Skip flags** (to speed up collection or skip services you don't need):
+- `-SkipAzureVMandManagedDisks` - skip VM and Managed Disk collection
+- `-SkipAzureSQLandMI` - skip Azure SQL and Managed Instance collection
+- `-SkipAzurePostgreSQL` - skip Azure PostgreSQL Flexible Server collection
+- `-SkipAzureStorageAccounts` - skip Storage Account and Blob collection
+- `-SkipAzureFiles` - skip Azure File Share collection
+- `-SkipAzureBackup` - skip Backup Vault, Policy, and Item collection (Recovery Services Vaults and Backup Vaults)
+- `-SkipAzureCosmosDB` - skip CosmosDB collection
+- `-SkipAKS` - skip Azure Kubernetes Service collection
 
 ---
 

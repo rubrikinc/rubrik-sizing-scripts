@@ -8,8 +8,8 @@ Gets all Azure VM Managed Disk and/or Azure SQL information in the specified sub
 
 .DESCRIPTION
 The "Get-AzureSizingInfo.ps1" script collects metadata about resources in Azure that Rubrik supports. This includes
-but is not limited to: Azure VMs, Azure VMs with Microsoft SQL, Azure Managed Disks, Azure SQL, Azure Managed Instances, 
-Azure Storage Accounts, Azure Blob storage and Azure Files.
+but is not limited to: Azure VMs, Azure VMs with Microsoft SQL, Azure Managed Disks, Azure SQL, Azure Managed Instances,
+Azure Database for PostgreSQL Flexible Server, Azure Storage Accounts, Azure Blob storage and Azure Files.
 
 There are options to restrict where and what resources are reported on. See the parameters section for more details.
 
@@ -25,10 +25,15 @@ To prepare to run this script from the Azure Cloud Shell (preferred) system do t
   
   4. Open the Azure Cloud Shell
 
-  5. Install the Azure CostManagement module by running the following command:
+  5. Install the additional modules not pre-installed in Azure Cloud Shell by running the following commands:
 
       "Install-Module Az.CostManagement"
-  
+
+     Optional modules. If one is missing, the script warns and skips only that collection:
+
+      "Install-Module Az.PostgreSqlFlexibleServer"   (Azure PostgreSQL Flexible Server inventory)
+      "Install-Module Az.DataProtection"             (Azure Backup for Blobs and PostgreSQL, stored in Backup Vaults)
+
   6. Upload the "Get-AzureSizingInfo.ps1" script using Azure Cloud Shell.
 
 To prepare to run this script from a local system do the following:
@@ -38,7 +43,12 @@ To prepare to run this script from a local system do the following:
   2. Install the Azure Powershell modules that are required by this script by running the command:
 
       "Install-Module Az.Accounts,Az.Aks,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement,Az.CosmosDB"
-  
+
+     Optional modules. If one is missing, the script warns and skips only that collection:
+
+      "Install-Module Az.PostgreSqlFlexibleServer"   (Azure PostgreSQL Flexible Server inventory)
+      "Install-Module Az.DataProtection"             (Azure Backup for Blobs and PostgreSQL, stored in Backup Vaults)
+
   3. Verify that the Azure AD account that will be used to run this script has the "Reader" and "Reader and Data Access"
       roles on each subscription to be scanned. 
 
@@ -102,6 +112,9 @@ Do not collect data on Azure VMs or Managed Disks.
 .PARAMETER SkipAzureCosmosDB
 Do not collect data on Azure CosmosDB.
 
+.PARAMETER SkipAzurePostgreSQL
+Do not collect data on Azure Database for PostgreSQL Flexible Server.
+
 .PARAMETER Subscriptions
 A comma separated list of subscriptions to gather data from.
 
@@ -123,7 +136,8 @@ Anonymize data collected.
   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
-  "ManagedInstance", "DatabaseID", "vmID"
+  "ManagedInstance", "DatabaseID", "vmID", "AdministratorLogin", "VaultName", "DatasourceName",
+  "DatasourceDatabase", "DatasourceResourceId", "BackupPolicies"
   Additionally, you can specify "Tags" to exclude all tag fields (properties starting with "Tag:") from anonymization.
 
 .NOTES
@@ -149,6 +163,20 @@ Updated by VivekS: 9/17/25  -   Added support for Azure Kubernetes Service (AKS)
                                   Added AKS cluster metadata, node pool information, and tag collection
                                   Added AKS anonymization support and CSV export functionality
                                   Removed empty -Operator parameter from cost management query
+Updated by ArnaldD: 9/16/26  -  Added support for Azure Database for PostgreSQL Flexible Server
+                                  Added -SkipAzurePostgreSQL parameter to skip PostgreSQL data collection
+                                  Added PostgreSQL server metadata, database counts, storage metrics, and tag collection
+                                  Added PostgreSQL anonymization support and CSV export functionality
+                                  Uses Az.PostgreSqlFlexibleServer module (Az.PostgreSql retired in Az v16.0.0)
+                                  Added Utilized_GiB/TiB/GB/TB columns; Utilized_Bytes now uses the highest non-null datapoint
+                                  PostgreSQL: size columns blank (not 0) when Azure gives no size, empty tag values kept, TiB/TB totals formatted
+Updated by ArnaldD: 10/7/26  -  Added Azure Backup for Blobs and PostgreSQL (Backup Vaults) via the optional Az.DataProtection module
+                                  Collected unless -SkipAzureBackup is set, and skipped with a warning if the module is missing
+                                  Added BackupPolicies / InBackupPolicy columns to the storage account and file share outputs,
+                                  like the VM output (Blob via Backup Vault, Azure Files via Recovery Services Vault)
+                                  Added the same BackupPolicies / InBackupPolicy columns to the PostgreSQL output (via Backup Vault)
+                                  Backup Vault: exact Blob datasource type match, skip a vault with no resource group, ignore a $null vault list
+                                  Backup Vault and Azure Files backup results are collected in Lists, and unresolved Azure Files items are skipped (no output change)
 
 If you run this script and get an error message similar to this:
 
@@ -244,6 +272,9 @@ param (
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [switch]$SkipAzureCosmosDB,
+  [Parameter(Mandatory=$false)]
+  [ValidateNotNullOrEmpty()]
+  [switch]$SkipAzurePostgreSQL,
   [Parameter(ParameterSetName='CurrentSubscription',
     Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
@@ -278,7 +309,7 @@ param (
 )
 
 # Script version — update this with every PR that modifies this script.
-$scriptVersion = "1.0.2"
+$scriptVersion = "1.0.3"
 
 # Provider-specific anonymization configuration
 $script:tagPrefix = "Tag:"
@@ -320,6 +351,36 @@ $PSBoundParameters | Format-Table
 $archiveFile = "azure_sizing_results_$($date.ToString('yyyy-MM-dd_HHmm')).zip"
 
 Import-Module Az.Accounts, Az.Aks, Az.Compute, Az.Storage, Az.Sql, Az.SqlVirtualMachine, Az.ResourceGraph, Az.Monitor, Az.Resources, Az.RecoveryServices, Az.CostManagement, Az.CosmosDB
+
+# Az.PostgreSqlFlexibleServer is only needed for PostgreSQL collection. Import it only when PostgreSQL is not
+# skipped, and if it is missing treat that as -SkipAzurePostgreSQL so existing runs on machines without the module
+# keep working instead of failing outright.
+$pgModuleSkipNotice = $null
+if ($SkipAzurePostgreSQL -ne $true) {
+  try {
+    Import-Module Az.PostgreSqlFlexibleServer -ErrorAction Stop
+  } catch {
+    # Covers a missing module and a module that is installed but fails to load, so report the actual error.
+    Write-Host "Az.PostgreSqlFlexibleServer module could not be loaded: $_" -ForegroundColor Yellow
+    Write-Host "Azure PostgreSQL Flexible Servers will not be reported. To include them, run: Install-Module Az.PostgreSqlFlexibleServer" -ForegroundColor Yellow
+    # Repeated at the end of the run, because this message scrolls away in a long run.
+    $pgModuleSkipNotice = "NOTE: Azure PostgreSQL Flexible Servers were NOT collected because the Az.PostgreSqlFlexibleServer module could not be loaded ($_)."
+    $SkipAzurePostgreSQL = [switch]$true
+  }
+}
+
+# Az.DataProtection is optional: it is only needed to report Azure Backup for Blobs and PostgreSQL, which live in
+# Backup Vaults. If it is missing, the rest of the script still runs and only that collection is skipped.
+$dataProtectionAvailable = $false
+if ($SkipAzureBackup -ne $true) {
+  try {
+    Import-Module Az.DataProtection -ErrorAction Stop
+    $dataProtectionAvailable = $true
+  } catch {
+    Write-Host "Az.DataProtection module not found. Azure Backup for Blobs and PostgreSQL will not be reported." -ForegroundColor Yellow
+    Write-Host "To include it, run: Install-Module Az.DataProtection" -ForegroundColor Yellow
+  }
+}
 
 function ConvertTo-SizeUnits {
     param(
@@ -636,6 +697,9 @@ function Get-AzureStorageAndFilesInventory {
     $azSAObj.Add("UsedFileShareCapacityTB", $fsSizes["UsedFileShareCapacityTB"])
     $azSAObj.Add("FileShareCount",(($azSAFile | where-object {$_.id -like "*FileShareCount"}).Data.Maximum | Select-Object -Last 1))
     $azSAObj.Add("FileCountInFileShares",(($azSAFile | where-object {$_.id -like "*FileCount"}).Data.Maximum | Select-Object -Last 1))
+    # Filled in later, once the backup inventory has run, like the VM columns of the same name.
+    $azSAObj.Add("BackupPolicies", "-")
+    $azSAObj.Add("InBackupPolicy", $false)
     # Loop through possible tags adding the property if there is one, adding it with a hyphen as it's value if it doesn't.
     if ($azSA.Tags.Count -ne 0) {
       $UniqueTags | Foreach-Object {
@@ -798,6 +862,9 @@ function Get-AzureStorageAndFilesInventory {
         $azFSObj.Add("UsedCapacityTiB",$shareSizes["UsedCapacityTiB"])
         $azFSObj.Add("UsedCapacityGB", $shareSizes["UsedCapacityGB"])
         $azFSObj.Add("UsedCapacityTB", $shareSizes["UsedCapacityTB"])
+        # Filled in later, once the backup inventory has run, like the VM columns of the same name.
+        $azFSObj.Add("BackupPolicies", "-")
+        $azFSObj.Add("InBackupPolicy", $false)
 
         $fileShares += New-Object -TypeName PSObject -Property $azFSObj
       } #foreach ($azFS in $azFSs)
@@ -810,6 +877,103 @@ function Get-AzureStorageAndFilesInventory {
     StorageAccounts = $storageAccounts
     BlobContainers  = $blobContainers
     FileShares      = $fileShares
+  }
+}
+
+# Works out which storage account and file share a Recovery Services Vault Azure Files backup item protects. Several
+# fields are tried because the item carries the account in more than one place; any that is missing is skipped.
+function Get-AzureFilesBackupItemTarget {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Item
+  )
+
+  $account = $null
+  foreach ($candidate in @($Item.SourceResourceId, $Item.ProtectedItemDataSourceId)) {
+    if ($candidate -and $candidate -match '/storageAccounts/([^/]+)') {
+      $account = $Matches[1]
+      break
+    }
+  }
+  # ContainerName looks like "StorageContainer;Storage;<resource group>;<storage account>"
+  if (-not $account -and $Item.ContainerName) { $account = ($Item.ContainerName -split ';')[-1] }
+
+  $share = $Item.FriendlyName
+  # Name looks like "AzureFileShare;<share>"
+  if (-not $share -and $Item.Name) { $share = ($Item.Name -split ';')[-1] }
+
+  return [pscustomobject]@{ StorageAccount = $account; ShareName = $share }
+}
+
+# Marks a storage account or file share row as protected, and records the policy name without repeating it.
+function Add-AzureBackupPolicyToRow {
+  param (
+      [Parameter(Mandatory=$false)]
+      [PSObject]$Row,
+      [Parameter(Mandatory=$false)]
+      [string]$PolicyName
+  )
+
+  if (-not $Row) { return }
+  $Row.InBackupPolicy = $true
+  if ($PolicyName) {
+    if ($Row.BackupPolicies -eq "-") {
+      $Row.BackupPolicies = $PolicyName
+    } elseif (@($Row.BackupPolicies -split ', ') -notcontains $PolicyName) {
+      $Row.BackupPolicies += ", $PolicyName"
+    }
+  }
+}
+
+# Sets BackupPolicies / InBackupPolicy on the storage account and file share rows of one subscription, the way the
+# VM rows are marked. Blob protection comes from the Backup Vault items; Azure Files protection comes from the
+# Recovery Services Vault items. A storage account is flagged if its Blob or any of its file shares is protected.
+function Set-AzureStorageBackupProtection {
+  param (
+      [Parameter(Mandatory=$false)]
+      [object[]]$StorageAccounts = @(),
+      [Parameter(Mandatory=$false)]
+      [object[]]$FileShares = @(),
+      [Parameter(Mandatory=$false)]
+      [object[]]$BlobItems = @(),
+      [Parameter(Mandatory=$false)]
+      [object[]]$FilesProtection = @()
+  )
+
+  foreach ($blobItem in @($BlobItems | Where-Object { $_.Workload -eq 'AzureBlob' })) {
+    $saRow = @($StorageAccounts | Where-Object { $_.StorageAccount -eq $blobItem.DatasourceName }) | Select-Object -First 1
+    Add-AzureBackupPolicyToRow -Row $saRow -PolicyName $blobItem.ProtectionPolicyName
+  }
+
+  foreach ($protection in @($FilesProtection)) {
+    if (-not $protection -or -not $protection.StorageAccount) { continue }
+    $saRow = @($StorageAccounts | Where-Object { $_.StorageAccount -eq $protection.StorageAccount }) | Select-Object -First 1
+    Add-AzureBackupPolicyToRow -Row $saRow -PolicyName $protection.PolicyName
+    if ($protection.ShareName) {
+      $fsRow = @($FileShares | Where-Object { $_.StorageAccount -eq $protection.StorageAccount -and $_.Name -eq $protection.ShareName }) | Select-Object -First 1
+      Add-AzureBackupPolicyToRow -Row $fsRow -PolicyName $protection.PolicyName
+    }
+  }
+}
+
+# Sets BackupPolicies / InBackupPolicy on the PostgreSQL Flexible Server rows of one subscription from the Backup Vault
+# items. The server rows carry no resource Id, so the Id is rebuilt from the subscription, resource group and name.
+function Set-AzurePostgreSQLBackupProtection {
+  param (
+      [Parameter(Mandatory=$false)]
+      [object[]]$Servers = @(),
+      [Parameter(Mandatory=$false)]
+      [object[]]$BackupItems = @(),
+      [Parameter(Mandatory=$false)]
+      [string]$SubscriptionId
+  )
+
+  if (-not $SubscriptionId) { return }
+  foreach ($item in @($BackupItems | Where-Object { $_.Workload -eq 'AzurePostgreSQL' })) {
+    $row = @($Servers | Where-Object {
+      $item.DatasourceResourceId -ieq "/subscriptions/$SubscriptionId/resourceGroups/$($_.ResourceGroup)/providers/Microsoft.DBforPostgreSQL/flexibleServers/$($_.Server)"
+    }) | Select-Object -First 1
+    Add-AzureBackupPolicyToRow -Row $row -PolicyName $item.ProtectionPolicyName
   }
 }
 
@@ -843,6 +1007,9 @@ function Get-AzureBackupInventory {
   $vmSQLItems = @()
   $azureSQLDatabaseItems = @()
   $azureFilesItems = @()
+  # Which storage account / file share each Azure Files backup item protects. Kept internally, not exported, so the
+  # Azure Files items output is unchanged; used to flag the matching storage account and file share rows.
+  $filesProtection = [System.Collections.Generic.List[object]]::new()
   $costDetails = @()
 
   #Loop over all vaults in the subscription and get Azure Backup Details
@@ -980,12 +1147,27 @@ function Get-AzureBackupInventory {
           *
       }
       foreach ($policy in $azVaultAzureFilesPolicies) {
-          $azureFilesItems += Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
+          # @() so a policy with no items adds nothing, exactly as before
+          $filesItems = @(Get-AzRecoveryServicesBackupItem -Policy $policy | Select-Object -Property `
           @{Name = "Tenant"; Expression = {$Tenant.Name}}, `
           @{Name = "Subscription"; Expression = {$Subscription.Name}}, `
           @{Name = "Region"; Expression = {$azVault.Location}}, `
           @{Name = "ResourceGroup"; Expression = {$azVault.ResourceGroupName}}, `
-          *
+          *)
+          $azureFilesItems += $filesItems
+          foreach ($filesItem in $filesItems) {
+            $filesTarget = Get-AzureFilesBackupItemTarget -Item $filesItem
+            if (-not $filesTarget.StorageAccount) {
+              # Without this a protected share would silently stay "false" if Azure returns the item in a shape we do not read.
+              Write-Host "Could not work out the storage account for Azure Files backup item '$($filesItem.FriendlyName)' in vault $($azVault.Name); its storage account and file share will not be flagged." -ForegroundColor Yellow
+              continue
+            }
+            $filesProtection.Add([pscustomobject]@{
+              StorageAccount = $filesTarget.StorageAccount
+              ShareName      = $filesTarget.ShareName
+              PolicyName     = $policy.Name
+            })
+          }
       }
     } catch {
       # BUG FIX: replaced leaked $azSA.ResourceGroupName with $azVault.ResourceGroupName
@@ -1055,7 +1237,190 @@ function Get-AzureBackupInventory {
     VMSQLItems                = $vmSQLItems
     AzureSQLDatabaseItems     = $azureSQLDatabaseItems
     AzureFilesItems           = $azureFilesItems
+    AzureFilesProtection      = @($filesProtection)
     CostDetails               = $costDetails
+  }
+}
+
+# Maps an Azure Backup (Backup Vault / Microsoft.DataProtection) datasource type to the workload name used in
+# the CSV output. Returns $null for datasource types this script does not report on.
+function Get-AzureDataProtectionWorkload {
+  param (
+      [Parameter(Mandatory=$false)]
+      [string]$DatasourceType
+  )
+
+  switch -Wildcard ($DatasourceType) {
+    'Microsoft.Storage/storageAccounts/blobServices' { return 'AzureBlob' }
+    'Microsoft.DBforPostgreSQL/*'    { return 'AzurePostgreSQL' }
+  }
+  return $null
+}
+
+# Reads the fields this script needs from a Backup Vault instance. Az.DataProtection prints an instance's Property as
+# JSON, and depending on how it is returned that can be a typed object or JSON text with camelCase keys, so read it
+# either way. Property names are matched case-insensitively, so "resourceID" and "ResourceId" both work.
+function Get-AzureDataProtectionInstanceInfo {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Instance
+  )
+
+  $readInfo = {
+    param($Prop)
+    [pscustomobject]@{
+      DatasourceType  = $Prop.DataSourceInfo.DatasourceType
+      ResourceId      = $Prop.DataSourceInfo.ResourceId
+      ResourceName    = $Prop.DataSourceInfo.ResourceName
+      PolicyId        = $Prop.PolicyInfo.PolicyId
+      ProtectionState = $Prop.CurrentProtectionState
+    }
+  }
+
+  $prop = $Instance.Property
+  if ($prop -is [string]) {
+    try { $prop = $prop | ConvertFrom-Json -ErrorAction Stop } catch { $prop = $null }
+  }
+  $info = & $readInfo $prop
+
+  # Typed Az.DataProtection models print as JSON because that is what their ToString() returns, even when the nested
+  # members are not readable as properties, so parse that text.
+  if (-not $info.DatasourceType -and $null -ne $prop -and $prop -isnot [string]) {
+    $propText = "$prop"
+    if ($propText.TrimStart().StartsWith('{')) {
+      try { $info = & $readInfo ($propText | ConvertFrom-Json -ErrorAction Stop) } catch { }
+    }
+  }
+  # Last resort: round-trip the object through JSON.
+  if (-not $info.DatasourceType -and $null -ne $prop -and $prop -isnot [string]) {
+    try { $info = & $readInfo ($prop | ConvertTo-Json -Depth 10 | ConvertFrom-Json) } catch { }
+  }
+  # Recorded so an unreadable instance can be diagnosed from the log alone.
+  $info | Add-Member -NotePropertyName PropertyTypeName -NotePropertyValue $(if ($null -ne $Instance.Property) { $Instance.Property.GetType().FullName } else { 'null' })
+  return $info
+}
+
+# Azure Backup for Blobs and for PostgreSQL servers is stored in a Backup Vault (Microsoft.DataProtection),
+# not in a Recovery Services Vault, so it is not visible to Get-AzureBackupInventory.
+function Get-AzureDataProtectionInventory {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Subscription,
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Tenant
+  )
+
+  $dpVaultList = [System.Collections.Generic.List[object]]::new()
+  $dpPolicyList = [System.Collections.Generic.List[object]]::new()
+  $dpItemList = [System.Collections.Generic.List[object]]::new()
+
+  Write-Host "Getting Azure Backup (Backup Vault) information for subscription: $($Subscription.Name)" -ForegroundColor Green
+
+  try {
+    # Some module versions return $null instead of nothing when there are no vaults, which @() would keep as one element.
+    $dpVaults = @(Get-AzDataProtectionBackupVault -SubscriptionId $Subscription.SubscriptionId -ErrorAction Stop | Where-Object { $null -ne $_ })
+  } catch {
+    Write-Error "Unable to collect Azure Backup Vault information for subscription: $($Subscription.Name) under tenant $($Tenant.Name)" -ErrorAction Continue
+    Write-Error "Error: $_" -ErrorAction Continue
+    return $null
+  }
+
+  foreach ($dpVault in $dpVaults) {
+    $vaultRG = if ($dpVault.Id -match '/resourceGroups/([^/]+)/') { $Matches[1] } else { $dpVault.ResourceGroupName }
+    if (-not $vaultRG) {
+      Write-Host "Could not work out the resource group for Backup Vault $($dpVault.Name) in sub $($Subscription.Name); skipping it, so its policies and backup instances are not collected." -ForegroundColor Red
+      continue
+    }
+
+    $dpVaultObj = [ordered] @{}
+    $dpVaultObj.Add("Name", $dpVault.Name)
+    $dpVaultObj.Add("Type", $dpVault.Type)
+    $dpVaultObj.Add("Tenant", $Tenant.Name)
+    $dpVaultObj.Add("Subscription", $Subscription.Name)
+    $dpVaultObj.Add("Region", $dpVault.Location)
+    $dpVaultObj.Add("ResourceGroup", $vaultRG)
+    $dpVaultList.Add((New-Object -TypeName PSObject -Property $dpVaultObj))
+
+    try {
+      $vaultPolicies = @(Get-AzDataProtectionBackupPolicy -SubscriptionId $Subscription.SubscriptionId `
+                                                          -ResourceGroupName $vaultRG `
+                                                          -VaultName $dpVault.Name -ErrorAction Stop)
+      foreach ($policy in $vaultPolicies) {
+        $policyWorkloads = @($policy.Property.DatasourceType | ForEach-Object { Get-AzureDataProtectionWorkload -DatasourceType $_ } | Where-Object { $_ })
+        if ($policyWorkloads.Count -eq 0) { continue }
+        $dpPolicyList.Add(($policy | Select-Object -Property `
+          @{Name = "Tenant"; Expression = {$Tenant.Name}}, `
+          @{Name = "Subscription"; Expression = {$Subscription.Name}}, `
+          @{Name = "Region"; Expression = {$dpVault.Location}}, `
+          @{Name = "ResourceGroup"; Expression = {$vaultRG}}, `
+          @{Name = "VaultName"; Expression = {$dpVault.Name}}, `
+          @{Name = "Workload"; Expression = {$policyWorkloads -join ", "}}, `
+          *))
+      }
+    } catch {
+      Write-Host "Failed to get Azure Backup Vault policies for vault $($dpVault.Name) in Resource Group $vaultRG in sub $($Subscription.Name) in tenant $($Tenant.Name) in Region $($dpVault.Location)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForegroundColor Red
+      Write-Host "The policy list for vault $($dpVault.Name) is incomplete; its backup instances are still listed, but their policy names may have no matching row in the policies file." -ForegroundColor Yellow
+    }
+
+    try {
+      $vaultInstances = @(Get-AzDataProtectionBackupInstance -SubscriptionId $Subscription.SubscriptionId `
+                                                             -ResourceGroupName $vaultRG `
+                                                             -VaultName $dpVault.Name -ErrorAction Stop)
+      $keptInstances = 0
+      $ignoredTypes = @()
+      foreach ($instance in $vaultInstances) {
+        $instanceInfo = Get-AzureDataProtectionInstanceInfo -Instance $instance
+        $datasourceType = $instanceInfo.DatasourceType
+        $workload = Get-AzureDataProtectionWorkload -DatasourceType $datasourceType
+        if (-not $workload) {
+          $ignoredTypes += $(if ($datasourceType) { $datasourceType } else { "<unreadable, Property is $($instanceInfo.PropertyTypeName)>" })
+          continue
+        }
+        $keptInstances++
+
+        $datasourceId = $instanceInfo.ResourceId
+        # Anchor the name lookup to the resource type expected for this workload.
+        $datasourceNameRegex = if ($workload -eq 'AzureBlob') { '/storageAccounts/([^/]+)' } else { '/(?:flexibleServers|servers)/([^/]+)' }
+        $datasourceName = if ($datasourceId -match $datasourceNameRegex) { $Matches[1] } else { $instanceInfo.ResourceName }
+        # Database-level PostgreSQL backups (.../servers/<server>/databases/<db>) are reported as one row per
+        # database, all sharing the server's DatasourceName. DatasourceDatabase tells those rows apart.
+        $datasourceDatabase = if ($datasourceId -match '/databases/([^/]+)') { $Matches[1] } else { $null }
+        $policyId = $instanceInfo.PolicyId
+
+        $dpItemObj = [ordered] @{}
+        $dpItemObj.Add("Tenant", $Tenant.Name)
+        $dpItemObj.Add("Subscription", $Subscription.Name)
+        $dpItemObj.Add("Region", $dpVault.Location)
+        $dpItemObj.Add("ResourceGroup", $vaultRG)
+        $dpItemObj.Add("VaultName", $dpVault.Name)
+        $dpItemObj.Add("InstanceName", $instance.Name)
+        $dpItemObj.Add("Workload", $workload)
+        $dpItemObj.Add("DatasourceType", $datasourceType)
+        $dpItemObj.Add("DatasourceName", $datasourceName)
+        $dpItemObj.Add("DatasourceDatabase", $datasourceDatabase)
+        $dpItemObj.Add("DatasourceResourceId", $datasourceId)
+        $dpItemObj.Add("ProtectionPolicyName", $(if ($policyId) { ($policyId -split '/')[-1] } else { $null }))
+        $dpItemObj.Add("PolicyId", $policyId)
+        $dpItemObj.Add("ProtectionState", $instanceInfo.ProtectionState)
+        $dpItemList.Add((New-Object -TypeName PSObject -Property $dpItemObj))
+      }
+      # Say how many instances were found so a zero is explainable rather than silent.
+      Write-Host "Backup Vault $($dpVault.Name): $($vaultInstances.Count) backup instance(s) found, $keptInstances Blob/PostgreSQL" -ForegroundColor Green
+      if ($ignoredTypes.Count -gt 0) {
+        $ignoredSummary = ($ignoredTypes | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ", "
+        Write-Host "  Not reported (other datasource types): $ignoredSummary" -ForegroundColor Yellow
+      }
+    } catch {
+      Write-Host "Failed to get Azure Backup Vault backup instances for vault $($dpVault.Name) in Resource Group $vaultRG in sub $($Subscription.Name) in tenant $($Tenant.Name) in Region $($dpVault.Location)" -ForeGroundColor Red
+      Write-Host "Error: $_" -ForeGroundColor Red
+    }
+  } # foreach ($dpVault in $dpVaults)
+
+  return @{
+    Vaults   = @($dpVaultList)
+    Policies = @($dpPolicyList)
+    Items    = @($dpItemList)
   }
 }
 
@@ -1557,6 +1922,133 @@ function Get-AzureSQLInventory {
   return $true
 }
 
+function Get-AzurePostgreSQLInventory {
+  param (
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Subscription,
+      [Parameter(Mandatory=$true)]
+      [PSObject]$Tenant,
+      [Parameter(Mandatory=$false)]
+      [string[]]$UniqueTags = @()
+  )
+
+  $flexibleServerList = [System.Collections.ArrayList]@()
+
+  Write-Host "Getting Azure PostgreSQL Flexible Server information for subscription: $($Subscription.Name)" -ForegroundColor Green
+
+  try {
+    $pgFlexServers = Get-AzPostgreSqlFlexibleServer -ErrorAction Stop
+  } catch {
+    Write-Error "Unable to collect Azure PostgreSQL Flexible Server information for subscription: $($Subscription.Name) under tenant $($Tenant.Name)" -ErrorAction Continue
+    Write-Error "Error: $_" -ErrorAction Continue
+    return $null
+  }
+
+  $pgFlexNum = 1
+  foreach ($server in $pgFlexServers) {
+    Write-Progress -Id 10 -Activity "Getting Azure PostgreSQL Flexible Server information for: $($server.Name)" `
+                  -PercentComplete $(($pgFlexNum / [Math]::Max($pgFlexServers.Count, 1)) * 100) -ParentId 1 `
+                  -Status "PostgreSQL Flexible Server $($pgFlexNum) of $($pgFlexServers.Count)"
+    $pgFlexNum++
+
+    # Count user databases only. A Flexible Server always has the system databases azure_maintenance, azure_sys and
+    # postgres, so a server with no user databases reports 0 and one with a single user database reports 1.
+    # Left as $null (blank in the CSV) when the lookup fails, so it is not mistaken for a server with no user databases.
+    $dbCount = $null
+    try {
+      $dbs = Get-AzPostgreSqlFlexibleServerDatabase -ResourceGroupName $server.ResourceGroupName -ServerName $server.Name -ErrorAction Stop
+      $dbCount = @($dbs | Where-Object { $_.Name -notin @('azure_maintenance', 'postgres', 'azure_sys') }).Count
+    } catch {
+      Write-Host "Unable to get database count for PostgreSQL Flexible Server: $($server.Name). DatabaseCount will be blank." -ForegroundColor Yellow
+    }
+
+    # StorageSizeGb is already in GiB. ConvertTo-SizeUnits casts to [double], which would turn $null into 0, so the size
+    # columns stay blank when Azure gives no size.
+    $pgSizes = @{ MaxSizeGiB = $null; MaxSizeTiB = $null; MaxSizeGB = $null; MaxSizeTB = $null }
+    if ($null -ne $server.StorageSizeGb) {
+      $pgSizes = ConvertTo-SizeUnits -Value $server.StorageSizeGb -Prefix "MaxSize" -InputUnit GiB -GiBPrecision 0 -GBPrecision 3
+    }
+    # Which of the two sizer size ranges the server falls in, from its provisioned size: exactly 1 TiB (1024 GiB) is in
+    # the larger range, matching the formula service. Blank when Azure gives no size, rather than defaulting to "under".
+    $pgSizeBucket = if ($null -eq $server.StorageSizeGb) { $null }
+                    elseif ([double]$server.StorageSizeGb -ge 1024) { "1 TiB and over" }
+                    else { "Under 1 TiB" }
+
+    $pgObj = [ordered] @{}
+    $pgObj.Add("Server", $server.Name)
+    $pgObj.Add("ResourceGroup", $server.ResourceGroupName)
+    $pgObj.Add("Subscription", $Subscription.Name)
+    $pgObj.Add("Tenant", $Tenant.Name)
+    $pgObj.Add("Region", $server.Location)
+    $pgObj.Add("Version", $server.Version)
+    $pgObj.Add("SkuName", $server.SkuName)
+    $pgObj.Add("SkuTier", $server.SkuTier)
+    $skuVCores = if ($server.SkuName -match '_[A-Z]+(\d+)') { [int]$Matches[1] } else { $null }
+    $pgObj.Add("SkuCapacity", $skuVCores)
+    $pgObj.Add("MaxSizeGiB", $pgSizes["MaxSizeGiB"])
+    $pgObj.Add("MaxSizeTiB", $pgSizes["MaxSizeTiB"])
+    $pgObj.Add("MaxSizeGB",  $pgSizes["MaxSizeGB"])
+    $pgObj.Add("MaxSizeTB",  $pgSizes["MaxSizeTB"])
+    $pgObj.Add("SizeBucket", $pgSizeBucket)
+    $pgObj.Add("Status", $server.State)
+    $pgObj.Add("AdministratorLogin", $server.AdministratorLogin)
+    $pgObj.Add("BackupRetentionDays", $server.BackupRetentionDay)
+    $pgObj.Add("GeoRedundantBackup", $server.BackupGeoRedundantBackup)
+    $pgObj.Add("HighAvailabilityMode", $server.HighAvailabilityMode)
+    $pgObj.Add("DatabaseCount", $dbCount)
+
+    # storage_used is aggregated as Maximum over the last 24 hours, so this is the peak, not the latest value.
+    # Take the highest non-null datapoint so a trailing empty sample (stopped server,
+    # metric lag) is reported as blank instead of being mistaken for 0 bytes used.
+    # If the metric call fails (for example missing Monitoring Reader permission), warn and leave the columns blank.
+    $pgUsedPoints = @()
+    try {
+      $pgUsedPoints = @((Get-AzMetric -WarningAction SilentlyContinue `
+        -ResourceId $server.Id `
+        -MetricName "storage_used" `
+        -AggregationType Maximum `
+        -StartTime (Get-Date).AddDays(-1) `
+        -ErrorAction Stop).Data.Maximum | Where-Object { $null -ne $_ })
+    } catch {
+      Write-Host "Unable to get the storage_used metric for PostgreSQL Flexible Server: $($server.Name). Utilized columns will be blank." -ForegroundColor Yellow
+      Write-Host "Error: $_" -ForegroundColor Yellow
+    }
+    $pgUsedBytes = if ($pgUsedPoints.Count -gt 0) { ($pgUsedPoints | Measure-Object -Maximum).Maximum } else { $null }
+    $pgObj.Add("Utilized_Bytes", $pgUsedBytes)
+    # ConvertTo-SizeUnits casts to [double], which would turn $null into 0, so only convert real values.
+    if ($null -ne $pgUsedBytes) {
+      $pgUsedSizes = ConvertTo-SizeUnits -Value $pgUsedBytes -Prefix "Utilized" -InputUnit Bytes
+      $pgObj.Add("Utilized_GiB", $pgUsedSizes["UtilizedGiB"])
+      $pgObj.Add("Utilized_TiB", $pgUsedSizes["UtilizedTiB"])
+      $pgObj.Add("Utilized_GB",  $pgUsedSizes["UtilizedGB"])
+      $pgObj.Add("Utilized_TB",  $pgUsedSizes["UtilizedTB"])
+    } else {
+      $pgObj.Add("Utilized_GiB", $null)
+      $pgObj.Add("Utilized_TiB", $null)
+      $pgObj.Add("Utilized_GB",  $null)
+      $pgObj.Add("Utilized_TB",  $null)
+    }
+
+    $pgObj.Add("BackupPolicies", "-")
+    $pgObj.Add("InBackupPolicy", $false)
+
+    if ($server.Tag -and $server.Tag.Count -ne 0) {
+      $UniqueTags | ForEach-Object {
+        # Compare with $null, not truthiness, so a tag that exists with an empty value is not reported as missing
+        if ($null -ne $server.Tag[$_]) { $pgObj.Add("Tag: $_", $server.Tag[$_]) }
+        else                           { $pgObj.Add("Tag: $_", "-") }
+      }
+    } else {
+      $UniqueTags | ForEach-Object { $pgObj.Add("Tag: $_", "-") }
+    }
+
+    $flexibleServerList.Add((New-Object -TypeName PSObject -Property $pgObj)) | Out-Null
+  }
+  Write-Progress -Id 10 -Activity "Getting Azure PostgreSQL Flexible Server information" -Completed
+
+  return ,$flexibleServerList
+}
+
 function Get-AzureCosmosDBInventory {
   param (
       [Parameter(Mandatory=$true)]
@@ -1688,8 +2180,12 @@ $outputAzVaultVMSQLItem = "azure_backup_vault_VM_SQL_items-$($fileDate).csv"
 $outputAzVaultAzureSQLDatabaseItems = "azure_backup_vault_Azure_SQL_Database_items-$($fileDate).csv"
 $outputAzVaultAzureFilesItems = "azure_backup_vault_Azure_Files_items-$($fileDate).csv"
 $outputAzVaultBackupCostsItems = "azure_backup_costs-$($fileDate).csv"
+$outputAzDpVaults = "azure_backup_data_protection_vaults-$($fileDate).csv"
+$outputAzDpPoliciesJSON = "azure_backup_data_protection_policies-$($fileDate).json"
+$outputAzDpItems = "azure_backup_data_protection_items-$($fileDate).csv"
 $outputAzCosmosDB = "azure_cosmos_db-$($fileDate).csv"
 $outputAzKeyVault = "azure_key_vault-$($fileDate).csv"
+$outputAzPostgreSQLFlexible = "azure_postgres_info-$($fileDate).csv"
 $outputFiles = @()
 
 Write-Host "Current identity:" -ForeGroundColor Green
@@ -1715,9 +2211,13 @@ $azVaultVMItems = @()
 $azVaultVMSQLItems = @()
 $azVaultAzureSQLDatabaseItems = @()
 $azVaultAzureFilesItems = @()
+$azDpVaultList = @()
+$azDpPolicyList = @()
+$azDpItemList = @()
 $backupCostDetails = @()
 $cosmosDBs = @()
 $keyVaultList = @()
+$pgFlexList     = [System.Collections.ArrayList]@()
 
 switch ($PSCmdlet.ParameterSetName) {
   'Subscriptions' {
@@ -1879,6 +2379,13 @@ foreach ($sub in $subs) {
     $cosmosDBs += $cosmosResult
   } # if($SkipAzureCosmosDB -ne $true)
 
+  if ($SkipAzurePostgreSQL -ne $true) {
+    $pgResult = Get-AzurePostgreSQLInventory -Subscription $sub -Tenant $tenant -UniqueTags $uniqueAzTags
+    if ($null -ne $pgResult) {
+      $pgFlexList.AddRange($pgResult) | Out-Null
+    }
+  } # if ($SkipAzurePostgreSQL -ne $true)
+
   if ($SkipAKS -ne $true) {
     # AKS failure in master only skipped AKS itself, not the subscription's
     # remaining workloads — preserve that semantic by appending only when non-null.
@@ -1900,6 +2407,27 @@ foreach ($sub in $subs) {
   } # if ($SkipAzureStorageAccounts -ne $true)
 
   if ($SkipAzureBackup -ne $true) {
+    $dpResult = $null
+    # Collected before the Recovery Services Vault inventory so a failure there (which skips the rest of this
+    # subscription) does not also drop the Backup Vault data.
+    if ($dataProtectionAvailable) {
+      $dpResult = Get-AzureDataProtectionInventory -Subscription $sub -Tenant $tenant
+      if ($null -ne $dpResult) {
+        $azDpVaultList += $dpResult.Vaults
+        $azDpPolicyList += $dpResult.Policies
+        $azDpItemList += $dpResult.Items
+        # Flag Blob-protected storage accounts here too, for the same reason.
+        if ($storageResult) {
+          Set-AzureStorageBackupProtection -StorageAccounts $storageResult.StorageAccounts `
+              -FileShares $storageResult.FileShares -BlobItems $dpResult.Items
+        }
+        if ($pgResult) {
+          Set-AzurePostgreSQLBackupProtection -Servers $pgResult -BackupItems $dpResult.Items `
+              -SubscriptionId $sub.SubscriptionId
+        }
+      }
+    }
+
     $backupResult = Get-AzureBackupInventory -Subscription $sub -Tenant $tenant `
         -UniqueTags $uniqueAzTags -VMList $vmList
     if ($null -eq $backupResult) {
@@ -1915,6 +2443,11 @@ foreach ($sub in $subs) {
     $azVaultAzureSQLDatabaseItems += $backupResult.AzureSQLDatabaseItems
     $azVaultAzureFilesItems += $backupResult.AzureFilesItems
     $backupCostDetails += $backupResult.CostDetails
+    # Flag the storage accounts and file shares protected by Azure Files backup.
+    if ($storageResult) {
+      Set-AzureStorageBackupProtection -StorageAccounts $storageResult.StorageAccounts `
+          -FileShares $storageResult.FileShares -FilesProtection $backupResult.AzureFilesProtection
+    }
   } # if ($SkipAzureBackup -ne $true)
 
   # Intentionally skipping this by default; one must pass in the flag to collect this information
@@ -1938,7 +2471,9 @@ if ($Anonymize) {
                                   "ResourceGroup", "VirtualMachineId", "PolicyId", "ProtectionPolicyName", "Id",
                                   "SourceResourceId", "ContainerName", "FriendlyName", "ServerName", "ParentName",
                                   "ProtectedItemDataSourceId",  "StorageAccount", "Database", "Server", "ElasticPool",
-                                  "ManagedInstance", "DatabaseID", "vmID", "NodeResourceGroup", "DnsPrefix", "Fqdn"
+                                  "ManagedInstance", "DatabaseID", "vmID", "NodeResourceGroup", "DnsPrefix", "Fqdn",
+                                  "AdministratorLogin", "VaultName", "DatasourceName", "DatasourceDatabase", "DatasourceResourceId",
+                                  "BackupPolicies"
                                   )
 
   if($AnonymizeFields){
@@ -2282,6 +2817,36 @@ if ($SkipAzureBackup -ne $true) {
   $azVaultAzureFilesItems | Export-Csv -Path $outputAzVaultAzureFilesItems
   $backupCostDetails | Export-Csv -Path $outputAzVaultBackupCostsItems
 
+  # Azure Backup for Blobs and PostgreSQL (Backup Vaults)
+  if ($dataProtectionAvailable) {
+    $azDpBlobCount = @($azDpItemList | Where-Object { $_.Workload -eq 'AzureBlob' }).Count
+    $azDpPgCount = @($azDpItemList | Where-Object { $_.Workload -eq 'AzurePostgreSQL' }).Count
+
+    Write-Host "Total # of Azure Backup Vaults (Backup Vault type): $('{0:N0}' -f $azDpVaultList.Count)" -ForeGroundColor Green
+    Write-Host "Total # of Azure Storage Accounts with Blob protected by Azure Backup : $('{0:N0}' -f $azDpBlobCount)" -ForeGroundColor Green
+    Write-Host "Total # of Azure PostgreSQL servers protected by Azure Backup : $('{0:N0}' -f $azDpPgCount)" -ForeGroundColor Green
+
+    if ($Anonymize) {
+      $azDpVaultList = Invoke-CollectionAnonymization -Collection $azDpVaultList
+      $azDpPolicyList = Invoke-CollectionAnonymization -Collection $azDpPolicyList
+      $azDpItemList = Invoke-CollectionAnonymization -Collection $azDpItemList
+    }
+
+    if ($azDpVaultList.Count -gt 0) {
+      $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzDpVaults - Azure Backup Vault (Backup Vault type) CSV file."}
+      $azDpVaultList | Export-Csv -Path $outputAzDpVaults -NoTypeInformation
+    }
+    if ($azDpPolicyList.Count -gt 0) {
+      $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzDpPoliciesJSON - Azure Backup Vault Blob and PostgreSQL policies JSON file."}
+      # -InputObject with @() keeps a single policy as a one-item array instead of a bare object
+      ConvertTo-Json -InputObject @($azDpPolicyList) -Depth 10 > $outputAzDpPoliciesJSON
+    }
+    if ($azDpItemList.Count -gt 0) {
+      $outputFiles += New-Object -TypeName PSCustomObject -Property @{Files="$outputAzDpItems - Azure Backup Vault Blob and PostgreSQL protected items CSV file."}
+      $azDpItemList | Export-Csv -Path $outputAzDpItems -NoTypeInformation
+    }
+  }
+
 } # if ($SkipAzureBackup -ne $true)
 
 if ($SkipAzureCosmosDB -ne $true) {
@@ -2297,6 +2862,26 @@ if ($SkipAzureCosmosDB -ne $true) {
   $cosmosDBsToCsv | Export-CSV -path $outputAzCosmosDB -NoTypeInformation
 
 } #if ($SkipAzureCosmosDB -ne $true)
+
+if ($SkipAzurePostgreSQL -ne $true) {
+  $pgFlexTotalGiB = ($pgFlexList.MaxSizeGiB | Measure-Object -Sum).Sum
+  $pgFlexTotalTiB = ($pgFlexList.MaxSizeTiB | Measure-Object -Sum).Sum
+  $pgFlexTotalGB  = ($pgFlexList.MaxSizeGB  | Measure-Object -Sum).Sum
+  $pgFlexTotalTB  = ($pgFlexList.MaxSizeTB  | Measure-Object -Sum).Sum
+
+  Write-Host
+  Write-Host "Total # of Azure PostgreSQL Flexible Servers: $('{0:N0}' -f $pgFlexList.count)" -ForeGroundColor Green
+  Write-Host "Total capacity of all PostgreSQL Flexible Servers: $('{0:N0}' -f $pgFlexTotalGiB) GiB or $('{0:N0}' -f $pgFlexTotalGB) GB or $('{0:N4}' -f $pgFlexTotalTiB) TiB or $('{0:N4}' -f $pgFlexTotalTB) TB" -ForeGroundColor Green
+
+  if ($Anonymize) {
+    $pgFlexList = Invoke-CollectionAnonymization -Collection $pgFlexList
+  }
+
+  if ($pgFlexList.Count -gt 0) {
+    $outputFiles += New-Object -TypeName pscustomobject -Property @{Files="$outputAzPostgreSQLFlexible - Azure PostgreSQL Flexible Server CSV file."}
+    $pgFlexList | Export-CSV -path $outputAzPostgreSQLFlexible -NoTypeInformation
+  }
+} # if ($SkipAzurePostgreSQL -ne $true)
 
 if ($SkipAKS -ne $true) {
   $aksTotalNodes = ($aksList.TotalNodes | Measure-Object -Sum).Sum
@@ -2615,6 +3200,33 @@ if ($aksList -and $aksList.Count -gt 0) {
     }
 }
 
+# PostgreSQL Flexible Server Summary
+if ($SkipAzurePostgreSQL -ne $true -and $pgFlexList -and $pgFlexList.Count -gt 0) {
+    $summaryData += [PSCustomObject]@{
+        ResourceType = "[ Azure PostgreSQL Flexible Servers ]"
+        Region       = ""
+        TotalSizeTiB = $null
+        TotalSizeTB  = $null
+        Count        = $null
+    }
+    $summaryData += [PSCustomObject]@{
+        ResourceType = ""
+        Region       = "All Regions"
+        TotalSizeTiB = ($pgFlexList | Measure-Object -Property MaxSizeTiB -Sum).Sum
+        TotalSizeTB  = ($pgFlexList | Measure-Object -Property MaxSizeTB  -Sum).Sum
+        Count        = $pgFlexList.Count
+    }
+    $pgFlexList | Group-Object Region | Sort-Object Name | ForEach-Object {
+        $summaryData += [PSCustomObject]@{
+            ResourceType = ""
+            Region       = $_.Name
+            TotalSizeTiB = ($_.Group | Measure-Object -Property MaxSizeTiB -Sum).Sum
+            TotalSizeTB  = ($_.Group | Measure-Object -Property MaxSizeTB  -Sum).Sum
+            Count        = $_.Count
+        }
+    }
+}
+
 # Export the summary data to CSV
 Write-Host "Exporting summary data to $outputSummary..." -ForegroundColor Green
 Write-Host "Summary data contains $($summaryData.Count) items" -ForegroundColor Green
@@ -2652,6 +3264,10 @@ Write-Host "Results have been compressed into $archiveFile and original files ha
 
 Write-Host
 Write-Host
+if ($pgModuleSkipNotice) {
+  Write-Host $pgModuleSkipNotice -ForegroundColor Yellow
+  Write-Host "Install the module and re-run to include PostgreSQL in the results." -ForegroundColor Yellow
+}
 Write-Host "Please send $archiveFile to your Rubrik representative" -ForegroundColor Cyan
 Write-Host
 
