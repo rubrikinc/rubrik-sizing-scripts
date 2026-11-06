@@ -3,9 +3,32 @@
     M365 Recovery Criticality Assessment - tiers Mailboxes, OneDrive accounts,
     SharePoint sites, and Teams into Critical Group 1/2/3 based on Microsoft
     Graph usage activity, then models recovery time and downtime cost per
-    group for BC/DR recovery-sequencing conversations.
+    group for BC/DR recovery-sequencing conversations. (v2.0.0)
 
 .DESCRIPTION
+    v2.0.0 - second-generation Recovery Assessment. Built on the 3.17.1
+    collection, scoring, tiering and recovery-model engine with the SAME
+    recovery-model constants ("calibration v1"), so a repeat run against the
+    same tenant produces the same recovery times as 3.17.1. What changed:
+      - Redesigned report: dark theme, one storage unit for the whole report
+        (GB, or TB when the tenant is larger than 5 TB), every table sortable,
+        every summary linked to its detail.
+      - "Groups & Recovery Model" tab: scoring metrics, RTO targets and
+        recovery inputs merged with the criticality-group view; groups and
+        workloads are collapsed until opened.
+      - "Recovery Insights": flags abnormal objects (very large, very high
+        item counts, heavy recent change) that stretch recovery time, with the
+        baseline for this tenant shown beside each flag.
+      - Executive Summary: who matters, how fast Rubrik recovers them, and
+        what that is worth. Hours saved is always shown; downtime cost avoided
+        (Group 1 as the headline, Groups 2-3 beneath it) appears once a
+        downtime cost per hour is entered.
+      - -Period now defaults to D180 (Group 4 = little or no activity in the
+        last 180 days).
+      - The Summary report is rendered by the same in-browser engine as the
+        interactive report, from aggregate-only data (no per-object rows).
+    The version history below is the 3.x lineage this build is based on.
+
     v3.1.0 - corrects what "recovery time" means for ABR. v3.0.0 tiered
     Mailboxes/OneDrive/SharePoint by an efficiency-ranked walk-forward budget
     (rank by score-per-minute-of-FULL-object-recovery-time, then fill Groups
@@ -30,7 +53,7 @@
     Group 1/2/3 now gets a simple pass/fail flag against its own RTO target
     hours, and the Executive Summary's Recovery Timeline shows the hot-data
     ABR phase followed by the Mass Recovery catch-up phase. See
-    RECOVERY-MODEL-METHODOLOGY.md for the full before/after rationale and
+    the Methodology tab for the full before/after rationale and
     real-tenant worked example. -Group1/2/3TargetHours and -RTOPreset
     (Auto/Standard/Enterprise/Custom) still control the targets and are
     still live-adjustable in the report's Recovery tab - they now drive a
@@ -53,8 +76,7 @@
         combined.
       - A dedicated Recovery tab modeling recovery TIME and downtime COST per
         group, using throughput-capped math reverse-engineered from the
-        customer's own MVC Recovery Time Estimator export (see
-        RECOVERY-MODEL-METHODOLOGY.md).
+        Rubrik's M365 recovery time model (see the Methodology tab).
       - Manager roll-up (who reports up through whom) for org-based filtering
         and mass-tiering ("everyone under this VP").
       - A heuristic mailbox-type classifier (User vs. likely Shared/Resource)
@@ -96,7 +118,11 @@
     costs as a data-driven starting point - the live override system exists
     specifically so the customer can correct anything the data can't see.
 
+
 .NOTES
+    LINEAGE: v2.0.0 is based on the 3.17.1 script (same collection, tiering and
+    recovery-model engine and constants).
+
     ============================================================================
     PERMISSIONS
     ============================================================================
@@ -166,13 +192,26 @@
     Treat it as something the customer's own security team signs off on.
 
 .PARAMETER Period
-    Usage report window: D7, D30, D90, or D180. Default D90.
+    Usage report window: D7, D30, D90, or D180. Default D180.
+
+.PARAMETER OfflinePath
+    Run without any tenant connection from usage reports exported from the
+    Microsoft 365 admin center into this folder (see the README, 'Running
+    offline'). Reduced-confidence report; no directory/Exchange data.
+
+.PARAMETER CriticalGroupCount
+    Number of criticality groups (3-12, default 3) the interactive report opens with; the low-activity
+    group is always one more. Above 3 the RTO targets default to Enterprise Plus (sized to the tenant).
+    Changeable live in the report.
 
 .PARAMETER OutputPath
     Folder to write CSVs/HTML to. Defaults to a timestamped folder.
 
 .EXAMPLE
     .\Invoke-RecoveryAssessment-M365-Full.ps1
+
+.EXAMPLE
+    .\Invoke-RecoveryAssessment-M365-Full.ps1 -OfflinePath C:\RubrikAssessment\input -Period D180
 
 .EXAMPLE
     .\Invoke-RecoveryAssessment-M365-Full.ps1 -RecoveryWindowDays 3 -DowntimeCostPerHour 25000
@@ -190,7 +229,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('D7', 'D30', 'D90', 'D180')]
-    [string]$Period = 'D90',
+    [string]$Period = 'D180',
 
     [string]$OutputPath = ".\M365CriticalityAssessment_$(Get-Date -Format 'yyyyMMdd_HHmmss')",
 
@@ -278,7 +317,7 @@ param(
     # month-over-month tier-movement comparison embedded in the report.
     [string]$CompareTo = '',
 
-    # NEW v2.0.0: recovery-time modeling inputs (see RECOVERY-MODEL-METHODOLOGY.md).
+    # NEW v2.0.0: recovery-time modeling inputs (see the Methodology tab).
     # 'Auto' picks the SP/OD throughput tier from actual object counts, same
     # bucket boundaries as the source calculator. All three are also
     # live-adjustable in the report's Recovery tab.
@@ -289,17 +328,12 @@ param(
     # higher wouldn't mean anything. Live-adjustable 0-7 in the report's
     # Recovery tab; windows shorter than 7 days linearly scale down the real
     # D7 activity signal already collected (no separate report needed per
-    # value). See RECOVERY-MODEL-METHODOLOGY.md.
+    # value). See the Methodology tab.
     [ValidateRange(0, 7)]
     [double]$RecoveryWindowDays = 7,
-    # Default of 10,000 chosen as a conservative, defensible floor (SMB-scale
-    # downtime cost benchmarks run ~$8,000-$25,000/hr) rather than a
-    # made-up round number or a mid/large-enterprise headline figure
-    # ($300K-$2M+/hr in Gartner/ITIC/New Relic surveys) - those describe
-    # whole-business outages, not a subset of M365 objects being
-    # unavailable, and would overstate impact for what this tool models.
-    # Always override with the customer's real number when known.
-    [double]$DowntimeCostPerHour = 10000,
+    # v2.0: default 0. The report shows hours saved always and prompts the customer to enter their own
+    # downtime cost per hour to see potential cost avoidance (no invented dollar figure).
+    [double]$DowntimeCostPerHour = 0,
 
     # NEW v3.0.0, meaning corrected in v3.1.0: customizable, CUMULATIVE
     # recovery-time-objective (RTO) targets in hours for Mailboxes/OneDrive/
@@ -330,11 +364,24 @@ param(
     # NEW v2.0.0: connect via an Enterprise App (application permissions,
     # certificate auth) instead of an interactive delegated sign-in. All three
     # required together. See EnterpriseApp-Setup-Guide.md.
+    # NEW: run from admin-center report exports instead of a live Graph connection
+    # (for tenants where security won't approve running the script). Folder must
+    # contain the exported CSVs - see the README, 'Running offline'.
+    [string]$OfflinePath = '',
+
+    # NEW: number of criticality groups for the interactive report to start with (3-12, default 3).
+    # The low-activity group is always one more (10 -> 11 groups, #11 = low activity). Above 3 the RTO
+    # targets default to "Enterprise Plus", sized to the tenant, and everything stays editable in the
+    # report (Recovery modeling inputs -> Criticality groups). The per-workload CSVs and the Summary
+    # report keep the 3-group baseline; the interactive report applies the chosen count live.
+    [ValidateRange(3, 12)]
+    [int]$CriticalGroupCount = 3,
+
     [string]$TenantId = '',
     [string]$ClientId = '',
     [string]$CertificateThumbprint = '',
 
-    # NEW 2026-09-17: found via a real customer tenant (a very
+    # NEW 2026-09-17: found in field use on a tenant (a very
     # large one) whose run logged "User profile enrichment failed (The
     # request was canceled due to the configured HttpClient.Timeout of 300
     # seconds elapsing.)". The Microsoft Graph PowerShell SDK's default
@@ -364,6 +411,11 @@ param(
 # $Groups is still "should group data be collected/shown," just inverted
 # and on-by-default per v3.14.0 (see -NoGroups param comment above).
 $Groups = -not $NoGroups
+if ($OfflinePath) {
+    $Groups = $false
+    if ($DetailedSizing) { Write-Warning '-DetailedSizing needs Exchange Online and is ignored in offline mode.' }
+    $DetailedSizing = [switch]$false
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -440,7 +492,7 @@ function Connect-Assessment {
     Write-Host "Connected as $($ctx.Account)" -ForegroundColor Green
     Write-Host "Scopes granted:  $($ctx.Scopes -join ', ')" -ForegroundColor Green
 
-    # NEW 2026-09-17: found via a real customer whose huge
+    # NEW 2026-09-17: found in field use from a customer whose huge
     # tenant made Get-UserEnrichmentIndex's Get-MgUser -All pull run past the
     # Graph PowerShell SDK's default HttpClient timeout, which silently wiped
     # ALL profile enrichment for the run (same failure mode as the
@@ -450,7 +502,7 @@ function Connect-Assessment {
     # gets the longer timeout, instead of relying on the customer running
     # Set-MgRequestContext themselves before this script.
     try {
-        # NEW 2026-09-22: found via a real customer's console log - Set-MgRequestContext
+        # NEW 2026-09-22: found in field use: console log - Set-MgRequestContext
         # returns its resulting context object, which was leaking to the
         # console as an unwanted table (ClientTimeout/RetryDelay/MaxRetry/
         # RetriesTimeLimit) since the call below wasn't suppressed. Cosmetic
@@ -589,7 +641,7 @@ function Get-UserEnrichmentIndex {
     $indexByUpn = @{}
     $indexById  = @{}
 
-    # NEW 2026-09-08: found via a real customer's live 403->new-warning
+    # NEW 2026-09-08: found in field use: live 403->new-warning
     # follow-up report. This USED to be one Get-MgUser -All call with
     # -ExpandProperty @('Manager','MemberOf') whenever -IncludeGroups was
     # on (the default since v3.14.0). Microsoft Graph's /users endpoint
@@ -833,7 +885,7 @@ function Add-UserEnrichment {
         Add-Member -InputObject $row -NotePropertyName 'Department'     -NotePropertyValue $(if ($enrich) { $enrich.Department } else { '' })     -Force
         Add-Member -InputObject $row -NotePropertyName 'EmployeeType'   -NotePropertyValue $(if ($enrich) { $enrich.EmployeeType } else { '' })   -Force
         Add-Member -InputObject $row -NotePropertyName 'Manager'        -NotePropertyValue $(if ($enrich) { $enrich.Manager } else { '' })        -Force
-        # NEW 2026-09-11: found via a real customer's broken
+        # NEW 2026-09-11: found in field use: broken
         # Interactive report. $(...) around an if/else lets PowerShell's
         # pipeline auto-unroll a collection written to the output stream -
         # zero elements becomes $null, exactly one element becomes a bare
@@ -844,7 +896,7 @@ function Add-UserEnrichment {
         # an array, which the JS array helpers (.forEach/.join) then threw
         # on at render time. @(...) forces array-context collection
         # regardless of how many objects were emitted, so 0/1/2+ elements
-        # all come out as a real array. See RECOVERY-MODEL-METHODOLOGY.md /
+        # all come out as a real array. See the Methodology tab /
         # CHANGELOG for the matching JS-side defensive normalization.
         Add-Member -InputObject $row -NotePropertyName 'ManagerChain'   -NotePropertyValue @(if ($enrich) { $enrich.ManagerChain } else { @() })  -Force
         Add-Member -InputObject $row -NotePropertyName 'Groups'         -NotePropertyValue @(if ($enrich) { $enrich.Groups } else { @() })        -Force
@@ -928,9 +980,9 @@ function Add-MailboxTypeHeuristic {
         elseif ($row.SendReceiveQuotaBytes -gt 0 -and [math]::Abs($row.SendReceiveQuotaBytes - 53687091200) -lt 1073741824) {
             # Unlicensed but still sign-in enabled, with the 50 GB limit Exchange gives
             # unlicensed shared/room/equipment mailboxes (a real user mailbox that lost
-            # its license keeps its old limit). Seen on a real tenant: both genuine
+            # its license keeps its old limit). Seen on a live tenant: both genuine
             # shared mailboxes were enabled+unlicensed and carried exactly this limit.
-            $class = 'Shared'; $label = 'Shared / resource (unlicensed, 50 GB mailbox limit)'
+            $class = 'Shared'; $label = 'Shared / resource (unlicensed, standard shared-mailbox limit)'
         }
         else {
             $class = 'Unlicensed'; $label = 'Unlicensed user (enabled) - not protected'
@@ -1026,7 +1078,7 @@ function Get-ExactTeamSiteUrls {
     replaced saying otherwise, Get-MgGroupSite also needs enough group-read
     access to resolve each Team's underlying Microsoft 365 Group before it
     can return that group's site (Group.Read.All in practice). Found
-    2026-09-08 via a real customer 403/accessDenied report:
+    2026-09-08 via a customer 403/accessDenied report:
     running with -NoGroups (which deliberately does NOT request
     Group.Read.All) made EVERY Get-MgGroupSite call fail, since the group
     itself can't be read. That was already non-fatal (caught below, one
@@ -1174,8 +1226,8 @@ function Add-CriteriaTags {
     $friendly = @{
         SendRecvActivity = 'Send/receive volume'; ReadActivity = 'Read volume'; Size = 'Mailbox size'
         FileActivity     = 'File activity';       Storage      = 'Storage size'
-        PageViews        = 'Page views';          ActiveFiles  = 'Active files'
-        ActiveUsers      = 'Active users';        ChannelMsgs  = 'Channel messages'; Meetings = 'Meetings organized'
+        PageViews        = 'Page views';          ActiveFiles  = 'Recently used files'
+        ActiveUsers      = 'Participating users';        ChannelMsgs  = 'Channel messages'; Meetings = 'Meetings organized'
         TitleWeight      = 'Job title'
     }
     foreach ($row in $Data) {
@@ -1261,7 +1313,7 @@ function Add-RecentDataEstimate {
         it slightly over), then that fraction is applied proportionally to
         total storage - Graph does not expose a literal byte-level change
         log, so per-object proportional scaling is the closest available
-        estimate. See RECOVERY-MODEL-METHODOLOGY.md.
+        estimate. See the Methodology tab.
 
         Tiering itself no longer depends on this - see Add-Tier, now called
         uniformly for all five workloads. This function only feeds
@@ -1298,7 +1350,7 @@ function Add-BudgetTier {
         Protect-PreviewData's redaction decision in the Preview script and
         the exported CSVs/manifest here - both would silently drift from
         what the live report ends up showing on load if this algorithm ever
-        diverges from assignBudgetTiers(). See RECOVERY-MODEL-METHODOLOGY.md.
+        diverges from assignBudgetTiers(). See the Methodology tab.
 
         Fills Group 1 with as many top-ranked (by _Score) objects as fit
         inside its own RTO budget (using windowed ABR hot-data figures),
@@ -1438,9 +1490,8 @@ function Get-TierTotals {
 
 #region ---------- Recovery time modeling ----------
 <#
-    Reverse-engineered from the customer's own MVC Recovery Time Estimator
-    export (mvc-recovery-estimate-2026-07-15.csv, "formula-preserving export").
-    Full derivation is in RECOVERY-MODEL-METHODOLOGY.md - summary:
+    Derived from Rubrik's M365 recovery time model.
+    Full derivation is in the Methodology tab - summary:
 
     The source tool computes, for SharePoint/OneDrive/Exchange, an "effective"
     items-per-minute and bytes(or MB)-per-minute throughput, capped by a
@@ -1448,7 +1499,7 @@ function Get-TierTotals {
     Full-restore time = MAX(items / effective items-per-min, storage /
     effective bytes-per-min). We reuse that exact throughput-cap engine, but
     apply it to each CRITICALITY TIER's real object/item/storage totals
-    instead of the source tool's modeled "MVC %" sample - because our tiers
+    instead of the source model's sampled percentage - because our tiers
     are actual observed criticality groups, not a statistical subset.
 
     Recovery is modeled as SEQUENTIAL per workload (Group 1 objects recovered
@@ -1471,17 +1522,14 @@ $script:SPODTierTable = @(
     @{ Bucket = '15k-50k'; Max = 50000;                      Parallelism = 12 }
     @{ Bucket = '50k+';    Max = $null;                       Parallelism = 15 }
 )
-# NEW v3.10.0 (M365 MVC Recovery Time Estimator - RSC M365 Restoration
-# Benchmark, Mar 2025 / M365 Sizing Guidance, Jan 2026 - superseding the
-# earlier "MVC Recovery Time Estimator" export this formula was originally
-# reverse-engineered from). SharePoint and OneDrive now have DIFFERENT
+# NEW v3.10.0 (Rubrik's M365 recovery time model, superseding the earlier formula). SharePoint and OneDrive now have DIFFERENT
 # per-object-of-parallelism item rates (108/168 items/min/unit - 27/42
 # files/sec at 15-way parallelism, divided out so lower tiers scale down),
 # instead of sharing one ItemsPerMinCap/BytesPerMinCap table. There is no
 # separate bytes/min cap anymore for SP/OD - an oversized average item is
 # instead penalized via SizeFactor (inflates the EFFECTIVE item count,
 # rather than throttling a second, independent byte-rate). See
-# Get-RecoveryTimeMinutes and RECOVERY-MODEL-METHODOLOGY.md.
+# Get-RecoveryTimeMinutes and the Methodology tab.
 $script:SP_ItemsPerMinPerUnit = 108
 $script:OD_ItemsPerMinPerUnit = 168
 # A file bigger than this (MiB, org-wide average) costs proportionally more
@@ -1491,7 +1539,7 @@ $script:SizeFactorBaselineMB = 3
 # Job-launch/scheduling overhead: a FIXED per-object cost (every object
 # touched by a restore - even one with a single changed item - needs its
 # own restore job) modeling 1,000 restore jobs launched/settled in 6 hours.
-# Applies to ABR (the source tool's "MVC") recovery time only - a full/
+# Applies to ABR (the source model) recovery time only - a full/
 # undifferentiated Mass Recovery restore's scheduling cost is assumed
 # absorbed into the throughput figures already, per the source tool.
 $script:JobSchedulingRatePerMin = 1000.0 / 360.0
@@ -1535,10 +1583,7 @@ function Get-RecoveryTimeMinutes {
         Time to recover ONE slice (a tier, a cumulative union of tiers, or an
         entire workload) in isolation.
 
-        v3.10.0: reworked to match the M365 MVC Recovery Time Estimator (RSC
-        M365 Restoration Benchmark, Mar 2025 / M365 Sizing Guidance, Jan
-        2026), superseding the earlier export this formula was originally
-        reverse-engineered from. Two structural changes from before:
+        v3.10.0: reworked to match Rubrik's M365 recovery time model, superseding the earlier formula. Two structural changes from before:
           1. SharePoint/OneDrive no longer have an independent bytes/min cap
              - an oversized average item now inflates the EFFECTIVE item
              count instead (SizeFactor), and SP/OD each have their OWN
@@ -1549,7 +1594,7 @@ function Get-RecoveryTimeMinutes {
           2. -IncludeOverhead adds a fixed per-object job-scheduling cost
              (every object touched needs its own restore job, regardless of
              how much of it changed) plus a 5-minute floor - this is what
-             ABR (the source tool's "MVC") actually costs on top of raw
+             ABR (the source model) actually costs on top of raw
              transfer time. A full/undifferentiated Mass Recovery restore
              has neither - pass $false for those calls.
 
@@ -1631,7 +1676,7 @@ function Build-RecoveryModel {
         # math as the live report's JS (computeRecoveryModel). This console
         # summary is a point-in-time snapshot at whatever value was passed at
         # generation time - the live report's own slider is what's actually
-        # live-adjustable. See RECOVERY-MODEL-METHODOLOGY.md.
+        # live-adjustable. See the Methodology tab.
         [double] $RecoveryWindowDays = 7
     )
     $windowFactor = [math]::Max(0, [math]::Min(7, $RecoveryWindowDays)) / 7
@@ -1815,7 +1860,7 @@ function Get-WholeTenantABRMinutes {
         active population, leaving ITS Group 2/3 empty and defeating the
         whole point of showing a criticality-tiered recovery for that
         workload (see "Why the walk-forward approach was replaced" /
-        "Budget-constrained tiering" in RECOVERY-MODEL-METHODOLOGY.md for
+        "Budget-constrained tiering" in the Methodology tab for
         the underlying tiering mechanism this is protecting the USEFULNESS
         of, not its correctness).
 
@@ -1896,11 +1941,101 @@ function Get-WholeTenantABRMinutes {
 
 #region ---------- Helpers: download wrapper, export ----------
 
+#region ---------- Offline mode (-OfflinePath) ----------
+# Customers whose security team won't approve a live run export the usage
+# reports from the Microsoft 365 admin center into one folder. With
+# -OfflinePath the script never connects to Graph/Exchange: Get-GraphReport
+# reads the exported CSV (same columns as the Graph report) instead of
+# downloading it. Files are named like the raw_*.csv work files without the
+# "raw_" prefix, e.g. mailbox_usage.csv, email_activity_7d.csv.
+$script:Offline = [bool]$OfflinePath
+$script:OfflinePath = $OfflinePath
+$script:OfflineMissing = [System.Collections.Generic.List[string]]::new()
+$script:OfflineBad = [System.Collections.Generic.List[string]]::new()
+
+$script:OfflineInputs = @(
+    @{ File = 'mailbox_usage.csv'; Key = 'User Principal Name';        Label = 'Mailbox usage (long period)';       Required = $true;  Days = 'Period' },
+    @{ File = 'email_activity.csv'; Key = 'User Principal Name';       Label = 'Email activity (long period)';      Required = $true;  Days = 'Period' },
+    @{ File = 'email_activity_7d.csv'; Key = 'User Principal Name';    Label = 'Email activity (7 days)';           Required = $true;  Days = 7 },
+    @{ File = 'onedrive_usage.csv'; Key = 'Owner Principal Name';       Label = 'OneDrive usage (long period)';      Required = $true;  Days = 'Period' },
+    @{ File = 'onedrive_activity.csv'; Key = 'User Principal Name';    Label = 'OneDrive activity (long period)';   Required = $true;  Days = 'Period' },
+    @{ File = 'onedrive_activity_7d.csv'; Key = 'User Principal Name'; Label = 'OneDrive activity (7 days)';        Required = $true;  Days = 7 },
+    @{ File = 'sharepoint_usage.csv'; Key = 'Site URL';     Label = 'SharePoint site usage (long period)'; Required = $true; Days = 'Period' },
+    @{ File = 'sharepoint_usage_7d.csv'; Key = 'Site URL';  Label = 'SharePoint site usage (7 days)';    Required = $true;  Days = 7 },
+    @{ File = 'teams_team_activity.csv'; Key = 'Team Id';  Label = 'Teams team activity (long period)'; Required = $false; Days = 'Period' }
+)
+
+function Test-OfflineInputs {
+    param([string]$Path, [string]$Period)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw "-OfflinePath '$Path' is not a folder that exists." }
+    $expectedLong = [int]($Period -replace '[^0-9]', '')
+    Write-Host "`n--- Offline mode: checking exported reports in $Path ---" -ForegroundColor Yellow
+    $missingRequired = @()
+    foreach ($in in $script:OfflineInputs) {
+        $f = Join-Path $Path $in.File
+        if (-not (Test-Path -LiteralPath $f) -or (Get-Item -LiteralPath $f).Length -eq 0) {
+            $tag = if ($in.Required) { 'MISSING (required)' } else { 'missing (optional)' }
+            Write-Host ("  {0,-38} {1}" -f $in.Label, $tag) -ForegroundColor $(if ($in.Required) { 'Red' } else { 'DarkYellow' })
+            if ($in.Required) { $missingRequired += $in.File } else { $script:OfflineMissing.Add($in.File) }
+            continue
+        }
+        # Wrong-export guard: every report must contain its key column (e.g. the Teams
+        # chart export has only daily team counts, not one row per team).
+        try {
+            $h = (Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction Stop) -replace '^\xEF\xBB\xBF|^\uFEFF', ''
+            $cols = @($h -split ',') | ForEach-Object { $_.Trim().Trim('"') }
+        } catch { $cols = @() }
+        if ($cols -notcontains $in.Key) {
+            $why = "wrong export - no '$($in.Key)' column (found: $((@($cols) | Select-Object -First 6) -join ', '))"
+            Write-Host ("  {0,-38} NOT USABLE: {1}" -f $in.Label, $why) -ForegroundColor $(if ($in.Required) { 'Red' } else { 'DarkYellow' })
+            if ($in.Required) { $missingRequired += "$($in.File) ($why)" } else { $script:OfflineMissing.Add($in.File); $script:OfflineBad.Add($in.File) }
+            continue
+        }
+        $sizeKb = [math]::Round((Get-Item -LiteralPath $f).Length / 1KB)
+        $note = ''
+        try {
+            $hdr = Get-Content -LiteralPath $f -TotalCount 2 -ErrorAction Stop
+            if ($hdr.Count -ge 2) {
+                $first = $hdr | ConvertFrom-Csv
+                $rp = $first.'Report Period'
+                $want = if ($in.Days -eq 'Period') { $expectedLong } else { [int]$in.Days }
+                if ($rp -and ([int]$rp) -ne $want) {
+                    $note = " WARNING: file is a $rp-day export, expected $want"
+                    Write-Warning "$($in.File) looks like a $rp-day export but $want days is expected. Re-export it with the right period or results will be skewed."
+                }
+            }
+        } catch { }
+        Write-Host ("  {0,-38} found ({1:N0} KB){2}" -f $in.Label, $sizeKb, $note) -ForegroundColor Gray
+    }
+    if ($missingRequired.Count -gt 0) {
+        throw ("Offline mode cannot continue - required export(s) missing from '{0}': {1}. See the 'Running offline' section of the README for where to find each report. (The 7-day files drive the recent-data/ABR recovery estimate and cannot be substituted.)" -f $Path, ($missingRequired -join ', '))
+    }
+    Write-Host "Offline mode: no sign-in, no Graph or Exchange connection will be made. Profile enrichment, Entra groups, Exact Team-site mapping and Detailed Sizing are not available." -ForegroundColor Magenta
+}
+
+function Import-OfflineReport {
+    param([string]$Label, [string]$OutFile)
+    $leaf = (Split-Path $OutFile -Leaf) -replace '^raw_', ''
+    $src = Join-Path $script:OfflinePath $leaf
+    if (($script:OfflineBad -notcontains $leaf) -and (Test-Path -LiteralPath $src) -and (Get-Item -LiteralPath $src).Length -gt 0) {
+        Copy-Item -LiteralPath $src -Destination $OutFile -Force
+        return
+    }
+    # Optional report not supplied: header-only file so the importer yields zero rows.
+    Set-Content -Path $OutFile -Value 'Report Refresh Date,Report Period' -Encoding UTF8
+}
+
+function Get-SignedInAccount {
+    if ($script:Offline) { return 'Offline (exported admin center reports)' }
+    return (Get-MgContext).Account
+}
+#endregion
+
 function Get-GraphReport {
     <#
         NEW v3.7.1: actually implements the fix the comment above
         $ProgressPreference always pointed at but never built - confirmed
-        2026-07-31 against a real tenant that a failed SharePoint site usage
+        2026-07-31 against a live tenant that a failed SharePoint site usage
         pull (this exact wrapper threw "did not produce a file") was
         immediately reproducible-but-harmless when re-run manually: the
         known PercentComplete overflow bug fired (non-terminating, but
@@ -1927,6 +2062,7 @@ function Get-GraphReport {
         [int] $MaxAttempts = 3,
         [int] $RetryDelaySeconds = 10
     )
+    if ($script:Offline) { Import-OfflineReport -Label $Label -OutFile $OutFile; return }
     $lastError = $null
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $lastError = $null
@@ -2132,7 +2268,7 @@ function Get-MailboxCriticality {
     # independent of whatever -Period the customer chose for scoring/
     # dormancy detection above. This is a second report pull (Graph reports
     # are tenant-wide per call, no way to scope by object), not a re-slice of
-    # the $Period pull. See RECOVERY-MODEL-METHODOLOGY.md.
+    # the $Period pull. See the Methodology tab.
     $activity7dFile = Join-Path $WorkDir 'raw_email_activity_7d.csv'
 
     Get-GraphReport -Label 'Mailbox usage' -OutFile $usageFile -Download { Get-MgReportMailboxUsageDetail -Period $Period -OutFile $usageFile -ErrorAction SilentlyContinue }
@@ -2397,7 +2533,8 @@ function Get-TeamsCriticality {
         [PSCustomObject]@{
             Workload          = 'Team'
             ObjectName        = Get-ColumnValue $t @('Team Name') ''
-            Identifier        = Get-ColumnValue $t @('Team Id') ''
+            # Concealed-names tenants export an all-zero Team Id for every team; fall back to the (unique, hashed) Team Name so rows stay distinct.
+            Identifier        = $(if ((Get-ColumnValue $t @('Team Id') '') -match '^[0\-]*$') { Get-ColumnValue $t @('Team Name') '' } else { Get-ColumnValue $t @('Team Id') '' })
             LastActivityDate  = Get-ColumnValue $t @('Last Activity Date') ''
             ActiveUsersCount  = $activeUsers
             ChannelMessages   = $channelMsgs
@@ -2415,7 +2552,7 @@ function Get-TeamsCriticality {
     # PowerShell collapses to $rows = $null rather than an empty array.
     # Without this guard, @($rows) would return a ONE-element array
     # containing $null instead of a true empty array - which is what caused
-    # a real customer's run to crash downstream with "Cannot bind argument
+    # a customer's run to crash downstream with "Cannot bind argument
     # to parameter 'Teams' because it is an empty collection" when that
     # value was later passed into a [Parameter(Mandatory)] [array] $Teams
     # parameter (see Get-ExactTeamSiteUrls and [AllowEmptyCollection()]
@@ -2480,518 +2617,941 @@ function Assert-ValidReportJson {
 }
 
 $script:ReportCss = @'
-:root {
-  --teal:#4DD2D2; --cyan:#2FCAFF; --green:#21DDAA; --blue:#0E5BCF;
-  --navy:#093565; --navy-dark:#0A2E57; --yellow:#FFBE49;
-  --mid-gray:#A4A9A8; --dark-gray:#6C7576; --white:#FFFFFF;
-  /* The one deliberate exception to "never use red for mere priority
-     ranking" in this report. Reserved for "exceeds RTO target" callouts -
-     missing a stated recovery-time commitment is a genuine negative
-     outcome, not just a ranking, so it earns a distinct, brand-consistent
-     red. */
-  --red-target:#E5484D;
+/* ==========================================================================
+   Recovery Assessment v2.0 - dark theme (Rubrik presentation template palette).
+   ALL colors in this file and in ReportCss.d/*.css come from the tokens below.
+   v1 was a light page with navy accents; v2 is dark navy with white text so the
+   two versions are obvious at a glance. @media print switches back to a light
+   scheme (see the end of this file) so PDF/print output stays readable.
+   ASCII only: this file is embedded in a PowerShell script.
+   ========================================================================== */
+:root[data-theme="dark"] {
+  /* ---- contract tokens ---- */
+  --bg-deep:#011E3A;       /* page */
+  --bg-navy:#0A2547;       /* panels, header, tab bar (softened v2.0: deeper than 122861) */
+  --bg-card:#122861;       /* cards, table headers, accordion heads (Rubrik navy; was brighter 152C7C) */
+  --bg-raise:#1D3A94;      /* hover state on cards / rows */
+  --text:#FFFFFF;
+  --text-muted:#D9D9D9;
+  --text-dim:#BFBFBF;
+  --border:#3A4A80;
+  --border-soft:rgba(255,255,255,.12);
+  --accent-teal:#04CAB9;   /* primary accent, Group 1 */
+  --accent-cyan:#1BBCF3;
+  --accent-blue:#0C67DD;
+  --accent-mint:#BCFFFB;
+  --accent-lilac:#F4C9F4;
+  --accent-purple:#8242E8; /* Group 2 */
+  --alert:#FB3A73;         /* exceeds RTO target, flagged outliers */
+  --warn:#FF5A2E;
+  --ok:#00B46E;
+
+  /* ---- supporting tokens (derived; text variants are lighter so they pass contrast on dark panels) ---- */
+  --ok-text:#3EE0A0;
+  --amber:#FFBE49;
+  --alert-text:#FF8FB0;
+  --ok-bg:rgba(0,180,110,.16);   --ok-bd:rgba(0,180,110,.55);
+  --alert-bg:rgba(251,58,115,.16); --alert-bd:rgba(251,58,115,.55);
+  --warn-bg:rgba(255,190,73,.14);  --warn-bd:rgba(255,190,73,.50);
+  --info-bg:rgba(27,188,243,.14);  --info-bd:rgba(27,188,243,.50);
+  --shadow:0 1px 3px rgba(0,0,0,.35);
+  --shadow-lg:0 4px 18px rgba(0,0,0,.40);
+  --hatch-base:#2B3D7A;
+  --hatch-stripe:rgba(255,255,255,.14);
+  --inset:rgba(0,0,0,.28);       /* dark inset wells (tracks, bars) */
+  --inset-cell:#0A2547; --massc:#FF4D5E; --g1c:#04CAB9; --g2c:#8242E8; --g3c:#F4C9F4; --g4c:#6F7FA3; --g2t:#B993F5; --qpill:#FFB3C6;
+
+  /* surfaces: top-level cards use --surface, insets use --surface-2. Inside a panel that is already --bg-navy
+     (accordion bodies) the roles are swapped so nested cards still separate from their parent. */
+  --surface:var(--bg-navy);
+  --surface-2:var(--bg-card);
+  --zebra:rgba(255,255,255,.035);
+
+  /* ---- legacy names (3.x code and inline styles in the JS) remapped for a dark background ----
+     --navy / --dark-gray were TEXT colors on white (headings / muted text); here they are light.
+     --blue was link/accent text and button fill; here it is the cyan accent so text stays legible.
+     --white is only ever a literal white (it was never used as a card fill). */
+  --teal:#04CAB9; --cyan:#1BBCF3; --green:#3EE0A0; --blue:#1BBCF3;
+  --navy:#FFFFFF; --navy-dark:#011E3A; --yellow:#FFBE49;
+  --mid-gray:#8FA0BF; --dark-gray:#BFBFBF; --white:#FFFFFF;
+  /* The one deliberate exception to "never use red for mere priority ranking": exceeds-RTO-target callouts. */
+  /* used as TEXT by inline styles in the JS, so it is the lighter alert tint (4.5:1+ on every panel); borders/fills in CSS use --alert */
+  --red-target:#FF8FB0;
+  color-scheme: dark;
 }
-/* NEW: presenter/1920x1080 pass. Root font-size scales with viewport width
-   via clamp() - since virtually every rule in this stylesheet sizes text in
-   rem, this single rule makes ALL of it (headings, body, table cells) fill
-   out a large presenting display without needing separate clamp() calls on
-   every selector. Flat 15px below ~1000px viewport width, flat 18px above
-   ~1500px (covers the 1920px presenting case), smooth in between. */
+/* Light theme (default): v1-style light page with Rubrik navy text; the header stays navy so the logo reads. */
+:root, :root[data-theme="light"] {
+  --bg-deep:#E8ECF1; --bg-navy:#EEF1F4; --bg-card:#FFFFFF; --bg-raise:#E7EBEF;
+  --text:#1B2430; --text-muted:#4A5560; --text-dim:#6C7576; --border:#E2E6EA; --border-soft:#EDF0F3;
+  --accent-teal:#0A6764; --accent-cyan:#1B8FC4; --accent-blue:#0E5BCF; --accent-mint:#0A6764; --accent-lilac:#5B2DA8; --accent-purple:#5B2DA8;
+  --alert:#B5384F; --warn:#B9622E; --ok:#2F7D5B;
+  --ok-text:#2B6B50; --amber:#8A6420; --alert-text:#9C3040;
+  --ok-bg:rgba(10,122,79,.10); --ok-bd:rgba(10,122,79,.45);
+  --alert-bg:rgba(192,33,63,.08); --alert-bd:rgba(192,33,63,.45);
+  --warn-bg:rgba(194,74,27,.09); --warn-bd:rgba(194,74,27,.45);
+  --info-bg:rgba(10,111,168,.08); --info-bd:rgba(10,111,168,.40);
+  --shadow:0 1px 3px rgba(0,0,0,.08); --shadow-lg:0 6px 16px rgba(9,53,101,.14);
+  --hatch-base:#D7DCE1; --hatch-stripe:rgba(255,255,255,.55);
+  --inset:rgba(9,53,101,.07); --inset-cell:#E2E6EA; --massc:#B3122B; --g1c:#0F7F7C; --g2c:#5B2DA8; --g3c:#8A66C8; --g4c:#A4A9A8; --g2t:#5B2DA8; --qpill:#9C3040;
+  --surface:var(--bg-navy); --surface-2:var(--bg-card); --zebra:rgba(9,53,101,.03);
+  --teal:#0F8C89; --cyan:#2FCAFF; --green:#21DDAA; --blue:#0E5BCF; --navy:#093565; --navy-dark:#0A2E57; --yellow:#FFBE49;
+  --mid-gray:#A4A9A8; --dark-gray:#6C7576; --white:#FFFFFF; --red-target:#E5484D;
+  color-scheme: light;
+}
+/* v1-style cards: white with a soft shadow */
+:root:not([data-theme="dark"]) .xs-tile, :root:not([data-theme="dark"]) .xs-pill, :root:not([data-theme="dark"]) .xs-ladder { box-shadow:0 1px 3px rgba(0,0,0,.08); }
+/* The header is navy in both themes: keep its own copy of the dark tokens. */
+.header { --text:#FFFFFF; --text-muted:#D9D9D9; --bg-card:#122861; --bg-navy:#0A2547; --bg-deep:#011E3A; --border:#3A4A80; --accent-teal:#04CAB9; --accent-cyan:#1BBCF3; --accent-mint:#BCFFFB; --inset:rgba(0,0,0,.28); }
+/* Nested surfaces: panels whose own background is --bg-navy */
+.acc-body, .exec-collapsible-body, .controls-panel, .rt-group-section {
+  --surface:var(--bg-deep);
+  --surface-2:var(--bg-card);
+}
+/* presenter/1920x1080 pass: root font-size scales with viewport width via clamp() - virtually every rule here is in rem. */
 html { font-size: clamp(15px, 0.6vw + 9px, 18px); }
 * { box-sizing: border-box; }
-body { margin: 0; background: #F4F6F8; color: #1B2430; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-.rainbow-bar { height: 4px; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: linear-gradient(90deg, #4DD2D2, #2FCAFF, #8247DD, #21DDAA); }
-.header { margin-top: 4px; color: #fff; padding: 2.25rem 3rem 1.75rem; background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 60%, #03142E 100%); }
-.header .logo svg { height: 34px; width: auto; display: block; }
-.header .eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--teal); margin: 1.5rem 0 .5rem; }
-.header h1 { font-size: clamp(1.6rem, 3vw, 2.4rem); font-weight: 800; margin: 0 0 .6rem; line-height: 1.15; }
-.header .meta { font-size: .9rem; color: rgba(255,255,255,.7); display: flex; gap: 1.75rem; flex-wrap: wrap; }
-.header .meta b { color: rgba(255,255,255,.95); font-weight: 600; }
-.tabbar { position: sticky; top: 4px; z-index: 999; background: #fff; border-bottom: 1px solid #E2E6EA; padding: 0 3rem; display: flex; gap: .25rem; flex-wrap: wrap; box-shadow: 0 2px 6px rgba(0,0,0,.05); }
-.tab-btn { border: none; background: none; padding: .9rem 1rem; font-size: .85rem; font-weight: 700; color: var(--dark-gray); cursor: pointer; border-bottom: 3px solid transparent; }
-.tab-btn.active { color: var(--navy); border-bottom-color: var(--blue); }
-.tab-btn:hover { color: var(--navy); }
+body { margin: 0; background: var(--bg-deep); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow-x: hidden; }
+a { color: var(--accent-teal); }
+a:hover { color: var(--accent-mint); }
+::selection { background: var(--accent-teal); color: var(--bg-deep); }
+/* accent rule across the very top - the old multicolor bar, now teal to cyan to blue */
+.rainbow-bar { height: 4px; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: linear-gradient(90deg, var(--accent-teal), var(--accent-cyan), var(--accent-blue)); box-shadow: 0 0 10px rgba(4,202,185,.55); }
+.header { position: relative; margin-top: 4px; color: var(--text); padding: .9rem 3rem .9rem; background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-navy) 55%, var(--bg-deep) 100%); border-bottom: 3px solid var(--accent-teal); }
+.header .logo { position: absolute; right: calc(3rem - 34px); top: 50%; transform: translateY(-50%); pointer-events: none; }
+.header .logo svg { height: 84px; width: auto; display: block; }
+.header .eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--accent-teal); margin: .35rem 0 .3rem; }
+.header h1 { font-size: clamp(1.5rem, 2.6vw, 2.1rem); font-weight: 800; margin: 0 0 .4rem; line-height: 1.15; color: var(--text); }
+.header .meta { font-size: .9rem; color: var(--text-muted); display: flex; gap: .5rem 1.75rem; flex-wrap: wrap; align-items: center; }
+.header .meta b { color: var(--text); font-weight: 600; }
+.tabbar { position: sticky; top: 4px; z-index: 999; background: var(--bg-navy); border-bottom: 1px solid var(--border); padding: 0 3rem; display: flex; gap: .25rem; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0,0,0,.45); }
+.tab-btn { border: none; background: none; padding: .9rem 1rem; font-size: .85rem; font-weight: 700; color: var(--text-muted); cursor: pointer; border-bottom: 3px solid transparent; font-family: inherit; }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--accent-teal); background: rgba(255,255,255,.05); }
+.tab-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
 main { padding: 2rem 2.75rem 4rem; max-width: 1800px; margin: 0 auto; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
-h2 { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin: 0 0 1.25rem; }
+h2 { font-size: 1.3rem; font-weight: 800; color: var(--text); margin: 0 0 1.25rem; }
+h3, h4, h5 { color: var(--text); }
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.1rem; margin-bottom: 2rem; }
-.summary-card { display: block; background: #fff; border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 4px solid var(--accent, var(--blue)); text-decoration: none; color: inherit; cursor: pointer; transition: box-shadow .15s ease, transform .15s ease; }
-.summary-card:hover { box-shadow: 0 6px 16px rgba(9,53,101,.14); transform: translateY(-2px); }
-.summary-card h3 { margin: 0 0 .15rem; font-size: .82rem; text-transform: uppercase; letter-spacing: 1px; color: var(--dark-gray); }
-.summary-card .total { font-size: 2rem; font-weight: 800; color: var(--navy); margin: .1rem 0 .65rem; }
-.tier-bar { display: flex; height: 9px; border-radius: 6px; overflow: hidden; margin-bottom: .6rem; background: #EEF1F4; }
+.summary-card { display: block; background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: var(--shadow); border-left: 4px solid var(--accent, var(--accent-teal)); text-decoration: none; color: inherit; cursor: pointer; transition: box-shadow .15s ease, transform .15s ease; }
+.summary-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,.5); transform: translateY(-2px); background: var(--bg-raise); }
+.summary-card h3 { margin: 0 0 .15rem; font-size: .82rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+.summary-card .total { font-size: 2rem; font-weight: 800; color: var(--text); margin: .1rem 0 .65rem; }
+.tier-bar { display: flex; height: 9px; border-radius: 6px; overflow: hidden; margin-bottom: .6rem; background: var(--inset); }
 .tier-bar span { display: block; height: 100%; }
-.tier-legend { font-size: .74rem; color: var(--dark-gray); display: flex; flex-direction: column; gap: .2rem; }
+.tier-legend { font-size: .74rem; color: var(--text-muted); display: flex; flex-direction: column; gap: .2rem; }
 .tier-legend > div { display: flex; align-items: center; gap: .4rem; }
 .totals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
-.totals-cell { background: #fff; border-radius: 8px; padding: .8rem 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.totals-cell .label { font-size: .72rem; text-transform: uppercase; color: var(--dark-gray); letter-spacing: .5px; }
-.totals-cell .value { font-size: 1.3rem; font-weight: 800; color: var(--navy); }
+.totals-cell { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 8px; padding: .8rem 1rem; box-shadow: var(--shadow); }
+.totals-cell .label { font-size: .72rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: .5px; }
+.totals-cell .value { font-size: 1.3rem; font-weight: 800; color: var(--text); }
 
-/* NEW: Executive Summary hero sections (Financial Impact, Recovery Times) -
-   the point of this whole exercise is breaking critical objects into groups
-   to shrink recovery time, so those figures now lead the exec summary
-   instead of trailing after the workload cards. Bigger/bolder than
-   .totals-cell so they read as the headline, not a footnote. */
-.exec-hero-label { font-size: .95rem; font-weight: 800; color: var(--navy); margin: 0 0 .7rem; text-transform: uppercase; letter-spacing: .5px; }
+/* Executive Summary hero sections (Financial Impact, Recovery Times): bigger/bolder than .totals-cell. */
+.exec-hero-label { font-size: .95rem; font-weight: 800; color: var(--text); margin: 0 0 .7rem; text-transform: uppercase; letter-spacing: .5px; }
 .exec-hero-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.6rem; }
-.exec-hero-card { background: #fff; border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 4px solid var(--blue); }
-.exec-hero-card.savings { border-left-color: var(--green); }
-.exec-hero-card.exposure { border-left-color: var(--red-target); }
-.exec-hero-card .exec-hero-tag { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); font-weight: 700; }
-.exec-hero-card .exec-hero-value { font-size: 1.9rem; font-weight: 800; color: var(--navy); margin: .2rem 0; }
-.exec-hero-card .exec-hero-sub { font-size: .82rem; color: var(--dark-gray); }
-.exec-hero-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .55rem .85rem; margin: -.6rem 0 1.6rem; }
-.exec-hero-caption { font-size: .78rem; color: var(--dark-gray); margin: -.4rem 0 1rem; max-width: 70ch; }
-.exec-hero-linkout { font-size: .78rem; color: var(--blue); cursor: pointer; text-decoration: underline; }
+.exec-hero-card { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: var(--shadow); border-left: 4px solid var(--accent-teal); }
+.exec-hero-card.savings { border-left-color: var(--ok); }
+.exec-hero-card.exposure { border-left-color: var(--alert); }
+.exec-hero-card .exec-hero-tag { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); font-weight: 700; }
+.exec-hero-card .exec-hero-value { font-size: 1.9rem; font-weight: 800; color: var(--text); margin: .2rem 0; }
+.exec-hero-card .exec-hero-sub { font-size: .82rem; color: var(--text-muted); }
+.exec-hero-note { font-size: .78rem; color: var(--text-muted); background: var(--surface-2); border-radius: 8px; padding: .55rem .85rem; margin: -.6rem 0 1.6rem; }
+.exec-hero-caption { font-size: .78rem; color: var(--text-muted); margin: -.4rem 0 1rem; max-width: 70ch; }
+.exec-hero-linkout { font-size: .78rem; color: var(--accent-teal); cursor: pointer; text-decoration: underline; }
 
-/* NEW: Financial Impact as a before/after comparison, closed with a bold
-   savings punchline - per feedback 2026-07-15, this is the clearest way to
-   show ABR's value: it doesn't change TOTAL recovery time, it changes how
-   much downtime cost you accrue before your most critical data is back.
-   Two cards side by side (Mass Recovery "before" vs ABR "after"), then one
-   bold closing line with $ saved AND a % reduction (percentages read faster
-   than raw dollars regardless of company size). */
+/* Financial Impact as a before/after comparison with a savings punchline. */
 .exec-fin-compare { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.exec-fin-compare-card { flex: 1 1 240px; background: #fff; border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 4px solid var(--red-target); }
-.exec-fin-compare-card.after { border-left-color: var(--blue); }
-.exec-fin-compare-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); font-weight: 700; }
-.exec-fin-compare-time { font-size: 1.7rem; font-weight: 800; color: var(--navy); margin: .2rem 0; }
-.exec-fin-compare-cost { font-size: 1rem; font-weight: 700; color: #2B3542; }
+.exec-fin-compare-card { flex: 1 1 240px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: var(--shadow); border-left: 4px solid var(--alert); }
+.exec-fin-compare-card.after { border-left-color: var(--accent-teal); }
+.exec-fin-compare-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); font-weight: 700; }
+.exec-fin-compare-time { font-size: 1.7rem; font-weight: 800; color: var(--text); margin: .2rem 0; }
+.exec-fin-compare-cost { font-size: 1rem; font-weight: 700; color: var(--text-muted); }
 .exec-fin-compare-arrow { font-size: 1.6rem; color: var(--mid-gray); flex: 0 0 auto; }
-.exec-fin-punchline { background: #EDFBF6; border: 1px solid #BEEFDD; border-radius: 10px; padding: .9rem 1.3rem; font-size: 1rem; font-weight: 600; color: #0A6B4E; margin-bottom: 1.6rem; }
+.exec-fin-punchline { background: var(--ok-bg); border: 1px solid var(--ok-bd); border-radius: 10px; padding: .9rem 1.3rem; font-size: 1rem; font-weight: 600; color: var(--ok-text); margin-bottom: 1.6rem; }
 .exec-fin-punchline b { font-size: 1.35rem; }
-/* NEW v3.4.0: time-first headline, per feedback 2026-07-17 - leads with
-   "your most critical data is usable in X instead of Y" before any dollar
-   figure, since pairing "$ saved" with "without changing total recovery
-   time" read as muddy to an exec ("so I still wait Y?"). Time is the hook;
-   dollars below it are supporting evidence. Shown even when $/hour isn't
-   set, since the time comparison stands on its own. */
-.exec-fin-headline { font-size: 1.15rem; font-weight: 700; color: var(--navy); margin: 0 0 1.2rem; max-width: 68ch; }
-.exec-fin-headline b { color: #0A6B4E; font-size: 1.35rem; }
-/* Recovery Timeline under Financial Impact - v3.3.0 (2026-07-16), third
-   redesign of the day. v3.1.1: two stacked rows, ABR on top, NOT drawn to
-   scale. v3.1.2: combined into one bar, still not to scale. v3.3.0 (this
-   version) flips the whole premise per a reference mockup the user
-   provided: go BACK to genuinely-to-scale, real-timescale tracks, but lean
-   into that instead of fighting it - "Without ABR" is a full-width bar
-   (it's the whole timescale, `model.fullRestoreMin`); "With ABR" is the
-   SAME timescale, so Groups 1/2/3 collapse to a small chip cluster near the
-   left edge, followed by a large, deliberately de-emphasized "rest of
-   tenant continues in background" fill. The tiny cluster IS the point - the
-   empty space next to it is what ABR bought you. A floor (min-width, plus a
-   minimum overall cluster share) keeps the cluster and each of Groups 1/2/3
-   individually visible rather than collapsing to literal sub-pixel widths,
-   since the real proportion (a few hours out of ~19 days) would otherwise
-   render as nothing at all. Real numbers are always available via tooltips
-   and the bold gap callout below the tracks. */
+/* time-first headline: leads with "critical data usable in X instead of Y" before any dollar figure */
+.exec-fin-headline { font-size: 1.15rem; font-weight: 700; color: var(--text); margin: 0 0 1.2rem; max-width: 68ch; }
+.exec-fin-headline b { color: var(--ok-text); font-size: 1.35rem; }
+/* Recovery Timeline under Financial Impact: genuinely to-scale tracks. "Without ABR" is a full-width hatched bar; "With ABR"
+   is the same timescale with Groups 1/2/3 as a small chip cluster followed by a de-emphasized background-restore fill. */
 .fin-timeline { margin-top: 1.6rem; }
-.fin-tl-title { font-size: 1rem; font-weight: 800; color: var(--navy); margin: 0 0 .3rem; }
-.fin-tl-desc { font-size: .85rem; color: var(--dark-gray); margin: 0 0 1.3rem; max-width: 62ch; }
+.fin-tl-title { font-size: 1rem; font-weight: 800; color: var(--text); margin: 0 0 .3rem; }
+.fin-tl-desc { font-size: .85rem; color: var(--text-muted); margin: 0 0 1.3rem; max-width: 62ch; }
 .fin-tl-track-block { margin-bottom: 1.3rem; }
-.fin-tl-track-label { font-size: .95rem; font-weight: 800; color: var(--navy); margin: 0 0 .1rem; }
-.fin-tl-track-sublabel { font-size: .8rem; color: var(--dark-gray); margin: 0 0 .5rem; }
+.fin-tl-track-label { font-size: .95rem; font-weight: 800; color: var(--text); margin: 0 0 .1rem; }
+.fin-tl-track-sublabel { font-size: .8rem; color: var(--text-muted); margin: 0 0 .5rem; }
 .fin-tl-track-row { display: flex; align-items: center; gap: .7rem; }
-.fin-tl-track-bar { flex: 1 1 auto; height: 52px; border-radius: 10px; overflow: hidden; display: flex; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-/* NEW v3.4.1: both bars now fade to transparent on their trailing edge
-   (mask-image), per feedback 2026-07-17 - visually reinforces that both
-   rows run out to the SAME real endpoint (the end label just past the
-   fade), rather than the hatched bar looking like it just stops. Applied
-   to the hatched "Without ABR" bar and, separately, to .fin-tl-bg-fill (the
-   "With ABR" row's trailing background-restore portion), which now also
-   carries the same diagonal-hatch pattern - both rows use identical
-   visual language for "still restoring, in random order, off toward the
-   same total." */
-.fin-tl-track-bar.hatched { background-color: #D7DCE1; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.55) 0, rgba(255,255,255,.55) 7px, transparent 7px, transparent 14px); padding: 0 1.2rem; mask-image: linear-gradient(to right, #000 0%, #000 65%, transparent 97%); -webkit-mask-image: linear-gradient(to right, #000 0%, #000 65%, transparent 97%); }
-.fin-tl-track-bar-text { font-weight: 700; font-size: .92rem; color: #2B3542; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fin-tl-track-endlabel { flex: 0 0 auto; font-size: 1.15rem; font-weight: 800; color: var(--navy); white-space: nowrap; display: flex; align-items: center; gap: .3rem; }
+.fin-tl-track-bar { flex: 1 1 auto; height: 52px; border-radius: 10px; overflow: hidden; display: flex; align-items: center; box-shadow: var(--shadow); }
+/* both bars fade out on their trailing edge (mask-image) to show they run to the same real endpoint */
+.fin-tl-track-bar.hatched { background-color: var(--hatch-base); background-image: repeating-linear-gradient(45deg, var(--hatch-stripe) 0, var(--hatch-stripe) 7px, transparent 7px, transparent 14px); padding: 0 1.2rem; mask-image: linear-gradient(to right, #000 0%, #000 65%, transparent 97%); -webkit-mask-image: linear-gradient(to right, #000 0%, #000 65%, transparent 97%); }
+.fin-tl-track-bar-text { font-weight: 700; font-size: .92rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-tl-track-endlabel { flex: 0 0 auto; font-size: 1.15rem; font-weight: 800; color: var(--text); white-space: nowrap; display: flex; align-items: center; gap: .3rem; }
 .fin-tl-track-endlabel .arrow { color: var(--mid-gray); font-size: 1.1rem; }
-.fin-tl-track-bar.with-abr { background: #F0F3F6; padding: 0; }
+.fin-tl-track-bar.with-abr { background: var(--surface-2); padding: 0; }
 .fin-tl-chip-cluster { flex: 0 0 auto; display: flex; align-items: stretch; height: 100%; gap: 2px; padding: 6px; box-sizing: border-box; }
 .fin-tl-chip { border-radius: 4px; min-width: 6px; }
-.fin-tl-bg-fill { flex: 1 1 auto; height: 100%; display: flex; align-items: center; justify-content: center; color: #5A6B7B; font-size: .82rem; font-style: italic; white-space: nowrap; overflow: hidden; background-color: #D7DCE1; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.55) 0, rgba(255,255,255,.55) 7px, transparent 7px, transparent 14px); mask-image: linear-gradient(to right, #000 0%, #000 40%, transparent 96%); -webkit-mask-image: linear-gradient(to right, #000 0%, #000 40%, transparent 96%); }
-.fin-tl-gap-callout { font-size: .95rem; color: var(--dark-gray); margin: 0 0 1.2rem; }
-.fin-tl-gap-callout b { color: #0A6B4E; font-size: 1.05rem; }
+.fin-tl-bg-fill { flex: 1 1 auto; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: .82rem; font-style: italic; white-space: nowrap; overflow: hidden; background-color: var(--hatch-base); background-image: repeating-linear-gradient(45deg, var(--hatch-stripe) 0, var(--hatch-stripe) 7px, transparent 7px, transparent 14px); mask-image: linear-gradient(to right, #000 0%, #000 40%, transparent 96%); -webkit-mask-image: linear-gradient(to right, #000 0%, #000 40%, transparent 96%); }
+.fin-tl-gap-callout { font-size: .95rem; color: var(--text-muted); margin: 0 0 1.2rem; }
+.fin-tl-gap-callout b { color: var(--ok-text); font-size: 1.05rem; }
 .fin-tl-legend { display: flex; flex-wrap: wrap; gap: .45rem 1.5rem; margin: .6rem 0 .5rem; }
-.fin-tl-legend-item { display: flex; align-items: center; gap: .45rem; font-size: .8rem; color: var(--navy); }
+.fin-tl-legend-item { display: flex; align-items: center; gap: .45rem; font-size: .8rem; color: var(--text); }
 .fin-tl-swatch { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
 .fin-tl-legend-item b { font-weight: 800; }
-.fin-tl-legend-item .fin-tl-sub { color: var(--dark-gray); font-weight: 400; }
-.fin-tl-track-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .55rem .85rem; margin-bottom: 1.6rem; }
-/* NEW v3.4.0: Dormant Data callout, per feedback 2026-07-17 - "Dormant: N"
-   was sitting as one equally-weighted cell in the tier totals grid, easy to
-   miss even though it's often the single most striking fact in the whole
-   report: a large majority of a tenant can be genuinely dormant, which Mass
-   Recovery restores blindly and in full every time, while ABR already knows
-   to leave it for last. Uses the same amber TIER_META color already used
-   for the Dormant tier everywhere else, so it reads as "the same thing,"
-   just promoted to headline weight. */
-.exec-dormant-headline { font-size: 1rem; color: var(--navy); margin: 0 0 1rem; max-width: 72ch; }
-.exec-dormant-headline b { font-size: 1.3rem; color: #B8860B; }
+.fin-tl-legend-item .fin-tl-sub { color: var(--text-muted); font-weight: 400; }
+.fin-tl-track-note { font-size: .78rem; color: var(--text-muted); background: var(--surface-2); border-radius: 8px; padding: .55rem .85rem; margin-bottom: 1.6rem; }
+/* Low-activity (Group 4) callout classes keep their historical exec-dormant-* names; wording is set by the JS. */
+.exec-dormant-headline { font-size: 1rem; color: var(--text); margin: 0 0 1rem; max-width: 72ch; }
+.exec-dormant-headline b { font-size: 1.3rem; color: var(--amber); }
 .exec-dormant-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; margin-bottom: 1.6rem; }
-.exec-dormant-cell { background: #fff; border-radius: 10px; padding: .9rem 1.1rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 4px solid #FFBE49; }
-.exec-dormant-pct { font-size: 1.5rem; font-weight: 800; color: var(--navy); }
-.exec-dormant-label { font-size: .78rem; font-weight: 700; color: var(--dark-gray); text-transform: uppercase; letter-spacing: .5px; margin-top: .2rem; }
-.exec-dormant-sub { font-size: .78rem; color: var(--dark-gray); margin-top: .15rem; }
-/* NEW v3.10.1: per-workload Group 4 Mass Recovery time, added below the
-   existing count line - see renderExecFinancialAndRecoveryTop for what this
-   number represents (that workload's OWN full dataset mass-recovered in one
-   undifferentiated batch, not just Group 4's slice - Group 4 has no ABR
-   priority, so it rides along with however long that workload's Mass
-   Recovery job as a whole takes). */
-.exec-dormant-time { font-size: .78rem; color: var(--navy); font-weight: 700; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed #e2e2e2; }
-.exec-dormant-time-na { font-size: .72rem; color: var(--dark-gray); font-style: italic; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed #e2e2e2; }
-/* NEW v3.6.0: Dormant Data collapsible - moved to the bottom of the Report
-   tab and collapsed by default, per feedback 2026-07-22. This section is
-   context/color for what ABR already deprioritizes, not part of the primary
-   financial/recovery-time narrative above it - collapsing it by default
-   keeps the tab's reading order focused on the numbers that drive the
-   business case, while still making the detail one click away. */
-.exec-collapsible { margin-top: 1.8rem; background: #F0F3F6; border-radius: 12px; overflow: hidden; }
-.exec-collapsible-toggle { display: flex; align-items: center; gap: .7rem; width: 100%; background: none; border: none; cursor: pointer; padding: 1rem 1.2rem; text-align: left; font-family: inherit; }
-.exec-collapsible-toggle:hover { background: rgba(9,53,101,.04); }
-.exec-collapsible-chevron { display: inline-block; font-size: .75rem; color: var(--dark-gray); transition: transform .15s ease; flex: 0 0 auto; }
+.exec-dormant-cell { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 10px; padding: .9rem 1.1rem; box-shadow: var(--shadow); border-left: 4px solid var(--amber); }
+.exec-dormant-pct { font-size: 1.5rem; font-weight: 800; color: var(--text); }
+.exec-dormant-label { font-size: .78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; margin-top: .2rem; }
+.exec-dormant-sub { font-size: .78rem; color: var(--text-muted); margin-top: .15rem; }
+.exec-dormant-time { font-size: .78rem; color: var(--text); font-weight: 700; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--border); }
+.exec-dormant-time-na { font-size: .72rem; color: var(--text-muted); font-style: italic; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed var(--border); }
+/* Generic collapsible (collapsed by default, one click to expand). */
+.exec-collapsible { margin-top: 1.8rem; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; }
+.exec-collapsible-toggle { display: flex; align-items: center; gap: .7rem; width: 100%; background: none; border: none; cursor: pointer; padding: 1rem 1.2rem; text-align: left; font-family: inherit; color: var(--text); }
+.exec-collapsible-toggle:hover { background: rgba(255,255,255,.06); }
+.exec-collapsible-chevron { display: inline-block; font-size: .75rem; color: var(--text-muted); transition: transform .15s ease; flex: 0 0 auto; }
 .exec-collapsible-toggle[aria-expanded="true"] .exec-collapsible-chevron { transform: rotate(90deg); }
-.exec-collapsible-title { font-weight: 800; color: var(--navy); font-size: .95rem; flex: 1 1 auto; }
-.exec-collapsible-summary { font-size: .85rem; color: var(--dark-gray); flex: 0 0 auto; }
+.exec-collapsible-title { font-weight: 800; color: var(--text); font-size: .95rem; flex: 1 1 auto; }
+.exec-collapsible-summary { font-size: .85rem; color: var(--text-muted); flex: 0 0 auto; }
 .exec-collapsible-body { padding: 0 1.2rem 1.4rem; }
 .exec-collapsible-body[hidden] { display: none; }
-/* NEW v3.5.0: lean Executive Summary tab - three big stat tiles (Time to
-   Critical Data, Downtime Cost Avoided, Dormant Data), a one-sentence
-   mechanism callout, and a link down to the Report tab for everything
-   else. Deliberately much bigger/bolder than .exec-hero-card - this tab
-   has nothing else competing for attention, so the numbers can be huge. */
+/* Lean Executive Summary: big stat tiles, mechanism callout, link to the Report tab. */
 .exec-lean-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
-.exec-lean-tile { background: #fff; border-radius: 16px; padding: 2.2rem 2rem; box-shadow: 0 4px 18px rgba(9,53,101,.08); border-top: 6px solid var(--blue); }
-.exec-lean-tile.money { border-top-color: #0A6B4E; }
-.exec-lean-tile.dormant { border-top-color: #FFBE49; }
-.exec-lean-tile-label { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .8px; color: var(--dark-gray); margin-bottom: .6rem; }
-.exec-lean-tile-value { font-size: 3.2rem; font-weight: 900; color: var(--navy); line-height: 1; margin-bottom: .5rem; }
-.exec-lean-tile.money .exec-lean-tile-value { color: #0A6B4E; }
-.exec-lean-tile.dormant .exec-lean-tile-value { color: #B8860B; }
-.exec-lean-tile-sub { font-size: .95rem; color: #2B3542; }
-.exec-lean-tile-sub b { color: var(--navy); }
-.exec-lean-mechanism { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%); color: #fff; border-radius: 16px; padding: 1.8rem 2.2rem; font-size: 1.1rem; font-weight: 600; line-height: 1.5; margin-bottom: 1.6rem; }
-.exec-lean-mechanism b { color: var(--teal); }
-.exec-lean-footer-link { font-size: .9rem; color: var(--dark-gray); text-align: right; }
-/* NEW: Recovery Ladder - single to-scale horizontal timeline for the lean
-   Executive Summary tab, added per feedback 2026-08-10: leadership needs
-   to see how Group 1/2/3 stack up in sequence, not just the single Group 1
-   "Time to Critical Data" number. Time value renders ABOVE the track/pin
-   (never on top of it) per direct feedback - the pin sits on the track,
-   the sub-label sits below. */
-.recovery-ladder { background: #fff; border-radius: 16px; padding: 1.8rem 2rem 1.6rem; box-shadow: 0 4px 18px rgba(9,53,101,.08); margin-bottom: 1.6rem; }
-.rl-title { font-size: 1rem; font-weight: 800; color: var(--navy); margin: 0 0 .2rem; }
-.rl-sub { font-size: .82rem; color: var(--dark-gray); margin: 0 0 2.6rem; }
+.exec-lean-tile { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 16px; padding: 2.2rem 2rem; box-shadow: var(--shadow-lg); border-top: 6px solid var(--accent-teal); }
+.exec-lean-tile.money { border-top-color: var(--ok); }
+.exec-lean-tile.dormant { border-top-color: var(--amber); }
+.exec-lean-tile-label { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .8px; color: var(--text-muted); margin-bottom: .6rem; }
+.exec-lean-tile-value { font-size: 3.2rem; font-weight: 900; color: var(--text); line-height: 1; margin-bottom: .5rem; }
+.exec-lean-tile.money .exec-lean-tile-value { color: var(--ok-text); }
+.exec-lean-tile.dormant .exec-lean-tile-value { color: var(--amber); }
+.exec-lean-tile-sub { font-size: .95rem; color: var(--text-muted); }
+.exec-lean-tile-sub b { color: var(--text); }
+.exec-lean-mechanism { background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-navy) 100%); border: 1px solid var(--border); color: var(--text); border-radius: 16px; padding: 1.8rem 2.2rem; font-size: 1.1rem; font-weight: 600; line-height: 1.5; margin-bottom: 1.6rem; }
+.exec-lean-mechanism b { color: var(--accent-teal); }
+.exec-lean-footer-link { font-size: .9rem; color: var(--text-muted); text-align: right; }
+/* Recovery Ladder: single to-scale horizontal timeline. Time value renders ABOVE the track/pin, sub-label BELOW. */
+.recovery-ladder { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 16px; padding: 1.8rem 2rem 1.6rem; box-shadow: var(--shadow-lg); margin-bottom: 1.6rem; }
+.rl-title { font-size: 1rem; font-weight: 800; color: var(--text); margin: 0 0 .2rem; }
+.rl-sub { font-size: .82rem; color: var(--text-muted); margin: 0 0 2.6rem; }
 .rl-track-wrap { position: relative; height: 112px; margin: 0 4px; }
-.rl-track { position: absolute; top: 42px; left: 0; right: 0; height: 10px; border-radius: 6px; overflow: hidden; display: flex; box-shadow: inset 0 1px 2px rgba(0,0,0,.08); }
+.rl-track { position: absolute; top: 42px; left: 0; right: 0; height: 10px; border-radius: 6px; overflow: hidden; display: flex; background: var(--inset); box-shadow: inset 0 1px 2px rgba(0,0,0,.4); }
 .rl-seg { height: 100%; }
-.rl-seg.mass { background-color: #D7DCE1; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.6) 0, rgba(255,255,255,.6) 6px, transparent 6px, transparent 12px); }
+.rl-seg.mass { background-color: var(--hatch-base); background-image: repeating-linear-gradient(45deg, var(--hatch-stripe) 0, var(--hatch-stripe) 6px, transparent 6px, transparent 12px); }
+.rl-seg.locked { background-color: var(--hatch-base); background-image: repeating-linear-gradient(135deg, var(--hatch-base) 0, var(--hatch-base) 8px, var(--border) 8px, var(--border) 16px); }
 .rl-flag { position: absolute; top: 0; width: 132px; transform: translateX(-50%); text-align: center; }
-.rl-flag .rl-time { position: absolute; top: 0; left: 0; right: 0; font-weight: 800; font-size: 1.05rem; color: var(--navy); white-space: nowrap; }
-.rl-flag.mass .rl-time { color: var(--dark-gray); }
-.rl-pin { position: absolute; top: 36px; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1.5px rgba(9,53,101,.15); z-index: 2; }
-.rl-pin.mass { background: #fff; border-color: #8A97A6; box-shadow: none; width: 14px; height: 14px; top: 37px; }
-.rl-flag .rl-label { position: absolute; top: 62px; left: 0; right: 0; font-size: .76rem; color: var(--dark-gray); line-height: 1.25; }
-.rl-note { margin-top: .6rem; font-size: .8rem; color: var(--dark-gray); line-height: 1.4; background: #F4F7FA; border-radius: 8px; padding: .55rem .8rem; }
-/* NEW v3.5.0: Downtime Cost Avoided by Group table (Report tab) - extends
-   the existing Group-1-vs-Full comparison to show cost avoided at every
-   milestone, not just Group 1. */
+.rl-flag .rl-time { position: absolute; top: 0; left: 0; right: 0; font-weight: 800; font-size: 1.05rem; color: var(--text); white-space: nowrap; }
+.rl-flag.mass .rl-time { color: var(--text-muted); }
+.rl-pin { position: absolute; top: 36px; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; border: 3px solid var(--text); box-shadow: 0 0 0 1.5px rgba(0,0,0,.45); z-index: 2; }
+.rl-pin.mass { background: var(--bg-deep); border-color: var(--mid-gray); box-shadow: none; width: 14px; height: 14px; top: 37px; }
+.rl-pin.locked { background: var(--border); }
+.rl-flag .rl-label { position: absolute; top: 62px; left: 0; right: 0; font-size: .76rem; color: var(--text-muted); line-height: 1.25; }
+.rl-note { margin-top: .6rem; font-size: .8rem; color: var(--text-muted); line-height: 1.4; background: var(--surface-2); border-radius: 8px; padding: .55rem .8rem; }
+/* Group tables used on the Report tab and Sizing tab. */
 .exec-cost-table-wrap { overflow-x: auto; margin-bottom: 1.6rem; }
-.exec-cost-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.exec-cost-table th { text-align: left; padding: .55rem .85rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); background: #F0F3F6; }
-.exec-cost-table td { padding: .55rem .85rem; font-size: .85rem; border-top: 1px solid #EEF1F4; color: #2B3542; }
-.exec-cost-table tr.total-row td { font-weight: 700; color: var(--navy); border-top: 2px solid #D7DCE1; }
-/* NEW: Sizing tab - Exchange/OneDrive/SharePoint/Discovery Summary tables,
-   reusing .exec-cost-table for visual consistency with the rest of the
-   report. Tenant-wide totals, independent of criticality tiers/weights -
-   rendered once at bootstrap (see recomputeAll), not re-rendered on
-   slider/weight changes since none of this data is tier-dependent. */
+.exec-cost-table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+.exec-cost-table th { text-align: left; padding: .55rem .85rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); background: var(--surface-2); }
+.exec-cost-table td { padding: .55rem .85rem; font-size: .85rem; border-top: 1px solid var(--border-soft); color: var(--text); }
+.exec-cost-table tr.total-row td { font-weight: 700; color: var(--text); border-top: 2px solid var(--border); }
 .sizing-section { margin-bottom: 2rem; }
-.sizing-section h3 { font-size: .95rem; font-weight: 800; color: var(--navy); margin: 0 0 .6rem; }
-.sizing-discovery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.2rem; background: #fff; border-radius: 10px; padding: 1.3rem 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: .6rem; }
-.sizing-discovery-cell .label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); margin-bottom: .3rem; }
-.sizing-discovery-cell .value { font-size: 1.6rem; font-weight: 800; color: var(--navy); }
-.sizing-footnote { font-size: .78rem; color: var(--dark-gray); font-style: italic; margin: .6rem 0 1.2rem; }
-.controls-panel { background: #fff; border-radius: 10px; padding: 1.1rem 1.3rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.controls-panel h4 { margin: 0 0 .6rem; font-size: .85rem; color: var(--navy); }
+.sizing-section h3 { font-size: .95rem; font-weight: 800; color: var(--text); margin: 0 0 .6rem; }
+.sizing-discovery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.2rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: 10px; padding: 1.3rem 1.5rem; box-shadow: var(--shadow); margin-bottom: .6rem; }
+.sizing-discovery-cell .label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: .3rem; }
+.sizing-discovery-cell .value { font-size: 1.6rem; font-weight: 800; color: var(--text); }
+.sizing-footnote { font-size: .78rem; color: var(--text-muted); font-style: italic; margin: .6rem 0 1.2rem; }
+/* Controls (scoring weights, recovery inputs). */
+.controls-panel { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 10px; padding: 1.1rem 1.3rem; margin-bottom: 1.5rem; box-shadow: var(--shadow); }
+.controls-panel h4 { margin: 0 0 .6rem; font-size: .85rem; color: var(--text); }
 .control-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; flex-wrap: wrap; }
-.control-row label { font-size: .78rem; color: var(--dark-gray); min-width: 150px; }
+.control-row label { font-size: .78rem; color: var(--text-muted); min-width: 150px; }
 .control-row input[type=range] { flex: 1; max-width: 220px; }
-.control-row input[type=number], .control-row input[type=text], .control-row select { border: 1px solid #D7DCE1; border-radius: 6px; padding: .3rem .5rem; font-size: .8rem; }
-.control-row .valdisp { font-size: .78rem; font-weight: 700; color: var(--navy); min-width: 40px; }
+.control-row .valdisp { font-size: .78rem; font-weight: 700; color: var(--text); min-width: 40px; }
+/* All text-like inputs, selects and textareas share one dark style. */
+input[type=number], input[type=text], input[type=search], select, textarea, .control-row input[type=number], .control-row input[type=text], .control-row select {
+  background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: .3rem .5rem; font-size: .8rem; font-family: inherit; }
+input::placeholder, textarea::placeholder { color: var(--text-dim); opacity: 1; }
+select option { background: var(--bg-deep); color: var(--text); }
+input[type=range] { accent-color: var(--accent-teal); }
+input[type=checkbox], input[type=radio] { accent-color: var(--accent-teal); }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+/* Locked / disabled controls (Preview keeps sliders visible but not changeable): visibly greyed. */
+input:disabled, select:disabled, textarea:disabled, button:disabled, .is-locked, [aria-disabled="true"] { opacity: .5; cursor: not-allowed; filter: grayscale(.6); }
+input[type=range]:disabled { accent-color: var(--mid-gray); }
+.locked-note { font-size: .74rem; color: var(--text-muted); font-style: italic; margin: .3rem 0 .8rem; }
 
-/* NEW: scoring-controls redesign - percentage weights (was raw 0-1 decimals)
-   with a per-workload 100%-cap, plus the Live Impact Preview panel next to
-   it. See buildControlsSliders()/onWeightSlide()/buildLiveImpactPreview(). */
+/* scoring-controls: percentage weights with a per-workload 100% cap, next to the Live Impact Preview */
 .controls-panel-grid { display: grid; grid-template-columns: minmax(360px, 480px) 1fr; gap: 1.6rem; align-items: start; margin-bottom: 1.5rem; }
 @media (max-width: 900px) { .controls-panel-grid { grid-template-columns: 1fr; } }
-.panel-title { margin: 0 0 .2rem; font-size: .95rem; color: var(--navy); font-weight: 800; }
-.panel-sub { margin: 0 0 1.1rem; font-size: .78rem; color: var(--dark-gray); max-width: 60ch; line-height: 1.4; }
-.panel-sub b { color: var(--navy); }
-.wd-block { margin-bottom: 1rem; border: 1px solid #EBEEF1; border-radius: 8px; padding: .75rem .85rem .6rem; }
+.panel-title { margin: 0 0 .2rem; font-size: .95rem; color: var(--text); font-weight: 800; }
+.panel-sub { margin: 0 0 1.1rem; font-size: .78rem; color: var(--text-muted); max-width: 60ch; line-height: 1.4; }
+.panel-sub b { color: var(--text); }
+.wd-block { margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 8px; padding: .75rem .85rem .6rem; }
 .wd-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; }
-.wd-head b { font-size: .8rem; color: var(--navy); }
+.wd-head b { font-size: .8rem; color: var(--text); }
 .wd-total { font-size: .7rem; font-weight: 800; padding: .18rem .5rem; border-radius: 20px; letter-spacing: .3px; }
-.wd-total.ok { background: #E4F9F0; color: #128A5E; }
-.wd-total.warn { background: #FDEEDD; color: #C9781B; }
-.remaining-hint { font-size: .68rem; color: var(--dark-gray); margin-top: .2rem; }
-.remaining-hint.has-room { color: #128A5E; font-weight: 600; }
-.bonus-section { margin-top: 1.2rem; padding-top: .9rem; border-top: 1px dashed #D7DCE1; }
+.wd-total.ok { background: var(--ok-bg); color: var(--ok-text); border: 1px solid var(--ok-bd); }
+.wd-total.warn { background: var(--warn-bg); color: var(--amber); border: 1px solid var(--warn-bd); }
+.remaining-hint { font-size: .68rem; color: var(--text-muted); margin-top: .2rem; }
+.remaining-hint.has-room { color: var(--ok-text); font-weight: 600; }
+.bonus-section { margin-top: 1.2rem; padding-top: .9rem; border-top: 1px dashed var(--border); }
 .bonus-label-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
-.bonus-tag { font-size: .62rem; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #fff; background: var(--teal); padding: .15rem .45rem; border-radius: 4px; }
-.bonus-hint { font-size: .72rem; color: var(--dark-gray); margin: -.2rem 0 .7rem; }
-
-/* Editable title-weight keyword table (see buildTitleWeightTableHtml()). */
-.tw-table { margin: .5rem 0 .9rem; border: 1px solid #D7DCE1; border-radius: 8px; overflow: hidden; }
+.bonus-tag { font-size: .62rem; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: var(--bg-deep); background: var(--accent-teal); padding: .15rem .45rem; border-radius: 4px; }
+.bonus-hint { font-size: .72rem; color: var(--text-muted); margin: -.2rem 0 .7rem; }
+/* Editable title-weight keyword table. */
+.tw-table { margin: .5rem 0 .9rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .tw-head, .tw-row { display: grid; grid-template-columns: 1fr 74px 28px; gap: .5rem; align-items: center; padding: .35rem .6rem; }
-.tw-head { background: #F0F3F6; font-size: .66rem; font-weight: 700; color: var(--dark-gray); text-transform: uppercase; letter-spacing: .02em; }
-.tw-row { border-top: 1px solid #D7DCE1; }
-.tw-row input[type=text] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .5rem; font-size: .78rem; width: 100%; box-sizing: border-box; }
-.tw-row input[type=number] { border: 1px solid #D7DCE1; border-radius: 6px; padding: .28rem .3rem; font-size: .78rem; width: 100%; box-sizing: border-box; text-align: center; }
-.tw-rm { background: none; border: none; color: #C0392B; font-size: 1rem; cursor: pointer; line-height: 1; padding: 0; }
-.tw-add-row { padding: .4rem .6rem; border-top: 1px solid #D7DCE1; }
-.tw-add-row button { background: none; border: 1px dashed var(--blue); color: var(--blue); font-size: .72rem; font-weight: 700; border-radius: 6px; padding: .3rem .7rem; cursor: pointer; }
-.tw-add-row button:hover { background: #EAF4FF; }
-.tw-note { font-size: .68rem; color: var(--dark-gray); margin: -.3rem 0 .8rem; }
-
-.preview-card { background: #FAFBFC; border: 1px solid #EBEEF1; border-radius: 10px; padding: 1.1rem 1.3rem 1.3rem; }
+.tw-head { background: var(--surface-2); font-size: .66rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .02em; }
+.tw-row { border-top: 1px solid var(--border); }
+.tw-row input[type=text] { width: 100%; box-sizing: border-box; padding: .28rem .5rem; font-size: .78rem; }
+.tw-row input[type=number] { width: 100%; box-sizing: border-box; padding: .28rem .3rem; font-size: .78rem; text-align: center; }
+.tw-rm { background: none; border: none; color: var(--alert-text); font-size: 1rem; cursor: pointer; line-height: 1; padding: 0; }
+.tw-add-row { padding: .4rem .6rem; border-top: 1px solid var(--border); }
+.tw-add-row button { background: none; border: 1px dashed var(--accent-cyan); color: var(--accent-cyan); font-size: .72rem; font-weight: 700; border-radius: 6px; padding: .3rem .7rem; cursor: pointer; }
+.tw-add-row button:hover { background: var(--info-bg); }
+.tw-note { font-size: .68rem; color: var(--text-muted); margin: -.3rem 0 .8rem; }
+.preview-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.3rem 1.3rem; }
 .preview-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .15rem; }
-.preview-head h5 { margin: 0; font-size: .85rem; color: var(--navy); font-weight: 800; }
-.preview-live-dot { display: inline-flex; align-items: center; gap: .35rem; font-size: .68rem; font-weight: 700; color: #128A5E; text-transform: uppercase; letter-spacing: .4px; }
-.preview-live-dot span.dot { width: 6px; height: 6px; border-radius: 50%; background: #21DDAA; display: inline-block; animation: pv-pulse 1.6s infinite; }
+.preview-head h5 { margin: 0; font-size: .85rem; color: var(--text); font-weight: 800; }
+.preview-live-dot { display: inline-flex; align-items: center; gap: .35rem; font-size: .68rem; font-weight: 700; color: var(--ok-text); text-transform: uppercase; letter-spacing: .4px; }
+.preview-live-dot span.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok-text); display: inline-block; animation: pv-pulse 1.6s infinite; }
 @keyframes pv-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-.preview-sub { font-size: .74rem; color: var(--dark-gray); margin: 0 0 1rem; }
-.headline-delta { background: #fff; border-radius: 8px; padding: .7rem .9rem; margin-bottom: 1.1rem; border-left: 4px solid var(--blue); }
-.headline-delta .n { font-size: 1.5rem; font-weight: 900; color: var(--navy); }
-.headline-delta .t { font-size: .74rem; color: var(--dark-gray); margin-top: .1rem; }
-
-.group-section { margin-bottom: 1.1rem; padding-bottom: .8rem; border-bottom: 1px solid #EEF1F3; }
+.preview-sub { font-size: .74rem; color: var(--text-muted); margin: 0 0 1rem; }
+.headline-delta { background: var(--bg-deep); border-radius: 8px; padding: .7rem .9rem; margin-bottom: 1.1rem; border-left: 4px solid var(--accent-teal); }
+.headline-delta .n { font-size: 1.5rem; font-weight: 900; color: var(--text); }
+.headline-delta .t { font-size: .74rem; color: var(--text-muted); margin-top: .1rem; }
+.group-section { margin-bottom: 1.1rem; padding-bottom: .8rem; border-bottom: 1px solid var(--border-soft); }
 .group-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 .group-head { display: flex; align-items: center; gap: .45rem; margin-bottom: .4rem; }
 .group-head .tier-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
-.group-head .group-name { font-size: .8rem; font-weight: 800; color: var(--navy); flex: 1; }
-.group-head .group-total { font-size: .7rem; color: var(--dark-gray); font-weight: 700; }
+.group-head .group-name { font-size: .8rem; font-weight: 800; color: var(--text); flex: 1; }
+.group-head .group-total { font-size: .7rem; color: var(--text-muted); font-weight: 700; }
 .group-wd-row { display: flex; align-items: center; gap: .5rem; padding: .22rem 0; }
-.group-wd-row .wd-name { font-size: .74rem; color: var(--dark-gray); min-width: 108px; flex: 0 0 auto; }
-.group-wd-row .wd-bar-track { flex: 1; height: 6px; background: #EEF1F3; border-radius: 3px; overflow: hidden; }
+.group-wd-row .wd-name { font-size: .74rem; color: var(--text-muted); min-width: 108px; flex: 0 0 auto; }
+.group-wd-row .wd-bar-track { flex: 1; height: 6px; background: var(--inset); border-radius: 3px; overflow: hidden; }
 .group-wd-row .wd-bar-fill { height: 100%; border-radius: 3px; transition: width .3s ease; }
-.group-wd-row .wd-count { font-size: .76rem; font-weight: 800; color: var(--navy); min-width: 26px; text-align: right; flex: 0 0 auto; }
+.group-wd-row .wd-count { font-size: .76rem; font-weight: 800; color: var(--text); min-width: 26px; text-align: right; flex: 0 0 auto; }
 .group-wd-row .wd-delta { font-size: .68rem; font-weight: 800; min-width: 44px; text-align: right; flex: 0 0 auto; }
-.group-wd-row .wd-delta.up { color: #128A5E; margin-right: .3rem; }
-.group-wd-row .wd-delta.down { color: #B23A3A; }
-.reset-link { display: block; text-align: right; font-size: .7rem; color: var(--blue); cursor: pointer; margin-top: .5rem; text-decoration: underline; }
-
-/* NEW: deferred recompute - slider drags no longer trigger a live rebuild
-   (see onWeightSlide()/markWeightsDirty()); the Recalculate button and the
-   greyed "is-stale" treatment on #impact-preview-body/#groups-body-wrap
-   communicate that the group tables and impact preview are showing the
-   last recalculation, not the current slider positions. */
-.recalc-btn { font-size: .72rem; font-weight: 800; padding: .3rem .8rem; border-radius: 20px; border: 1px solid var(--blue); background: #fff; color: var(--blue); cursor: pointer; transition: background .15s ease, color .15s ease, opacity .15s ease; }
-.recalc-btn:disabled { border-color: #D7DCE1; color: var(--dark-gray); cursor: default; opacity: .55; }
-.recalc-btn.pending { background: var(--blue); color: #fff; animation: recalc-pulse 1.4s infinite; }
-@keyframes recalc-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(14,91,207,.35); } 50% { box-shadow: 0 0 0 6px rgba(14,91,207,0); } }
-.stale-note { font-size: .72rem; color: #C9781B; font-weight: 700; margin: -.4rem 0 .8rem; }
+.group-wd-row .wd-delta.up { color: var(--ok-text); margin-right: .3rem; }
+.group-wd-row .wd-delta.down { color: var(--alert-text); }
+.reset-link { display: block; text-align: right; font-size: .7rem; color: var(--accent-cyan); cursor: pointer; margin-top: .5rem; text-decoration: underline; }
+/* Deferred recompute: Recalculate button and the greyed "is-stale" treatment. */
+.recalc-btn { font-size: .72rem; font-weight: 800; padding: .3rem .8rem; border-radius: 20px; border: 1px solid var(--accent-cyan); background: transparent; color: var(--accent-cyan); cursor: pointer; transition: background .15s ease, color .15s ease, opacity .15s ease; font-family: inherit; }
+.recalc-btn:disabled { border-color: var(--border); color: var(--text-muted); cursor: default; opacity: .55; }
+.recalc-btn.pending { background: var(--accent-blue); border-color: var(--accent-blue); color: var(--text); animation: recalc-pulse 1.4s infinite; }
+@keyframes recalc-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(27,188,243,.45); } 50% { box-shadow: 0 0 0 6px rgba(27,188,243,0); } }
+.stale-note { font-size: .72rem; color: var(--amber); font-weight: 700; margin: -.4rem 0 .8rem; }
 .is-stale { opacity: .4; filter: saturate(.5); transition: opacity .2s ease; pointer-events: none; }
-
-.mass-edit-bar { background: #F0F3F6; border-radius: 8px; padding: .7rem 1rem; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .8rem; }
-.mass-edit-bar select, .mass-edit-bar input, .mass-edit-bar button { border: 1px solid #D7DCE1; border-radius: 6px; padding: .35rem .6rem; font-size: .78rem; }
-.mass-edit-bar button, .btn { background: var(--navy); color: #fff; border: none; border-radius: 6px; padding: .4rem .9rem; font-size: .78rem; font-weight: 700; cursor: pointer; }
-.mass-edit-bar button:hover, .btn:hover { background: var(--blue); }
+.mass-edit-bar { background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 8px; padding: .7rem 1rem; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .8rem; }
+.mass-edit-bar select, .mass-edit-bar input, .mass-edit-bar button { border: 1px solid var(--border); border-radius: 6px; padding: .35rem .6rem; font-size: .78rem; }
+button, .btn { font-family: inherit; }
+.mass-edit-bar button, .btn { background: var(--accent-blue); color: var(--text); border: none; border-radius: 6px; padding: .4rem .9rem; font-size: .78rem; font-weight: 700; cursor: pointer; }
+.mass-edit-bar button:hover, .btn:hover { background: var(--accent-cyan); color: var(--bg-deep); }
 section.workload { margin-bottom: 3rem; scroll-margin-top: 90px; }
-section.workload h3 { font-size: 1.15rem; font-weight: 800; color: var(--navy); margin: 0; }
+section.workload h3 { font-size: 1.15rem; font-weight: 800; color: var(--text); margin: 0; }
 .filter-chips { display: flex; gap: .5rem; flex-wrap: wrap; margin: .9rem 0 1rem; }
-/* NEW: per-workload free-text search + expanded attribute filters. Search
-   is deliberately styled bigger/more prominent than the attribute-filter
-   dropdowns below it - it's the "find one specific object" control, not
-   just another facet. */
+/* per-workload free-text search: deliberately bigger than the attribute-filter dropdowns */
 .search-box-row { margin: .5rem 0 0; }
-.search-box { width: 100%; max-width: 480px; border: 1px solid #C7CDD5; border-radius: 8px; padding: .55rem .8rem; font-size: .85rem; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-.search-box:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(14,91,207,.15); }
-.totals-heading { font-size: .78rem; font-weight: 700; color: var(--navy); text-transform: uppercase; letter-spacing: .5px; margin: 1.1rem 0 .4rem; }
-.chip { border: 1px solid #D7DCE1; background: #fff; border-radius: 999px; padding: .32rem .85rem; font-size: .78rem; font-weight: 600; cursor: pointer; color: var(--dark-gray); }
-.chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
-/* NEW: presenter pass - horizontal-scroll discoverability. .table-wrap is the
-   one shared scroll container used by every data table in the report (built
-   once here rather than per-workload), so a thicker always-visible
-   scrollbar, a sticky identity column, and a capped height with a sticky
-   header (dashboard-card feel instead of the whole page scrolling) all apply
-   everywhere for free. */
-.table-wrap { position: relative; overflow: auto; max-height: 62vh; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.06); scrollbar-width: auto; scrollbar-color: var(--blue) #E2E6EA; }
+.search-box { width: 100%; max-width: 480px; background: var(--bg-deep); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: .55rem .8rem; font-size: .85rem; box-shadow: 0 1px 2px rgba(0,0,0,.3); font-family: inherit; }
+.search-box:focus { outline: none; border-color: var(--accent-cyan); box-shadow: 0 0 0 3px rgba(27,188,243,.30); }
+.totals-heading { font-size: .78rem; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: .5px; margin: 1.1rem 0 .4rem; }
+.chip { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: .32rem .85rem; font-size: .78rem; font-weight: 600; cursor: pointer; color: var(--text-muted); font-family: inherit; }
+.chip:hover { color: var(--text); background: var(--bg-raise); }
+.chip.active { background: var(--accent-teal); color: var(--bg-deep); border-color: var(--accent-teal); }
+/* .table-wrap is the one shared scroll container for every data table: thick always-visible scrollbar, capped height,
+   sticky header, sticky identity column. Wide tables scroll INSIDE it, never the page. */
+.table-wrap { position: relative; overflow: auto; max-height: 62vh; max-width: 100%; border-radius: 10px; border: 1px solid var(--border-soft); box-shadow: var(--shadow); scrollbar-width: auto; scrollbar-color: var(--accent-teal) var(--bg-deep); }
 .table-wrap::-webkit-scrollbar { width: 14px; height: 14px; }
-.table-wrap::-webkit-scrollbar-track { background: #E2E6EA; border-radius: 0 0 10px 10px; }
-.table-wrap::-webkit-scrollbar-thumb { background-color: var(--blue); border-radius: 8px; border: 3px solid #E2E6EA; }
-.table-wrap::-webkit-scrollbar-thumb:hover { background-color: var(--navy); }
-table { width: 100%; border-collapse: collapse; background: #fff; }
-thead th { position: sticky; top: 0; z-index: 3; background: #F0F3F6; text-align: left; padding: .6rem .85rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); cursor: pointer; user-select: none; white-space: nowrap; }
-thead th:hover { color: var(--navy); }
-tbody td { padding: .55rem .85rem; font-size: .82rem; border-top: 1px solid #EEF1F4; color: #2B3542; white-space: nowrap; }
-tbody tr:hover { background: #FAFBFC; }
-/* Sticky leftmost identity column (Object/name) - never lose track of which
-   row you're on while scrolled right to see Department/Title/Manager. */
-table thead th:first-child, table tbody td:first-child { position: sticky; left: 0; z-index: 2; background: #fff; box-shadow: 3px 0 6px -3px rgba(0,0,0,.18); }
-table thead th:first-child { z-index: 4; background: #F0F3F6; }
-tbody tr:hover td:first-child { background: #FAFBFC; }
-/* Column-visibility toggle: hide the noisy enrichment columns (Job Title,
-   Department, Manager, Mailbox Type, Why/criteria tags) for a clean
-   no-scroll-needed "essentials" view while presenting. */
+.table-wrap::-webkit-scrollbar-track { background: var(--bg-deep); border-radius: 0 0 10px 10px; }
+.table-wrap::-webkit-scrollbar-thumb { background-color: var(--accent-teal); border-radius: 8px; border: 3px solid var(--bg-deep); }
+.table-wrap::-webkit-scrollbar-thumb:hover { background-color: var(--accent-cyan); }
+table { width: 100%; border-collapse: collapse; background: var(--surface); color: var(--text); }
+thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); text-align: left; padding: .6rem .85rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); cursor: pointer; user-select: none; white-space: nowrap; border-bottom: 1px solid var(--border); }
+thead th:hover { color: var(--text); }
+tbody td { padding: .55rem .85rem; font-size: .82rem; border-top: 1px solid var(--border-soft); color: var(--text); white-space: nowrap; }
+tbody tr:nth-child(even) td { background-image: linear-gradient(var(--zebra), var(--zebra)); }
+tbody tr:hover td { background-color: var(--bg-raise); background-image: none; }
+/* Sticky leftmost identity column (Object/name): never lose track of which row you are on while scrolled right. */
+table thead th:first-child, table tbody td:first-child { position: sticky; left: 0; z-index: 2; background-color: var(--surface); box-shadow: 3px 0 6px -3px rgba(0,0,0,.6); }
+table thead th:first-child { z-index: 4; background-color: var(--surface-2); }
+tbody tr:hover td:first-child { background-color: var(--bg-raise); }
+/* Column-visibility toggle: hide the noisy enrichment columns for a clean no-scroll "essentials" view. */
 .table-wrap.essentials-only .col-detail { display: none; }
 .table-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem; }
-.col-toggle { font-size: .78rem; color: var(--dark-gray); display: flex; align-items: center; gap: .4rem; cursor: pointer; user-select: none; }
+.col-toggle { font-size: .78rem; color: var(--text-muted); display: flex; align-items: center; gap: .4rem; cursor: pointer; user-select: none; }
 .col-toggle input { transform: scale(1.05); }
-.col-toggle-hint { color: var(--dark-gray); font-weight: 400; }
-.table-scroll-shell { position: relative; }
-.scroll-fade-right { position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border-radius: 0 10px 10px 0; background: linear-gradient(to right, rgba(244,246,248,0), rgba(244,246,248,.95) 65%); pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 5; }
+.col-toggle-hint { color: var(--text-muted); font-weight: 400; }
+.table-scroll-shell { position: relative; max-width: 100%; }
+.scroll-fade-right { position: absolute; top: 0; right: 0; bottom: 0; width: 34px; border-radius: 0 10px 10px 0; background: linear-gradient(to right, rgba(1,30,58,0), rgba(1,30,58,.95) 65%); pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 5; }
 .table-scroll-shell.has-more-right .scroll-fade-right { opacity: 1; }
-.scroll-hint { font-size: .74rem; font-weight: 700; color: var(--blue); white-space: nowrap; opacity: 1; transition: opacity .25s ease; }
+.scroll-hint { font-size: .74rem; font-weight: 700; color: var(--accent-teal); white-space: nowrap; opacity: 1; transition: opacity .25s ease; }
 .scroll-hint.scrolled { opacity: 0; visibility: hidden; }
-/* NEW v3.10.3: MAX_TABLE_ROWS cap notice, shown under a workload table (or
-   the Group 1 overview) once there are more matching rows than are rendered. */
-.table-cap-notice { font-size: .78rem; color: var(--dark-gray); padding: .5rem 0 0; }
-.table-cap-notice button { border: 1px solid #D7DCE1; border-radius: 6px; background: #fff; padding: .15rem .5rem; font-size: .76rem; cursor: pointer; color: var(--blue); }
-.table-cap-notice button:hover { background: #F4F6F8; }
+.table-cap-notice { font-size: .78rem; color: var(--text-muted); padding: .5rem 0 0; }
+.table-cap-notice button { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); padding: .15rem .5rem; font-size: .76rem; cursor: pointer; color: var(--accent-teal); }
+.table-cap-notice button:hover { background: var(--bg-raise); }
 .badge { display: inline-block; padding: .18rem .6rem; border-radius: 999px; font-size: .7rem; font-weight: 700; white-space: nowrap; }
-.badge.override { background: #093565; color: #fff; margin-left: .35rem; }
-.tier-select { border: 1px solid #D7DCE1; border-radius: 6px; padding: .2rem .4rem; font-size: .76rem; }
-.criteria-tags { font-size: .74rem; color: var(--dark-gray); white-space: normal; max-width: 240px; }
+.badge.override { background: var(--accent-blue); color: var(--text); margin-left: .35rem; }
+.tier-select { border: 1px solid var(--border); border-radius: 6px; padding: .2rem .4rem; font-size: .76rem; }
+.criteria-tags { font-size: .74rem; color: var(--text-muted); white-space: normal; max-width: 240px; }
 .score-bar-wrap { display: flex; align-items: center; gap: .5rem; }
-.score-bar { width: 60px; height: 6px; background: #E7EBEE; border-radius: 4px; overflow: hidden; }
-.score-bar span { display: block; height: 100%; background: var(--blue); }
+.score-bar { width: 60px; height: 6px; background: var(--inset); border-radius: 4px; overflow: hidden; }
+.score-bar span { display: block; height: 100%; background: var(--accent-teal); }
 .row-check { transform: scale(1.1); }
-.glossary dt { font-weight: 700; color: var(--navy); margin-top: .8rem; }
-.glossary dd { margin: .2rem 0 0; color: #2B3542; font-size: .88rem; }
+.glossary dt { font-weight: 700; color: var(--text); margin-top: .8rem; }
+.glossary dd { margin: .2rem 0 0; color: var(--text-muted); font-size: .88rem; }
 .weights-table td, .weights-table th { padding: .4rem .7rem; font-size: .8rem; }
-footer { padding: 1.75rem 3rem 3rem; font-size: .78rem; color: var(--dark-gray); border-top: 1px solid #E2E6EA; }
+footer { padding: 1.75rem 3rem 3rem; font-size: .78rem; color: var(--text-muted); border-top: 1px solid var(--border); }
 footer p { max-width: 900px; }
-/* NEW v3.6.2: export-bar replaced by the icon-only .tabbar-actions toolbar
-   docked to the right of the tabbar itself, per feedback 2026-07-23 - see
-   below. Rule kept as a harmless no-op selector in case anything still
-   references the class name. */
 .export-bar { display: flex; gap: .6rem; margin-bottom: 1rem; }
 .tabbar-actions { margin-left: auto; display: flex; align-items: center; gap: .4rem; padding: .4rem 0; flex: 0 0 auto; }
-.icon-btn { background: var(--navy); color: #fff; border: none; border-radius: 7px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: 0 0 auto; }
-.icon-btn:hover { background: var(--navy-dark); }
+.icon-btn { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 7px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: 0 0 auto; }
+.icon-btn:hover { background: var(--accent-teal); color: var(--bg-deep); border-color: var(--accent-teal); }
 .icon-btn svg { width: 17px; height: 17px; }
-.pill-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .5rem .8rem; margin-bottom: 1rem; max-width: 900px; }
+.pill-note { font-size: .78rem; color: var(--text-muted); background: var(--surface-2); border-radius: 8px; padding: .5rem .8rem; margin-bottom: 1rem; max-width: 900px; }
 
-/* NEW: guided tour - welcome modal, spotlight overlay, positioned tooltip.
-   No external tour library, consistent with the report's zero-dependency
-   design. See $script:ReportJsTour for the engine. */
-.tour-welcome-backdrop { position: fixed; inset: 0; background: rgba(9,53,101,.65); z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
-.tour-welcome-card { background: #fff; border-radius: 14px; max-width: 480px; width: 100%; padding: 2rem; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
-.tour-welcome-title { font-size: 1.3rem; font-weight: 800; color: var(--navy); margin-bottom: .6rem; }
-.tour-welcome-body { font-size: .92rem; color: var(--dark-gray); line-height: 1.55; margin-bottom: 1.3rem; }
+/* guided tour: welcome modal, spotlight overlay, positioned tooltip. Zero-dependency. */
+.tour-welcome-backdrop { position: fixed; inset: 0; background: rgba(1,30,58,.80); z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.tour-welcome-card { background: var(--bg-navy); color: var(--text); border: 1px solid var(--accent-teal); border-radius: 14px; max-width: 480px; width: 100%; padding: 2rem; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.tour-welcome-title { font-size: 1.3rem; font-weight: 800; color: var(--text); margin-bottom: .6rem; }
+.tour-welcome-body { font-size: .92rem; color: var(--text-muted); line-height: 1.55; margin-bottom: 1.3rem; }
 .tour-welcome-actions { display: flex; gap: .7rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.tour-welcome-dontshow { font-size: .78rem; color: var(--dark-gray); display: flex; align-items: center; gap: .45rem; cursor: pointer; }
+.tour-welcome-dontshow { font-size: .78rem; color: var(--text-muted); display: flex; align-items: center; gap: .45rem; cursor: pointer; }
 .tour-overlay-backdrop { position: fixed; inset: 0; background: transparent; z-index: 9000; pointer-events: none; transition: background .15s ease; }
-/* NEW: steps with no specific target (selector: null - the welcome/analogy/
-   closing steps) previously left the whole page fully visible and readable
-   behind the centered tooltip, competing for attention with content that
-   isn't what that step is talking about. Dim + blur the backdrop for these
-   the same way a spotlighted step already dims everything OUTSIDE its
-   target via .tour-spotlight's box-shadow - just applied to the whole page
-   instead of everywhere-but-one-rect. */
-.tour-overlay-backdrop.dimmed { background: rgba(9,53,101,.6); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
-.tour-spotlight { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(9,53,101,.6); z-index: 9001; pointer-events: none; border: 2px solid var(--cyan); }
-.tour-tooltip { position: fixed; z-index: 9002; background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.35); padding: 1.1rem 1.3rem; max-width: 340px; }
+/* steps with no specific target dim and blur the whole page behind the centered tooltip */
+.tour-overlay-backdrop.dimmed { background: rgba(1,30,58,.75); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.tour-spotlight { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(1,30,58,.75); z-index: 9001; pointer-events: none; border: 2px solid var(--accent-cyan); }
+.tour-tooltip { position: fixed; z-index: 9002; background: var(--bg-navy); color: var(--text); border: 1px solid var(--accent-teal); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.6); padding: 1.1rem 1.3rem; max-width: 340px; }
 .tour-tooltip.centered { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); max-width: 460px; width: calc(100% - 2rem); }
-.tour-tooltip-step { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--blue); margin-bottom: .3rem; }
-.tour-tooltip-title { font-size: 1.05rem; font-weight: 700; color: var(--navy); margin-bottom: .5rem; }
-.tour-tooltip-body { font-size: .88rem; color: var(--dark-gray); line-height: 1.5; margin-bottom: 1rem; }
+.tour-tooltip-step { font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-teal); margin-bottom: .3rem; }
+.tour-tooltip-title { font-size: 1.05rem; font-weight: 700; color: var(--text); margin-bottom: .5rem; }
+.tour-tooltip-body { font-size: .88rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem; }
 .tour-tooltip-actions { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; }
-.tour-btn { border: none; border-radius: 7px; padding: .5rem 1rem; font-size: .82rem; font-weight: 600; cursor: pointer; }
-.tour-btn-primary { background: var(--navy); color: #fff; }
-.tour-btn-primary:hover { background: var(--navy-dark); }
-.tour-btn-secondary { background: transparent; color: var(--dark-gray); padding: .5rem .4rem; }
-.tour-btn-secondary:hover { text-decoration: underline; }
-.tour-skip { font-size: .76rem; color: var(--dark-gray); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; }
+.tour-btn { border: none; border-radius: 7px; padding: .5rem 1rem; font-size: .82rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+.tour-btn-primary { background: var(--accent-teal); color: var(--bg-deep); }
+.tour-btn-primary:hover { background: var(--accent-mint); }
+.tour-btn-secondary { background: transparent; color: var(--text-muted); padding: .5rem .4rem; }
+.tour-btn-secondary:hover { text-decoration: underline; color: var(--text); }
+.tour-skip { font-size: .76rem; color: var(--text-muted); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; }
 
-/* Recovery tab - RTO controls, per-group ABR vs Mass Recovery sections,
-   exceeds-target shortfall callout, auto-suggest banner. */
+/* RTO controls, per-group ABR vs Mass Recovery sections, exceeds-target callout, auto-suggest banner. */
 .rt-preset-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .8rem; }
-.rt-preset-btn { border: 1px solid #D7DCE1; background: #fff; border-radius: 999px; padding: .32rem .95rem; font-size: .78rem; font-weight: 700; cursor: pointer; color: var(--dark-gray); }
-.rt-preset-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
-.rt-auto-banner { display: flex; justify-content: space-between; align-items: center; gap: 1rem; background: #FFF7E6; border: 1px solid #FFE1A6; border-radius: 8px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .82rem; color: #7A5B00; }
-.rt-auto-banner button { background: none; border: 1px solid #7A5B00; color: #7A5B00; border-radius: 6px; padding: .25rem .7rem; font-size: .74rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
-.rt-group-section { background: #fff; border-radius: 12px; padding: 1.4rem 1.6rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-.rt-group-section.total { border: 2px solid #D7DCE1; }
-.rt-group-section.exceeds-target { border-left: 4px solid var(--red-target); }
-.rt-group-section h3 { margin: 0 0 .2rem; font-size: 1.15rem; color: var(--navy); font-weight: 800; }
-.rt-group-section .rt-subtitle { font-size: .8rem; color: var(--dark-gray); margin-bottom: 1.1rem; }
+.rt-preset-btn { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: .32rem .95rem; font-size: .78rem; font-weight: 700; cursor: pointer; color: var(--text-muted); font-family: inherit; }
+.rt-preset-btn.active { background: var(--accent-teal); color: var(--bg-deep); border-color: var(--accent-teal); }
+.rt-auto-banner { display: flex; justify-content: space-between; align-items: center; gap: 1rem; background: var(--warn-bg); border: 1px solid var(--warn-bd); border-radius: 8px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .82rem; color: var(--amber); }
+.rt-auto-banner button { background: none; border: 1px solid var(--amber); color: var(--amber); border-radius: 6px; padding: .25rem .7rem; font-size: .74rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.rt-group-section { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1.4rem 1.6rem; margin-bottom: 1.5rem; box-shadow: var(--shadow); }
+.rt-group-section.total { border: 2px solid var(--border); }
+.rt-group-section.exceeds-target { border-left: 4px solid var(--alert); }
+.rt-group-section h3 { margin: 0 0 .2rem; font-size: 1.15rem; color: var(--text); font-weight: 800; }
+.rt-group-section .rt-subtitle { font-size: .8rem; color: var(--text-muted); margin-bottom: 1.1rem; }
 .rt-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: .9rem; }
+@media (max-width: 700px) { .rt-compare-grid { grid-template-columns: 1fr; } }
 .rt-compare-card { border-radius: 10px; padding: 1rem 1.2rem; }
-.rt-compare-card.abr { background: #EAF2FF; border: 1px solid #C7DCFF; }
-.rt-compare-card.mass { background: #FDEAEA; border: 1px solid #F5C6C6; }
-.rt-compare-card .rt-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--dark-gray); font-weight: 700; }
-.rt-compare-card .rt-time { font-size: 1.7rem; font-weight: 800; color: var(--navy); margin: .25rem 0; }
-.rt-compare-card .rt-cost { font-size: .95rem; font-weight: 700; color: #2B3542; }
-.rt-savings-bar { display: flex; justify-content: space-between; align-items: center; background: #EDFBF6; border: 1px solid #BEEFDD; border-radius: 8px; padding: .6rem 1rem; font-size: .85rem; color: #0A6B4E; font-weight: 600; }
-.rt-shortfall-bar { display: flex; justify-content: space-between; align-items: center; background: #FDEDEE; border: 1px solid #F6C6C9; border-radius: 8px; padding: .6rem 1rem; font-size: .85rem; color: #A5222B; font-weight: 600; }
-.rt-toggle { margin-top: .7rem; font-size: .78rem; color: var(--blue); cursor: pointer; user-select: none; }
-.rt-detail { display: none; margin-top: .8rem; border-top: 1px solid #EEF1F4; padding-top: .8rem; font-size: .8rem; }
+.rt-compare-card.abr { background: var(--info-bg); border: 1px solid var(--info-bd); }
+.rt-compare-card.mass { background: var(--alert-bg); border: 1px solid var(--alert-bd); }
+.rt-compare-card .rt-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); font-weight: 700; }
+.rt-compare-card .rt-time { font-size: 1.7rem; font-weight: 800; color: var(--text); margin: .25rem 0; }
+.rt-compare-card .rt-cost { font-size: .95rem; font-weight: 700; color: var(--text-muted); }
+.rt-savings-bar { display: flex; justify-content: space-between; align-items: center; background: var(--ok-bg); border: 1px solid var(--ok-bd); border-radius: 8px; padding: .6rem 1rem; font-size: .85rem; color: var(--ok-text); font-weight: 600; }
+.rt-shortfall-bar { display: flex; justify-content: space-between; align-items: center; background: var(--alert-bg); border: 1px solid var(--alert-bd); border-radius: 8px; padding: .6rem 1rem; font-size: .85rem; color: var(--alert-text); font-weight: 600; }
+.rt-toggle { margin-top: .7rem; font-size: .78rem; color: var(--accent-cyan); cursor: pointer; user-select: none; }
+.rt-detail { display: none; margin-top: .8rem; border-top: 1px solid var(--border-soft); padding-top: .8rem; font-size: .8rem; }
 .rt-detail.open { display: block; }
-.rt-total-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .6rem .9rem; margin-top: .9rem; }
-.badge.exceeds-target { background: var(--red-target); color: #fff; }
-/* Empty-tier callout - a group with 0 objects can happen on a very small
-   tenant, or (v3.8.0) when Mailboxes/OneDrive/SharePoint's budget-walk
-   tiering already placed the entire active population into an earlier
-   group's generous budget, leaving nothing for this one. Neutral gray, not
-   alarming - this isn't a shortfall, just a "nothing landed here" fact. */
-.badge.empty-tier { background: var(--mid-gray); color: #fff; }
-.rt-empty-note, .exec-hero-card .exec-empty-note { font-size: .78rem; color: var(--dark-gray); background: #F0F3F6; border-radius: 8px; padding: .5rem .8rem; margin: .5rem 0 .8rem; }
-/* NEW v3.6.0: PDF export (One Page Summary / Full Report), per feedback
-   2026-07-23. Mechanism is the browser's native print-to-PDF ("Save as
-   PDF" in the print dialog) via a dedicated #print-root container built
-   fresh on demand by exportPdf() - no new external dependency, renders
-   with the report's own fonts/colors, and gets reliable page breaks for
-   free from the browser's print engine. #print-root is always display:none
-   on screen; the @media print block below is the ONLY thing that ever
-   shows it (gated on a body.printing-summary/printing-full class set right
-   before window.print()), so this can never affect the live, on-screen
-   report regardless of timing around when that class gets removed
-   afterward. */
-#print-root { display: none; font-family: 'Inter', -apple-system, Arial, sans-serif; color: var(--navy); }
+.rt-total-note { font-size: .78rem; color: var(--text-muted); background: var(--surface-2); border-radius: 8px; padding: .6rem .9rem; margin-top: .9rem; }
+.badge.exceeds-target { background: var(--alert); color: var(--bg-deep); }
+/* a group with 0 objects: neutral, not alarming */
+.badge.empty-tier { background: var(--mid-gray); color: var(--bg-deep); }
+.rt-empty-note, .exec-hero-card .exec-empty-note { font-size: .78rem; color: var(--text-muted); background: var(--surface-2); border-radius: 8px; padding: .5rem .8rem; margin: .5rem 0 .8rem; }
+
+/* Preview-only: locked / redacted display for anything beyond Group 1 or the whole-tenant baseline. The placeholder text is
+   blurred (never the real value), plus a small tag. pv-locked-panel replaces a whole section with a static frosted pattern. */
+.pv-locked-value { display: inline-block; filter: blur(4px); user-select: none; -webkit-user-select: none; }
+.pv-locked-tag { display: inline-block; font-size: .6rem; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: var(--accent-teal); margin-left: .4rem; white-space: nowrap; vertical-align: middle; }
+.pv-locked-tag::before { content: "\1F512"; margin-right: .2rem; }
+.pv-locked-panel { border-radius: 12px; padding: 1.8rem 1.4rem; text-align: center; background: repeating-linear-gradient(135deg, var(--bg-navy) 0, var(--bg-navy) 12px, var(--bg-card) 12px, var(--bg-card) 24px); border: 1px dashed var(--accent-teal); }
+.pv-locked-panel-icon { font-size: 1.5rem; margin-bottom: .3rem; opacity: .85; }
+.pv-locked-panel-title { font-weight: 800; color: var(--text); font-size: .92rem; }
+.pv-locked-panel-note { font-size: .78rem; color: var(--text-muted); margin-top: .35rem; max-width: 460px; margin-left: auto; margin-right: auto; }
+.pv-locked-mini { display: inline-block; padding: .1rem .4rem; border-radius: 4px; background: var(--surface-2); }
+
+/* ---- generic building blocks the v2 tabs share (callouts, stat tiles, section headings, dividers) ---- */
+.callout { background: var(--info-bg); border: 1px solid var(--info-bd); border-radius: 8px; padding: .7rem 1rem; font-size: .85rem; color: var(--text); margin: .8rem 0; }
+.callout.ok { background: var(--ok-bg); border-color: var(--ok-bd); color: var(--ok-text); }
+.callout.warn { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--amber); }
+.callout.alert { background: var(--alert-bg); border-color: var(--alert-bd); color: var(--alert-text); }
+.section-divider { border: 0; border-top: 2px solid var(--accent-teal); margin: 2.2rem 0 1.2rem; opacity: .8; }
+.divider-heading { display: flex; align-items: center; gap: 1rem; margin: 2.4rem 0 1rem; font-size: 1.05rem; font-weight: 800; color: var(--text); text-transform: uppercase; letter-spacing: .06em; }
+.divider-heading::before, .divider-heading::after { content: ""; flex: 1 1 auto; height: 2px; background: var(--accent-teal); opacity: .7; }
+.stat-tile { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+.stat-tile .stat-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); font-weight: 700; }
+.stat-tile .stat-value { font-size: 1.9rem; font-weight: 800; color: var(--text); line-height: 1.1; margin: .2rem 0; }
+.stat-tile .stat-sub { font-size: .82rem; color: var(--text-muted); }
+.text-ok { color: var(--ok-text); } .text-alert { color: var(--alert-text); } .text-warn { color: var(--amber); } .text-muted { color: var(--text-muted); }
+.flag-chip { display: inline-block; font-size: .66rem; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; padding: .12rem .5rem; border-radius: 999px; background: var(--alert-bg); border: 1px solid var(--alert-bd); color: var(--alert-text); white-space: nowrap; }
+
+/* ---- PDF / print export. #print-root is hidden on screen; the print block below is the ONLY thing that shows it. ----
+   The print scheme is LIGHT (white paper, dark ink) so PDFs read well and are cheap to print. The --pr-* tokens are scoped to
+   #print-root so the dark screen theme never leaks into the export. */
+#print-root { display: none; font-family: 'Inter', -apple-system, Arial, sans-serif;
+  --pr-ink:#093565; --pr-ink-2:#2B3542; --pr-muted:#5A6672; --pr-line:#C9D2DC; --pr-soft:#F0F3F6; --pr-softer:#F7F9FB; --pr-accent:#0B8F86; --pr-alert:#C0213F;
+  color: var(--pr-ink); }
+.pr-page-break { page-break-before: always; }
+.pr-avoid-break { page-break-inside: avoid; }
+.pr-header { border-bottom: 3px solid var(--pr-ink); padding-bottom: .4rem; margin-bottom: .8rem; }
+.pr-eyebrow { font-size: .68rem; font-weight: 800; letter-spacing: 1px; color: var(--pr-muted); text-transform: uppercase; }
+.pr-title { font-size: 1.2rem; font-weight: 900; color: var(--pr-ink); margin: .15rem 0; }
+.pr-meta { font-size: .72rem; color: var(--pr-muted); }
+.pr-meta span { margin-right: 1.1rem; }
+.pr-meta b { color: var(--pr-ink); }
+.pr-section-title { font-size: .92rem; font-weight: 800; color: var(--pr-ink); margin: .9rem 0 .4rem; border-left: 4px solid var(--pr-accent); padding-left: .5rem; }
+.pr-section-title:first-of-type { margin-top: 0; }
+.pr-subnote { font-size: .7rem; color: var(--pr-muted); margin: -.25rem 0 .5rem; max-width: 90ch; }
+.pr-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; margin-bottom: .7rem; }
+.pr-tile { border: 1px solid var(--pr-line); border-radius: 8px; padding: .5rem .7rem; }
+.pr-tile-label { font-size: .64rem; font-weight: 800; text-transform: uppercase; color: var(--pr-muted); letter-spacing: .4px; }
+.pr-tile-value { font-size: 1.25rem; font-weight: 900; color: var(--pr-ink); margin: .1rem 0; }
+.pr-tile-sub { font-size: .68rem; color: var(--pr-ink-2); }
+.pr-mechanism { font-size: .78rem; background: var(--pr-soft); border-radius: 8px; padding: .5rem .8rem; margin-bottom: .8rem; }
+.pr-table { width: 100%; border-collapse: collapse; font-size: .72rem; margin-bottom: .8rem; background: transparent; color: var(--pr-ink-2); }
+.pr-table th, .pr-table td { border: 1px solid var(--pr-line); padding: .3rem .45rem; text-align: left; background-image: none; position: static; box-shadow: none; color: var(--pr-ink-2); background-color: transparent; white-space: normal; font-size: .72rem; }
+.pr-table th { background-color: var(--pr-soft); font-weight: 800; color: var(--pr-ink); text-transform: none; letter-spacing: 0; cursor: default; }
+.pr-table td.num, .pr-table th.num { text-align: right; }
+.pr-table tr.total-row td { font-weight: 800; background-color: var(--pr-softer); }
+.pr-note { font-size: .68rem; color: var(--pr-muted); margin-bottom: .7rem; }
+.pr-footer { font-size: .64rem; color: var(--pr-muted); margin-top: .8rem; border-top: 1px solid var(--pr-line); padding-top: .35rem; }
+.pr-glossary dt { font-weight: 800; color: var(--pr-ink); font-size: .78rem; margin-top: .5rem; }
+.pr-glossary dd { font-size: .72rem; color: var(--pr-ink-2); margin: .1rem 0 0; }
+.pr-badge { display: inline-block; font-size: .62rem; font-weight: 800; padding: .1rem .4rem; border-radius: 4px; color: #fff; margin-left: .4rem; }
+.pr-badge.exceeds { background: var(--pr-alert); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}
+@media (max-width: 700px) {
+  .header { padding: .8rem 1rem .8rem; }
+  .header .logo { position: static; transform: none; height: 40px; }
+  .header .logo svg { height: 56px; margin: -8px 0 0 -18px; }
+  .tabbar { padding: 0 .5rem; }
+  .tab-btn { padding: .7rem .7rem; font-size: .8rem; }
+  main { padding: 1.2rem 1rem 3rem; }
+  footer { padding: 1.2rem 1rem 2rem; }
+  .exec-lean-tile { padding: 1.4rem 1.2rem; }
+  .exec-lean-tile-value { font-size: 2.4rem; }
+  .exec-lean-mechanism { padding: 1.2rem 1.2rem; }
+  .recovery-ladder { padding: 1.2rem 1rem; }
+  .tabbar-actions { margin-left: 0; width: 100%; padding-bottom: .5rem; }
+  .pr-tiles { grid-template-columns: 1fr; }
+}
+/* Print: switch every token to a LIGHT scheme (also remaps the legacy names, so inline var(--navy) / var(--dark-gray) styles in
+   the JS-built print HTML come out as dark ink on white). Only #print-root is shown while body.printing-* is set. */
 @media print {
-  /* html's normal font-size is a viewport-relative clamp() for the live
-     on-screen report - meaningless for a printed page, so pin it to a
-     fixed size here for predictable, consistent PDF output. */
+  html:root[data-theme], :root {
+    --bg-deep:#FFFFFF; --bg-navy:#FFFFFF; --bg-card:#F0F3F6; --bg-raise:#F0F3F6;
+    --text:#093565; --text-muted:#2B3542; --text-dim:#5A6672; --border:#C9D2DC; --border-soft:#DCE3EA;
+    --accent-teal:#0B8F86; --accent-cyan:#0A6FA8; --accent-blue:#0C67DD; --accent-mint:#0B8F86; --accent-lilac:#7A4A9A; --accent-purple:#5B2DB5;
+    --alert:#C0213F; --warn:#C24A1B; --ok:#0A7A4F; --ok-text:#0A6B4E; --amber:#8A5A00; --alert-text:#A5222B;
+    --shadow:none; --shadow-lg:none; --hatch-base:#D7DCE1; --hatch-stripe:rgba(255,255,255,.55); --inset:#E7EBEE; --zebra:transparent;
+    --surface:#FFFFFF; --surface-2:#F0F3F6;
+    --teal:#0B8F86; --cyan:#0A6FA8; --green:#0A6B4E; --blue:#0C67DD; --navy:#093565; --navy-dark:#0A2E57; --yellow:#8A5A00;
+    --mid-gray:#8A97A6; --dark-gray:#5A6672; --white:#FFFFFF; --red-target:#C0213F;
+    color-scheme: light;
+  }
   html { font-size: 10pt; }
   @page { size: letter; margin: 0.55in; }
+  body { background: #fff; color: #093565; }
   body.printing-summary > *:not(#print-root),
   body.printing-full > *:not(#print-root) { display: none !important; }
   body.printing-summary #print-root,
   body.printing-full #print-root { display: block !important; }
+  * { box-shadow: none !important; text-shadow: none !important; }
 }
-.pr-page-break { page-break-before: always; }
-.pr-avoid-break { page-break-inside: avoid; }
-.pr-header { border-bottom: 3px solid var(--navy); padding-bottom: .4rem; margin-bottom: .8rem; }
-.pr-eyebrow { font-size: .68rem; font-weight: 800; letter-spacing: 1px; color: var(--dark-gray); text-transform: uppercase; }
-.pr-title { font-size: 1.2rem; font-weight: 900; color: var(--navy); margin: .15rem 0; }
-.pr-meta { font-size: .72rem; color: var(--dark-gray); }
-.pr-meta span { margin-right: 1.1rem; }
-.pr-meta b { color: var(--navy); }
-.pr-section-title { font-size: .92rem; font-weight: 800; color: var(--navy); margin: .9rem 0 .4rem; border-left: 4px solid var(--teal); padding-left: .5rem; }
-.pr-section-title:first-of-type { margin-top: 0; }
-.pr-subnote { font-size: .7rem; color: var(--dark-gray); margin: -.25rem 0 .5rem; max-width: 90ch; }
-.pr-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; margin-bottom: .7rem; }
-.pr-tile { border: 1px solid #DCE3EA; border-radius: 8px; padding: .5rem .7rem; }
-.pr-tile-label { font-size: .64rem; font-weight: 800; text-transform: uppercase; color: var(--dark-gray); letter-spacing: .4px; }
-.pr-tile-value { font-size: 1.25rem; font-weight: 900; color: var(--navy); margin: .1rem 0; }
-.pr-tile-sub { font-size: .68rem; color: #2B3542; }
-.pr-mechanism { font-size: .78rem; background: #F0F3F6; border-radius: 8px; padding: .5rem .8rem; margin-bottom: .8rem; }
-.pr-table { width: 100%; border-collapse: collapse; font-size: .72rem; margin-bottom: .8rem; }
-.pr-table th, .pr-table td { border: 1px solid #DCE3EA; padding: .3rem .45rem; text-align: left; }
-.pr-table th { background: #F0F3F6; font-weight: 800; color: var(--navy); }
-.pr-table td.num, .pr-table th.num { text-align: right; }
-.pr-table tr.total-row td { font-weight: 800; background: #F7F9FB; }
-.pr-note { font-size: .68rem; color: var(--dark-gray); margin-bottom: .7rem; }
-.pr-footer { font-size: .64rem; color: var(--dark-gray); margin-top: .8rem; border-top: 1px solid #DCE3EA; padding-top: .35rem; }
-.pr-glossary dt { font-weight: 800; color: var(--navy); font-size: .78rem; margin-top: .5rem; }
-.pr-glossary dd { font-size: .72rem; color: #2B3542; margin: .1rem 0 0; }
-.pr-badge { display: inline-block; font-size: .62rem; font-weight: 800; padding: .1rem .4rem; border-radius: 4px; color: #fff; margin-left: .4rem; }
-.pr-badge.exceeds { background: var(--red-target); }
-.pr-badge.empty { background: var(--mid-gray); }
+
+/* ===== v2.0 shared components (accordion, info bubble, sortable headers, unit toggle, banners) =====
+   Colors come from the theme tokens defined in ReportCss.css (:root). Do not hard-code hex here. */
+.v2-badge { display:inline-block; margin-left:.5rem; padding:.05rem .5rem; border-radius:999px; background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); font-weight:800; font-size:.7rem; letter-spacing:.5px; vertical-align:middle; }
+.unit-toggle { display:inline-flex; border:1px solid var(--border, #3a4a80); border-radius:6px; overflow:hidden; vertical-align:middle; margin-left:.35rem; }
+.unit-btn { background:transparent; color:inherit; border:0; padding:.12rem .6rem; font:inherit; font-weight:700; cursor:pointer; }
+.unit-btn.active { background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); }
+.unit-btn:focus-visible, .info-btn:focus-visible, .acc-head:focus-visible, .sortable-th:focus-visible { outline:2px solid var(--accent-cyan, #1BBCF3); outline-offset:2px; }
+
+/* sortable headers */
+th.sortable-th { cursor:pointer; user-select:none; white-space:nowrap; }
+th.sortable-th::after { content:"\2195"; opacity:.35; margin-left:.35rem; font-size:.8em; }
+th.sortable-th.sort-asc::after { content:"\25B2"; opacity:1; }
+th.sortable-th.sort-desc::after { content:"\25BC"; opacity:1; }
+
+/* accordions */
+.acc { border:1px solid var(--border, #3a4a80); border-radius:10px; margin:.6rem 0; overflow:hidden; }
+.acc-head { width:100%; display:flex; align-items:center; gap:.75rem; padding:.85rem 1rem; background:var(--bg-card, #122861); color:var(--text, #fff); border:0; cursor:pointer; text-align:left; font:inherit; }
+.acc-head:hover { filter:brightness(1.12); }
+.acc-chev { transition:transform .15s ease; display:inline-block; flex:0 0 auto; }
+.acc.open > .acc-head .acc-chev { transform:rotate(90deg); }
+.acc-title { font-weight:700; flex:0 0 auto; }
+.acc-summary { margin-left:auto; display:flex; flex-wrap:wrap; gap:.4rem 1.1rem; justify-content:flex-end; color:var(--text-muted, #D9D9D9); font-size:.9rem; }
+.acc-body { padding:1rem; background:var(--bg-navy, #0A2547); }
+.acc-body[hidden] { display:none; }
+
+/* info bubble */
+.info-btn { display:inline-flex; align-items:center; justify-content:center; width:1.15rem; height:1.15rem; border-radius:50%; border:1px solid var(--accent-cyan, #1BBCF3); background:transparent; color:var(--accent-cyan, #1BBCF3); font:700 .72rem/1 Georgia, serif; font-style:italic; cursor:pointer; margin-left:.35rem; padding:0; vertical-align:middle; }
+.info-btn:hover { background:var(--accent-cyan, #1BBCF3); color:var(--bg-deep, #011E3A); }
+.info-pop { position:absolute; z-index:1000; background:var(--bg-deep, #011E3A); color:var(--text, #fff); border:1px solid var(--accent-cyan, #1BBCF3); border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.5); padding:.9rem 1rem; font-size:.9rem; line-height:1.45; }
+.info-pop-title { font-weight:800; margin-bottom:.4rem; padding-right:1.5rem; position:relative; }
+.info-pop-close { position:absolute; right:-.25rem; top:-.35rem; background:transparent; border:0; color:var(--text-muted, #D9D9D9); font-size:1.3rem; cursor:pointer; }
+.info-pop-body p { margin:.4rem 0; }
+
+/* linked summaries */
+[data-link] { cursor:pointer; }
+[data-link]:hover { filter:brightness(1.1); }
+.link-flash { animation:linkflash 1.6s ease; }
+@keyframes linkflash { 0%,60% { box-shadow:0 0 0 3px var(--accent-teal, #04CAB9); } 100% { box-shadow:0 0 0 0 transparent; } }
+.linkout { color:var(--accent-teal, #04CAB9); text-decoration:underline; cursor:pointer; font-weight:600; }
+
+/* cost avoided prompt */
+.cost-prompt { color:var(--text-muted, #D9D9D9); font-style:italic; }
+
+/* preview chrome */
+.pv-banner { background:var(--bg-card, #122861); border:1px solid var(--accent-teal, #04CAB9); border-left:5px solid var(--accent-teal, #04CAB9); border-radius:8px; padding:.7rem 1rem; margin:0 0 1rem; font-size:.9rem; line-height:1.45; }
+.pv-banner a, .pv-locked-panel a { color:var(--accent-teal, #04CAB9); font-weight:700; }
+
+/* ===== v2.0 Executive Summary + Report tab (WP-B). Colors via theme tokens only. ===== */
+.report-intro { color:var(--text-muted, #D9D9D9); font-size:.9rem; max-width:70ch; margin:-1rem 0 1.5rem; }
+.ex2-grid { display:grid; grid-template-columns:repeat(12, minmax(0, 1fr)); gap:1.1rem; margin:0 0 1.4rem; }
+.ex2-block { grid-column:span 6; background:var(--bg-navy, #0A2547); border:1px solid var(--border, #3a4a80); border-radius:14px; padding:1.2rem 1.4rem; min-width:0; }
+.ex2-hero { grid-column:span 12; border-left:6px solid var(--accent-teal, #04CAB9); background:var(--bg-card, #122861); }
+.ex2-tile { grid-column:span 6; }
+.ex2-wide { grid-column:span 12; }
+@media (max-width:900px) { .ex2-block, .ex2-tile { grid-column:span 12; } }
+.ex2-eyebrow { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem .7rem; font-size:.74rem; font-weight:800; letter-spacing:.7px; text-transform:uppercase; color:var(--accent-teal, #04CAB9); margin:0 0 .7rem; }
+.ex2-details { margin-left:auto; font-size:.78rem; text-transform:none; letter-spacing:0; }
+.ex2-headline { font-size:1.55rem; line-height:1.35; font-weight:600; color:var(--text, #fff); max-width:60ch; }
+.ex2-headline b { color:var(--accent-mint, #BCFFFB); font-weight:800; }
+.ex2-sub, .ex2-note { font-size:.88rem; color:var(--text-muted, #D9D9D9); margin-top:.7rem; line-height:1.45; }
+.ex2-lead { font-size:.98rem; color:var(--text, #fff); margin:0 0 .9rem; max-width:80ch; line-height:1.5; }
+.ex2-big { font-size:3rem; font-weight:900; line-height:1.05; color:var(--text, #fff); margin:.1rem 0 .4rem; }
+.ex2-tile-sub { color:var(--text-muted, #D9D9D9); font-size:.95rem; }
+.ex2-tile-sub b { color:var(--text, #fff); }
+.ex2-dollars { font-size:1.05rem; margin:0 0 .7rem; color:var(--text, #fff); }
+.ex2-money { font-size:1.6rem; font-weight:800; color:var(--accent-mint, #BCFFFB); }
+.ex2-smalls { border-top:1px solid var(--border, #3a4a80); padding-top:.6rem; margin-top:.4rem; }
+.ex2-small-row { display:flex; justify-content:space-between; gap:1rem; font-size:.88rem; color:var(--text-muted, #D9D9D9); padding:.15rem 0; }
+.ex2-small-row b { color:var(--text, #fff); }
+.ex2-rate { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; margin-top:.8rem; font-size:.82rem; color:var(--text-muted, #D9D9D9); }
+.ex2-rate input { width:7.5rem; background:var(--bg-deep, #011E3A); color:var(--text, #fff); border:1px solid var(--border, #3a4a80); border-radius:6px; padding:.3rem .5rem; font:inherit; }
+.ex2-rate input:focus-visible { outline:2px solid var(--accent-cyan, #1BBCF3); outline-offset:1px; }
+.ex2-locked { display:inline-block; }
+/* concentration bars */
+.ex2-conc { display:grid; gap:.55rem; margin-bottom:.8rem; }
+.ex2-conc-row { display:grid; grid-template-columns:7.5rem 1fr 3rem; grid-template-areas:"label track val" ". detail detail"; gap:.15rem .7rem; align-items:center; }
+.ex2-conc-label { grid-area:label; font-size:.85rem; font-weight:700; }
+.ex2-conc-track { grid-area:track; height:14px; background:var(--bg-deep, #011E3A); border-radius:7px; overflow:hidden; }
+.ex2-conc-track span { display:block; height:100%; background:var(--accent-teal, #04CAB9); border-radius:7px; }
+.ex2-conc-val { grid-area:val; font-weight:800; text-align:right; }
+.ex2-conc-detail { grid-area:detail; font-size:.74rem; color:var(--text-muted, #D9D9D9); }
+/* tables, lists */
+.ex2-table { width:100%; border-collapse:collapse; font-size:.88rem; }
+.ex2-table th { text-align:left; padding:.45rem .7rem; background:var(--bg-card, #122861); color:var(--text, #fff); border-bottom:1px solid var(--border, #3a4a80); font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
+.ex2-table td { padding:.45rem .7rem; border-bottom:1px solid var(--border, #3a4a80); color:var(--text, #fff); vertical-align:top; }
+.ex2-two { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1.2rem; }
+.ex2-mini-title { font-weight:800; font-size:.85rem; margin:0 0 .4rem; color:var(--text, #fff); }
+.ex2-btn { margin-top:1rem; background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); border:0; border-radius:8px; padding:.55rem 1.1rem; font:inherit; font-weight:800; cursor:pointer; }
+.ex2-btn:hover { filter:brightness(1.1); }
+.ex2-btn:focus-visible { outline:2px solid var(--accent-cyan, #1BBCF3); outline-offset:2px; }
+.ex2-badge { display:inline-block; padding:.12rem .6rem; border-radius:999px; font-size:.74rem; font-weight:800; white-space:nowrap; }
+.ex2-badge.ok { background:var(--ok, #00B46E); color:var(--bg-deep, #011E3A); }
+.ex2-badge.bad { background:var(--alert, #FB3A73); color:var(--text, #fff); }
+.ex2-badge.neutral { background:var(--bg-card, #122861); color:var(--text, #fff); border:1px solid var(--border, #3a4a80); }
+.ex2-gap { margin-top:1rem; border-left:4px solid var(--alert, #FB3A73); padding:.3rem 0 .3rem 1rem; }
+.ex2-gap ul { margin:.4rem 0 0 1.1rem; padding:0; font-size:.9rem; line-height:1.5; }
+.ex2-risks, .ex2-next { margin:0; padding-left:1.2rem; font-size:.92rem; line-height:1.55; }
+.ex2-risk-title { font-weight:800; color:var(--accent-teal, #04CAB9); text-decoration:underline; cursor:pointer; }
+.ex2-risk-detail { color:var(--text-muted, #D9D9D9); font-size:.84rem; margin:.1rem 0 .5rem; }
+.ex2-wait-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:.8rem; margin-bottom:.6rem; }
+.ex2-wait-label { font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted, #D9D9D9); }
+.ex2-wait-val { font-size:1.6rem; font-weight:800; }
+.ex2-wait-val.ok { color:var(--accent-teal, #04CAB9); }
+.ex2-mechanism { background:var(--bg-card, #122861); border-radius:14px; padding:1.1rem 1.4rem; font-size:.92rem; line-height:1.55; color:var(--text, #fff); }
+.ex2-mechanism b { color:var(--accent-mint, #BCFFFB); }
+.ex2-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:.35rem; }
+.ex2-card-sub, .ex2-cell-sub { font-size:.8rem; color:var(--text-muted, #D9D9D9); margin-top:.2rem; }
+/* Report-tab accordions sit directly under the page background */
+#report-low-activity, #report-data-quality { margin-top:1.4rem; }
+
+/* v2.0 Report tab */
+#report-verdict, #report-case, #report-by-group, #report-drivers, #report-sensitivity, #report-concentration, #report-group-overview, #report-decisions { margin-bottom:1.8rem; }
+#panel-report h2 { margin:1.4rem 0 .7rem; }
+#panel-report > h2:first-child { margin-top:0; }
+.rep-verdict { background:var(--bg-navy, #0A2547); border:1px solid var(--border, rgba(255,255,255,.18)); border-left:4px solid var(--accent-teal, #04CAB9); border-radius:14px; padding:1.2rem 1.5rem; }
+.rep-verdict-text { font-size:1.15rem; line-height:1.5; }
+.rep-verdict-text b { color:var(--accent-mint, #BCFFFB); }
+.rep-confidence { margin-top:.8rem; font-size:.85rem; color:var(--text-muted, #D9D9D9); display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; cursor:pointer; }
+.rep-conf-badge { font-weight:700; border-radius:999px; padding:.15rem .7rem; background:var(--bg-card, #122861); }
+.rep-conf-badge.high { color:var(--ok, #00B46E); }
+.rep-conf-badge.moderate { color:var(--warn, #FF5A2E); }
+.rep-conf-badge.limited { color:var(--alert, #FB3A73); }
+.rep-case { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:.9rem; }
+.rep-step { display:flex; gap:.8rem; background:var(--bg-card, #122861); border-radius:14px; padding:1rem 1.1rem; cursor:pointer; }
+.rep-step:hover { outline:1px solid var(--accent-teal, #04CAB9); }
+.rep-step-n { flex:0 0 auto; width:1.9rem; height:1.9rem; border-radius:50%; background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); font-weight:800; display:flex; align-items:center; justify-content:center; }
+.rep-step-title { font-size:.75rem; letter-spacing:.06em; text-transform:uppercase; color:var(--accent-teal, #04CAB9); font-weight:700; margin-bottom:.25rem; }
+.rep-step-text { font-size:.92rem; line-height:1.45; }
+.rep-table td, .rep-table th { white-space:nowrap; }
+.rep-lock-note { color:var(--text-muted, #D9D9D9); font-size:.8rem; }
+.rep-drivers { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:.9rem; }
+.rep-driver { background:var(--bg-card, #122861); border-radius:14px; padding:.9rem 1.1rem; }
+.rep-driver[data-link] { cursor:pointer; }
+.rep-driver-label { font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted, #D9D9D9); }
+.rep-driver-val { font-size:1.35rem; font-weight:800; margin:.2rem 0; }
+.rep-driver-note { font-size:.8rem; color:var(--text-muted, #D9D9D9); }
+.rep-live { margin-top:.9rem; display:flex; flex-wrap:wrap; gap:1.5rem; align-items:center; }
+.rep-current td { background:rgba(4,202,185,.12); }
+.rep-decisions { list-style:none; padding:0; margin:0; display:grid; gap:.6rem; }
+.rep-decisions li { display:flex; gap:.7rem; align-items:flex-start; background:var(--bg-card, #122861); border-radius:12px; padding:.8rem 1rem; }
+.rep-check { flex:0 0 auto; width:1.05rem; height:1.05rem; border:2px solid var(--accent-teal, #04CAB9); border-radius:4px; margin-top:.15rem; }
+
+/* v2.0 simplified Executive Summary */
+.xs-hero { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+.xs-tile { background:var(--bg-card, #122861); border-radius:18px; padding:26px 24px; cursor:default; }
+.xs-tile[data-link] { cursor:pointer; }
+.xs-big { font-size:clamp(2.4rem, 5vw, 3.6rem); font-weight:800; line-height:1; letter-spacing:-.02em; }
+.xs-teal .xs-big { color:var(--accent-teal, #04CAB9); }
+.xs-mint .xs-big { color:var(--accent-mint, #BCFFFB); }
+.xs-cap { margin-top:10px; font-size:.95rem; color:var(--text-muted, #D9D9D9); line-height:1.4; }
+.xs-cap b { color:var(--text, #fff); }
+.xs-money { margin-top:8px; font-size:1.2rem; font-weight:800; color:var(--accent-mint, #BCFFFB); }
+.xs-rate { display:block; margin-top:10px; font-size:.85rem; color:var(--text-muted, #D9D9D9); }
+.xs-rate input { background:var(--bg-navy, #0A2547); border:1px solid var(--border, #3A4A80); border-radius:8px; color:var(--text, #fff); padding:.35rem .6rem; width:120px; margin-left:.3rem; }
+.xs-ladder { background:var(--bg-card, #122861); border-radius:18px; padding:24px 24px 20px; margin-top:16px; }
+.xs-ladder-h { font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-teal, #04CAB9); font-weight:700; display:flex; flex-wrap:wrap; gap:.8rem; align-items:baseline; }
+.xs-ladder-sub { text-transform:none; letter-spacing:0; color:var(--text-muted, #D9D9D9); font-weight:400; }
+.xs-steps { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:10px; align-items:stretch; margin-top:16px; }
+.xs-step { background:var(--bg-navy, #0A2547); border-radius:14px; padding:16px 18px; border-top:5px solid var(--grey-tier, #8FA0BF); }
+.xs-step.s1 { border-top-color:var(--accent-teal, #04CAB9); }
+.xs-step.s2 { border-top-color:var(--accent-purple, #8242E8); }
+.xs-step.s3 { border-top-color:#8FA0BF; background-image:repeating-linear-gradient(135deg, rgba(143,160,191,.10) 0 6px, transparent 6px 12px); }
+.xs-step-n { display:inline-flex; width:1.6rem; height:1.6rem; border-radius:50%; background:var(--text-muted, #D9D9D9); color:var(--bg-deep, #011E3A); font-weight:800; font-size:.85rem; align-items:center; justify-content:center; margin-right:.5rem; }
+.xs-step-t { display:inline; font-size:.85rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+.xs-step-big { font-size:2.3rem; font-weight:800; margin-top:8px; line-height:1.1; }
+.xs-step.s1 .xs-step-big { color:var(--accent-teal, #04CAB9); }
+.xs-step-sub { font-size:.85rem; color:var(--text-muted, #D9D9D9); margin-top:4px; }
+.xs-step-sub span { color:var(--text, #fff); font-weight:600; }
+.xs-arrow { align-self:center; font-size:1.6rem; color:var(--text-muted, #D9D9D9); }
+.xs-ladder-line { margin-top:14px; font-size:.95rem; color:var(--text-muted, #D9D9D9); }
+.xs-ladder-line b { color:var(--text, #fff); }
+.xs-pills { display:grid; grid-template-columns:repeat(2, 1fr); gap:16px; margin-top:16px; }
+.xs-pill { background:var(--bg-card, #122861); border-radius:18px; padding:18px 22px; cursor:pointer; }
+.xs-pill.warn { border-left:5px solid var(--warn, #FF5A2E); }
+.xs-pill-big { font-size:1.7rem; font-weight:800; }
+.xs-pill-sub { font-size:.88rem; color:var(--text-muted, #D9D9D9); margin-top:3px; }
+.xs-foot { margin-top:18px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; font-size:.85rem; color:var(--text-muted, #D9D9D9); }
+@media (max-width:860px) { .xs-hero, .xs-pills { grid-template-columns:1fr; } .xs-steps { grid-template-columns:1fr; } .xs-arrow { transform:rotate(90deg); justify-self:center; } }
+
+/* Recovery calendar (Report tab) */
+.cal { display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:16px; }
+.cal-mon { background:var(--bg-card, #122861); border-radius:14px; padding:12px; }
+.cal-mon h4 { margin:0 0 8px; font-size:.9rem; }
+.cal-g { display:grid; grid-template-columns:repeat(7, 1fr); gap:3px; }
+.cal-h { font-size:.62rem; color:var(--text-muted, #D9D9D9); text-align:center; }
+.cal-cell { position:relative; min-height:var(--ch, 30px); border-radius:6px; background:var(--bg-navy, #0A2547); font-size:.68rem; padding:2px 4px; color:var(--text-muted, #D9D9D9); overflow:hidden; }
+.cal-cell.in { color:#fff; font-weight:600; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+.cal-cell.blank { background:transparent; }
+.cal-cell.today { outline:2px solid #fff; outline-offset:1px; }
+.cal-cell.done { outline:2px solid var(--accent-mint, #BCFFFB); outline-offset:1px; }
+.cal-tag { position:absolute; bottom:2px; left:4px; right:2px; font-size:.58rem; font-weight:800; letter-spacing:.04em; }
+.cal-tag.dtag { color:var(--accent-mint, #BCFFFB); }
+.cal-mon.fadeout { -webkit-mask-image:linear-gradient(to bottom, #000 30%, transparent 100%); mask-image:linear-gradient(to bottom, #000 30%, transparent 100%); }
+.cal-mon.fadein { -webkit-mask-image:linear-gradient(to bottom, transparent 0%, #000 70%); mask-image:linear-gradient(to bottom, transparent 0%, #000 70%); }
+.cal-gap { grid-column:1/-1; text-align:center; padding:6px 10px 2px; color:var(--text-muted, #D9D9D9); font-size:.9rem; }
+.cal-gap-n { font-size:1.5rem; font-weight:800; color:#fff; }
+.cal-dots { letter-spacing:.5em; color:var(--accent-teal, #04CAB9); font-size:1.2rem; }
+.cal-legend { display:flex; flex-wrap:wrap; gap:14px; font-size:.8rem; color:var(--text-muted, #D9D9D9); margin-top:10px; }
+.cal-legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+.cal-ends { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-top:10px; font-size:.85rem; color:var(--text-muted, #D9D9D9); }
+.cal-ends b { color:#fff; }
+#report-calendar, #report-g1list, #report-rto, #report-risks { margin-bottom:1.8rem; }
+
+/* Recovery Playbook tab */
+.pb-note { background:var(--bg-card, #122861); border-left:4px solid var(--accent-teal, #04CAB9); border-radius:10px; padding:.8rem 1.1rem; margin:0 0 1.2rem; font-size:.92rem; }
+.pb-steps { display:grid; gap:12px; margin-bottom:1.6rem; }
+.pb-step { display:flex; gap:14px; background:var(--bg-card, #122861); border-radius:14px; padding:16px 18px; }
+.pb-n { flex:0 0 auto; width:2.2rem; height:2.2rem; border-radius:50%; background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); font-weight:800; display:flex; align-items:center; justify-content:center; }
+.pb-title { font-size:1.05rem; font-weight:700; margin-bottom:.3rem; }
+.pb-tag { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; background:var(--bg-navy, #0A2547); border-radius:999px; padding:.15rem .6rem; color:var(--accent-mint, #BCFFFB); margin-left:.4rem; vertical-align:middle; }
+.pb-body p { margin:.35rem 0; font-size:.92rem; line-height:1.5; }
+.pb-sub { margin:.3rem 0 .3rem 1.2rem; padding:0; font-size:.92rem; line-height:1.5; }
+.pb-meta { margin-top:.6rem; padding-top:.5rem; border-top:1px solid var(--border, #3A4A80); font-size:.88rem; color:var(--text-muted, #D9D9D9); }
+.pb-meta b { color:#fff; }
+.pb-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px; margin-bottom:1.4rem; }
+.pb-card { background:var(--bg-card, #122861); border-radius:14px; padding:16px 18px; }
+.pb-card-t { font-weight:700; margin-bottom:.4rem; color:var(--accent-mint, #BCFFFB); }
+.pb-card p { margin:.4rem 0; font-size:.9rem; line-height:1.5; }
+.pb-small { font-size:.8rem !important; color:var(--text-muted, #D9D9D9); }
+.pb-locknote { font-size:.8rem; color:var(--text-muted, #D9D9D9); }
+
+/* v2.0 exec recovery timeline: two bars on one scale */
+.xt-row { margin-top:16px; }
+.xt-head { display:flex; align-items:center; gap:18px; margin-bottom:8px; flex-wrap:wrap; }
+.xt-big { font-size:clamp(2rem, 4vw, 2.8rem); font-weight:800; line-height:1; min-width:9.5rem; }
+.xt-big.g1 { color:var(--accent-teal, #04CAB9); }
+.xt-big.g2 { color:var(--g2t, #B993F5); }
+.xt-big.g3 { color:var(--accent-lilac, #F4C9F4); }
+.xt-lab { font-size:.9rem; color:var(--text-muted, #D9D9D9); line-height:1.4; }
+.xt-lab b { color:var(--text, #fff); font-size:1rem; }
+.xt-bar { height:34px; border-radius:10px; background:var(--bg-navy, #0A2547); overflow:hidden; }
+.xt-fill { height:100%; min-width:8px; background:var(--accent-teal, #04CAB9); border-radius:10px; }
+.xt-fill.grey { width:100%; background:repeating-linear-gradient(135deg, #6F7FA3 0 4px, #5B6B90 4px 8px); }
+
+/* Light theme: navy headings/numbers like the 3.x report; darker bar tracks give the timeline a visible boundary */
+:root:not([data-theme="dark"]) h2, :root:not([data-theme="dark"]) .xs-big { color:#093565; }
+:root:not([data-theme="dark"]) .xs-mint .xs-big, :root:not([data-theme="dark"]) .xs-money { color:#0F6B4F; }
+:root:not([data-theme="dark"]) .xs-teal { border-top:5px solid #0E5BCF; }
+:root:not([data-theme="dark"]) .xs-mint { border-top:5px solid #0F6B4F; }
+:root:not([data-theme="dark"]) .xt-bar { background:#C3CCD7; }
+:root:not([data-theme="dark"]) .xs-ladder-h { color:#093565; }
+
+/* v1-style recovery ladder on the Executive tab */
+.xs-ladder-h2 { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:.8rem; margin-bottom:.2rem; }
+section.recovery-ladder#exec-ladder { margin-top:16px; }
+
+/* Spread ladder: vertical lines instead of dots, tail into mass recovery */
+.rl-line { position:absolute; top:33px; width:4px; height:28px; border-radius:2px; transform:translateX(-50%); z-index:2; box-shadow:0 0 0 2px var(--surface, #fff); }
+.rl-break { position:absolute; top:38px; transform:translateX(-50%); font-size:1.1rem; font-weight:800; color:var(--text-dim, #6C7576); background:var(--surface, #fff); padding:0 4px; z-index:3; line-height:1; }
+.rl-seg.tail { background-color:var(--hatch-base, #D7DCE1); background-image:repeating-linear-gradient(45deg, var(--hatch-stripe, rgba(255,255,255,.55)) 0, var(--hatch-stripe, rgba(255,255,255,.55)) 6px, transparent 6px, transparent 12px); }
+.rl-seg.tail.g13 { background-color:#8793A6; }
+.rl-seg.tail.g4 { background-color:#F5A524; }
+.rl-seg.tail.g4, .rl-seg.tail.g13 { background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.35) 0, rgba(255,255,255,.35) 6px, transparent 6px, transparent 12px); }
+:root[data-theme="dark"] { --g4-text:#FFC25A; }
+
+.rl-seglabel { position:absolute; top:58px; width:150px; transform:translateX(-50%); text-align:center; }
+.rl-seglabel-t { display:inline-block; border-top:2px solid #8793A6; padding-top:6px; font-size:.76rem; font-weight:700; color:var(--text-muted, #D9D9D9); line-height:1.25; }
+
+/* Long recoveries: one row - month 1, month 2 fading out, a gap, then the completion month fading back in */
+.cal.long { display:flex; flex-wrap:wrap; align-items:stretch; gap:12px; }
+.cal.long .cal-mon { flex:1 1 230px; max-width:340px; }
+.cal.long .cal-gap { flex:0 1 190px; align-self:center; padding:6px 4px; }
+.cal.long .cal-mon.fadeout { -webkit-mask-image:linear-gradient(to right, #000 15%, transparent 100%); mask-image:linear-gradient(to right, #000 15%, transparent 100%); }
+.cal.long .cal-mon.fadein { -webkit-mask-image:linear-gradient(to right, transparent 0%, #000 85%); mask-image:linear-gradient(to right, transparent 0%, #000 85%); }
+/* Light theme: these were hard-coded white */
+:root:not([data-theme="dark"]) .cal-gap-n { color:#093565; }
+:root:not([data-theme="dark"]) .cal-ends b { color:#093565; }
+:root:not([data-theme="dark"]) .pb-meta b { color:#093565; }
+
+/* Editable fields: tinted "fill me in" cells (pale amber well, amber border) so they stand out from the panel */
+:root:not([data-theme="dark"]) input[type=number], :root:not([data-theme="dark"]) input[type=text], :root:not([data-theme="dark"]) input[type=search], :root:not([data-theme="dark"]) select, :root:not([data-theme="dark"]) textarea {
+  background:#FFF3C4; border:2px solid #B7791F; box-shadow: inset 0 1px 2px rgba(120,70,0,.18); color:#093565; font-weight:700; }
+:root:not([data-theme="dark"]) input[type=number]:hover, :root:not([data-theme="dark"]) input[type=text]:hover, :root:not([data-theme="dark"]) select:hover { border-color:#8A5A10; background:#FFEFAE; }
+:root:not([data-theme="dark"]) input[type=number]:focus, :root:not([data-theme="dark"]) input[type=text]:focus, :root:not([data-theme="dark"]) select:focus, :root:not([data-theme="dark"]) textarea:focus { background:#FFFFFF; border-color:#0A6764; box-shadow:0 0 0 3px rgba(10,103,100,.28); outline:none; }
+:root[data-theme="dark"] input[type=number], :root[data-theme="dark"] input[type=text], :root[data-theme="dark"] select { border:2px solid #F2B84B; background:#3A2F10; color:#FFF3C4; font-weight:700; }
+:root[data-theme="dark"] input[type=number]:focus, :root[data-theme="dark"] input[type=text]:focus, :root[data-theme="dark"] select:focus { border-color:#04CAB9; box-shadow:0 0 0 3px rgba(4,202,185,.3); outline:none; }
+.control-row input[type=number] { text-align:center; }
+@media print { input[type=number], input[type=text], select { border:1px solid #999 !important; box-shadow:none !important; background:#fff !important; } }
+
+/* Ladder: a label held back by the right edge is anchored to its own line and reads leftward from it */
+.rl-flag.end { transform:translateX(-100%); text-align:right; }
+.rl-flag.end .rl-time, .rl-flag.end .rl-label { text-align:right; }
+
+/* Compact ladder (5+ groups): numbered ticks for intermediate groups, tighter flags */
+.rl-tickn { position:absolute; top:64px; transform:translateX(-50%); font-size:.68rem; font-weight:800; color:var(--text-muted, #4A5560); }
+.rl-flag.compact .rl-time { font-size:.9rem; }
+.rl-flag.compact .rl-label { font-size:.7rem; }
+
+.rto-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); column-gap:1.5rem; }
+.rl-flag.start { transform:none; text-align:left; }
+.rl-flag.start .rl-time, .rl-flag.start .rl-label { text-align:left; }
+
+/* ===== v2.0 Groups & Recovery Model tab (WP-A). Colors come from theme tokens only. ===== */
+.tab-lead { color:var(--text-muted, #D9D9D9); max-width:80ch; margin:-.6rem 0 1.2rem; }
+.grp-section-title { margin:1.6rem 0 .4rem; }
+.grp-section { margin-top:.5rem; }
+.tier-dot { display:inline-block; width:.7rem; height:.7rem; border-radius:50%; margin-right:.45rem; vertical-align:middle; }
+.acc-sub { font-weight:400; color:var(--text-muted, #D9D9D9); font-size:.82rem; margin-left:.35rem; }
+
+/* headline */
+.grp-headline { margin-top:1rem; }
+.hl-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:.6rem 0 1rem; }
+@media (max-width:760px) { .hl-grid { grid-template-columns:1fr; } }
+.hl-card { background:var(--bg-card, #122861); border:1px solid var(--border, #3a4a80); border-radius:12px; padding:1.1rem 1.3rem; }
+.hl-time { border-left:5px solid var(--accent-teal, #04CAB9); }
+.hl-money { border-left:5px solid var(--accent-cyan, #1BBCF3); }
+.hl-label { font-size:.82rem; letter-spacing:.4px; text-transform:uppercase; color:var(--text-muted, #D9D9D9); font-weight:700; }
+.hl-big { font-size:2.6rem; line-height:1.15; font-weight:800; color:var(--text, #fff); margin:.25rem 0; }
+.hl-sub { color:var(--text-muted, #D9D9D9); font-size:.92rem; }
+.hl-smalls { margin-top:.8rem; border-top:1px solid var(--border, #3a4a80); padding-top:.6rem; }
+.hl-small { display:flex; justify-content:space-between; gap:1rem; font-size:.95rem; padding:.15rem 0; }
+.hl-small-label { color:var(--text-muted, #D9D9D9); }
+.hl-wl-table tr[data-link]:hover td { background:var(--bg-card, #122861); }
+.hl-wl-table .total-row td { border-top:2px solid var(--border, #3a4a80); }
+.grp-exclusion-note { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; background:var(--bg-card, #122861); border:1px solid var(--warn, #FF5A2E); border-radius:8px; padding:.6rem .9rem; margin:0 0 1rem; font-size:.9rem; }
+.grp-exclusion-note button { background:transparent; color:var(--text, #fff); border:1px solid var(--accent-teal, #04CAB9); border-radius:6px; padding:.25rem .8rem; cursor:pointer; font:inherit; font-weight:700; }
+.grp-exclusion-note button:hover { background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); }
+
+/* divider between "by group" and "by workload" */
+.grp-divider { display:flex; align-items:center; gap:1rem; margin:2.4rem 0 1rem; color:var(--accent-teal, #04CAB9); font-weight:800; font-size:1.05rem; letter-spacing:.3px; }
+.grp-divider::before, .grp-divider::after { content:""; flex:1; border-top:2px solid var(--accent-teal, #04CAB9); opacity:.7; }
+
+/* locked (Preview/Summary) controls */
+.locked-note { background:var(--bg-card, #122861); border:1px solid var(--accent-teal, #04CAB9); border-radius:8px; padding:.6rem .9rem; margin-bottom:.9rem; font-size:.9rem; }
+.locked-note a, .remaining-card a { color:var(--accent-teal, #04CAB9); font-weight:700; }
+fieldset.locked-controls { border:0; margin:0; padding:0; min-width:0; opacity:.55; filter:grayscale(.6); }
+fieldset.locked-controls input, fieldset.locked-controls select, fieldset.locked-controls button { cursor:not-allowed; }
+.lock-tag { display:inline-block; font-size:.62rem; font-weight:800; letter-spacing:.4px; text-transform:uppercase; color:var(--accent-teal, #04CAB9); border:1px solid var(--accent-teal, #04CAB9); border-radius:999px; padding:.05rem .45rem; margin-left:.4rem; vertical-align:middle; }
+.remaining-card { border:1px dashed var(--accent-teal, #04CAB9); border-radius:10px; padding:1rem; margin:.8rem 0; background:var(--bg-navy, #0A2547); }
+.remaining-card h4 { margin:0 0 .4rem; }
+
+/* group / workload bodies */
+.grp-breakdown td, .grp-breakdown th { white-space:nowrap; }
+.g4-note { color:var(--text-muted, #D9D9D9); margin:.2rem 0 1rem; }
+.grp-wl-chips { margin:1rem 0 .4rem; }
+.g1all { margin:1.2rem 0; }
+.g1all-title, .obj-count { margin:.6rem 0 .3rem; font-weight:700; }
+.obj-count-n { font-weight:400; color:var(--text-muted, #D9D9D9); font-size:.88rem; }
+.obj-table { margin-top:.8rem; }
+.empty-cell { text-align:center; color:var(--text-muted, #D9D9D9); padding:2rem; white-space:normal; }
+.totals-sub { font-size:.72rem; color:var(--text-muted, #D9D9D9); }
+.mass-edit-label { font-size:.78rem; color:var(--text-muted, #D9D9D9); }
+.attr-input { background:var(--bg-deep, #011E3A); color:var(--text, #fff); border:1px solid var(--border, #3a4a80); border-radius:6px; padding:.3rem .5rem; font-size:.78rem; }
+.rt-current { font-size:.78rem; color:var(--text-muted, #D9D9D9); margin-left:.6rem; }
+.bonus-title { font-size:.8rem; color:var(--text, #fff); }
+.rt-empty-note.exceeds { border-left:4px solid var(--alert, #FB3A73); }
+.flag-chip { display:inline-block; font-size:.62rem; font-weight:800; letter-spacing:.3px; text-transform:uppercase; border-radius:999px; padding:.05rem .45rem; margin-left:.35rem; vertical-align:middle; background:var(--warn, #FF5A2E); color:var(--bg-deep, #011E3A); cursor:pointer; }
+.flag-chip.excluded { background:transparent; color:var(--warn, #FF5A2E); border:1px solid var(--warn, #FF5A2E); }
+
+/* ===== v2.0 Recovery Insights tab. Colors come from the theme tokens (see ReportCss.css :root). ===== */
+.ins-sub { color:var(--text-muted, #D9D9D9); max-width:80ch; margin:-.5rem 0 1.2rem; font-size:.95rem; }
+.ins-banner { background:var(--bg-card, #122861); border:1px solid var(--border, #3a4a80); border-left:5px solid var(--accent-teal, #04CAB9); border-radius:10px; padding:1rem 1.2rem; margin:0 0 1.2rem; display:flex; flex-wrap:wrap; align-items:center; gap:1rem 1.5rem; }
+.ins-banner-text { flex:1 1 320px; line-height:1.45; }
+.ins-compare { display:flex; gap:.75rem; flex-wrap:wrap; }
+.ins-compare-card { background:var(--bg-navy, #0A2547); border:1px solid var(--border, #3a4a80); border-radius:8px; padding:.55rem .9rem; min-width:170px; opacity:.8; }
+.ins-compare-card.current { border-color:var(--accent-teal, #04CAB9); opacity:1; }
+.ins-compare-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted, #D9D9D9); }
+.ins-compare-val { font-weight:800; font-size:1.05rem; }
+.ins-compare-sub { font-size:.82rem; color:var(--text-muted, #D9D9D9); }
+.ins-toggle { display:inline-flex; border:1px solid var(--border, #3a4a80); border-radius:8px; overflow:hidden; align-items:center; }
+.ins-toggle-btn { background:transparent; color:var(--text, #fff); border:0; padding:.45rem 1rem; font:inherit; font-weight:700; cursor:pointer; }
+.ins-toggle-btn.active { background:var(--accent-teal, #04CAB9); color:var(--bg-deep, #011E3A); }
+.ins-toggle-btn:disabled { opacity:.5; cursor:not-allowed; }
+.ins-toggle-btn:focus-visible, .ins-tile:focus-visible, .ins-clear:focus-visible { outline:2px solid var(--accent-cyan, #1BBCF3); outline-offset:2px; }
+.ins-toggle-note { padding:0 .8rem; font-size:.8rem; color:var(--text-muted, #D9D9D9); }
+.ins-tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:.75rem; margin:0 0 1.5rem; }
+.ins-tile { text-align:left; background:var(--bg-card, #122861); color:var(--text, #fff); border:1px solid var(--border, #3a4a80); border-radius:10px; padding:.8rem 1rem; cursor:pointer; font:inherit; display:flex; flex-direction:column; gap:.2rem; }
+.ins-tile:hover:not(:disabled) { border-color:var(--accent-teal, #04CAB9); }
+.ins-tile.active { border-color:var(--accent-teal, #04CAB9); box-shadow:0 0 0 2px var(--accent-teal, #04CAB9); }
+.ins-tile.zero { opacity:.5; cursor:default; }
+.ins-tile-count { font-size:1.7rem; font-weight:800; color:var(--accent-teal, #04CAB9); line-height:1.1; }
+.ins-tile-label { font-weight:700; }
+.ins-tile-impact { font-size:.8rem; color:var(--text-muted, #D9D9D9); line-height:1.35; }
+.ins-table-head { display:flex; align-items:center; gap:.8rem; flex-wrap:wrap; }
+.ins-table-head h3, #insights-baseline h3 { margin:1rem 0 .5rem; }
+.ins-filter { font-size:.9rem; color:var(--text-muted, #D9D9D9); }
+.ins-clear { background:transparent; color:var(--accent-teal, #04CAB9); border:0; text-decoration:underline; cursor:pointer; font:inherit; }
+.ins-table td.ins-why { min-width:280px; max-width:520px; font-size:.85rem; line-height:1.4; }
+.ins-table td.ins-flags { min-width:160px; }
+.ins-table tr.ins-excluded td { background:rgba(251, 58, 115, .08); }
+.ins-chip { display:inline-block; font-size:.72rem; font-weight:700; padding:.1rem .5rem; border-radius:999px; border:1px solid var(--accent-cyan, #1BBCF3); color:var(--accent-cyan, #1BBCF3); margin:.1rem .15rem .1rem 0; white-space:nowrap; }
+.ins-chip.excl { border-color:var(--alert, #FB3A73); color:var(--alert, #FB3A73); }
+.ins-empty { color:var(--text-muted, #D9D9D9); font-style:italic; margin:.5rem 0 1rem; }
+
 '@
 
 #endregion
@@ -2999,30 +3559,42 @@ footer p { max-width: 900px; }
 #region ---------- HTML report JS: engine (data, scoring, tiering, overrides) ----------
 
 $script:ReportJsEngine = @'
+// ===== v2.0: build mode. "full" = everything; "preview" = Group 1 only (Groups 2-4 are stripped
+// from the data at generation time, see Select-PreviewGroup1Rows); "summary" = aggregate-only (no
+// per-object rows at all). The mode is data-driven (meta.buildMode, set by PowerShell) so the
+// SAME JS ships in every build and the three can never drift apart.
 var DATA = JSON.parse(document.getElementById("report-data-meta").textContent);
+var BUILD_MODE = (DATA.meta && DATA.meta.buildMode) || "full";
+var IS_PREVIEW = BUILD_MODE === "preview";
+var IS_SUMMARY = BUILD_MODE === "summary";
 // NEW 2026-09-24: large-tenant fix - the embedded payload is split across 5
 // separate <script> tags (meta/weights/etc, then one per workload) instead
-// of one combined blob, because a real customer's
-// ~908,000-object tenant produced a single JSON string of 539,000,418
-// characters - 2.1MB OVER V8's hard-coded maximum JS string length
+// of one combined blob, because a customer's
+// very large tenant produced a single JSON string of more than 536 million characters - OVER V8's hard-coded maximum JS string length
 // (536,870,888 characters; this is a fixed engine constant in every
 // Chromium/Node build, not something more RAM works around). JSON.parse()
 // on a string past that ceiling throws immediately, before ANY of this
-// engine runs, leaving the whole report blank - see CHANGELOG 3.16.11 /
-// PRODUCT-ARCHITECTURE-NOTES for the full writeup. Splitting per-workload
+// engine runs, leaving the whole report blank. Splitting per-workload
 // keeps each individual JSON.parse() call's input comfortably under the
 // limit for every tenant seen to date (the largest single workload seen,
-// SharePoint, was ~327MB - about 185MB of headroom left). This does NOT
+// SharePoint, was several hundred MB - with headroom left). This does NOT
 // eliminate the ceiling - an extreme enough SINGLE workload could still
 // someday exceed it on its own; there is no dynamic chunking within a
 // workload yet.
+function readWorkloadJson(id) {
+  var el = document.getElementById(id);
+  if (!el) { return []; }
+  var t = el.textContent;
+  if (!t || !t.trim()) { return []; }
+  return JSON.parse(t);
+}
 DATA.workloads = {
-  mailboxes:  JSON.parse(document.getElementById("report-data-mailboxes").textContent),
-  onedrive:   JSON.parse(document.getElementById("report-data-onedrive").textContent),
-  sharepoint: JSON.parse(document.getElementById("report-data-sharepoint").textContent),
-  teams:      JSON.parse(document.getElementById("report-data-teams").textContent)
+  mailboxes:  readWorkloadJson("report-data-mailboxes"),
+  onedrive:   readWorkloadJson("report-data-onedrive"),
+  sharepoint: readWorkloadJson("report-data-sharepoint"),
+  teams:      readWorkloadJson("report-data-teams")
 };
-// NEW 2026-09-11: defensive normalization for a real customer-found bug
+// NEW 2026-09-11: defensive normalization for a field-found bug
 // (an Interactive report that was blank/broken). The PS-side fix
 // (see Get-UserEnrichmentIndex / Add-UserEnrichment @(...) vs $(...)) stops
 // this at the source for NEW runs, but any report ALREADY generated before
@@ -3058,13 +3630,13 @@ DATA.workloads = {
 // separate "Beyond Target" bucket. Group 1/2/3's RTO compliance is now a
 // per-group flag on the recovery model instead (see computeRecoveryModel).
 // NEW v3.7.0: renamed the 4th tier from "Dormant - No Recent Activity" to
-// plain "Group 4", per feedback 2026-07-30 - folds zero-activity data into
+// plain "Group 4", per feedback - folds zero-activity data into
 // the same Group 1/2/3 naming convention instead of calling it out as its
 // own "dormant" category, and swaps its badge from amber (which read as an
 // alert) to a neutral gray (--mid-gray) so it doesn't draw the eye.
 // NEW v3.10.3: large-tenant render cap. Every workload table (and the Group 1
 // cross-workload overview) used to render one <tr> per object with no limit -
-// fine at demo scale, but a real tenant with tens of thousands of objects per
+// fine at demo scale, but a live tenant with tens of thousands of objects per
 // workload turned "click Criticality Groups" into tens of thousands of DOM
 // rows built and laid out synchronously on every recompute (including the
 // very first page load, since recomputeAll() renders every tab up front) -
@@ -3078,15 +3650,96 @@ DATA.workloads = {
 // specific object always finds it even if it's outside the default top slice.
 var MAX_TABLE_ROWS = 500;
 var TIER_ORDER = ["Critical Group 1","Critical Group 2","Critical Group 3","Group 4"];
+// v2.0 dark theme tier colors (same values as the --accent-* tokens; fg chosen for >= 4.5:1 contrast).
 var TIER_META = {
-  "Critical Group 1": {bg:"#0E5BCF", fg:"#FFFFFF", short:"Group 1"},
-  "Critical Group 2": {bg:"#2FCAFF", fg:"#093565", short:"Group 2"},
-  "Critical Group 3": {bg:"#4DD2D2", fg:"#093565", short:"Group 3"},
-  "Group 4": {bg:"#A4A9A8", fg:"#FFFFFF", short:"Group 4"}
+  "Critical Group 1": {bg:"#04CAB9", fg:"#011E3A", short:"Group 1", role:"Critical users", named:"Critical users (Group 1)"},
+  "Critical Group 2": {bg:"#8242E8", fg:"#FFFFFF", short:"Group 2", role:"Important users", named:"Important users (Group 2)"},
+  "Critical Group 3": {bg:"#F4C9F4", fg:"#011E3A", short:"Group 3", role:"Standard users", named:"Standard users (Group 3)"},
+  "Group 4": {bg:"#8FA0BF", fg:"#011E3A", short:"Group 4", role:"Low-activity objects", named:"Low-activity objects (Group 4)"}
 };
+// ---- Variable group count (v2.0) -------------------------------------------------------------------------------------
+// N criticality groups ("Critical Group 1".."Critical Group N", every one sequenced by ABR) plus ONE low-activity group
+// (internal key LOW_KEY, labelled "Group N+1"). N defaults to 3 (the original layout) and is 3-12 in the Full report.
+// TIER_ORDER / TIER_META are rebuilt in place by rebuildTiers() whenever N changes, so code that loops over them adapts.
+var LOW_KEY = "Group 4";
+var MIN_GROUPS = 3, MAX_GROUPS = 12;
+var TIER_DARK_ANCHORS = ["#04CAB9", "#8242E8", "#F4C9F4"];
+function groupN() { return (typeof state !== "undefined" && state.recovery && state.recovery.groupCount) || 3; }
+function critKey(k) { return "Critical Group " + k; }
+function critKeys() { var a = []; for (var k = 1; k <= groupN(); k++) { a.push(critKey(k)); } return a; }
+function lastCritKey() { return critKey(groupN()); }
+function tierNum(key) { var m = /^Critical Group (\d+)$/.exec(key || ""); return m ? parseInt(m[1], 10) : 0; }
+function lowName() { return "Group " + (groupN() + 1); }
+function scopeName(k) { return k <= 1 ? "Group 1" : "Groups 1-" + k; }
+function groupHoursOf(k) { return state.recovery.groupHours[k - 1]; }
+function hexToRgb(h) { h = h.replace("#", ""); return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)]; }
+function rgbToHex(c) { return "#" + c.map(function (v) { v = Math.max(0, Math.min(255, Math.round(v))); return (v < 16 ? "0" : "") + v.toString(16); }).join(""); }
+function cssAnchor(i) {
+  var fb = TIER_DARK_ANCHORS[i];
+  try { var v = getComputedStyle(document.documentElement).getPropertyValue("--g" + (i + 1) + "c").trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : fb; } catch (e) { return fb; }
+}
+// Colour of criticality group k of n: the three theme anchors (teal, purple, lilac) with intermediate groups interpolated.
+function groupColor(k, n, anchors) {
+  n = n || groupN(); anchors = anchors || [cssAnchor(0), cssAnchor(1), cssAnchor(2)];
+  if (n <= 3) { return anchors[Math.min(2, k - 1)]; }
+  var t = (k - 1) / (n - 1) * 2, i = Math.min(1, Math.floor(t)), f = t - i;
+  var a = hexToRgb(anchors[i]), b = hexToRgb(anchors[i + 1]);
+  return rgbToHex([0, 1, 2].map(function (j) { return a[j] + (b[j] - a[j]) * f; }));
+}
+function lowGroupColor() { return "#8FA0BF"; }
+function readableFg(hex) { var c = hexToRgb(hex), l = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255; return l > 0.6 ? "#011E3A" : "#FFFFFF"; }
+function tierTitle(k) {
+  if (k === 1) { return "Critical users (Group 1)"; }
+  if (groupN() === 3 && k <= 3) { return (k === 2 ? "Important users" : "Standard users") + " (Group " + k + ")"; }
+  return "Group " + k;
+}
+function rebuildTiers() {
+  var n = groupN();
+  TIER_ORDER.length = 0;
+  Object.keys(TIER_META).forEach(function (k) { delete TIER_META[k]; });
+  for (var k = 1; k <= n; k++) {
+    var bg = groupColor(k, n, TIER_DARK_ANCHORS);
+    TIER_META[critKey(k)] = { bg: bg, fg: readableFg(bg), short: "Group " + k, role: k === 1 ? "Critical users" : (n === 3 ? (k === 2 ? "Important users" : "Standard users") : "Group " + k), named: tierTitle(k) };
+    TIER_ORDER.push(critKey(k));
+  }
+  TIER_META[LOW_KEY] = { bg: lowGroupColor(), fg: "#011E3A", short: "Group " + (n + 1), role: "Low-activity objects", named: "Low-activity objects (Group " + (n + 1) + ")" };
+  TIER_ORDER.push(LOW_KEY);
+}
+// Whole-tenant ABR (hot-data) time if every active object were one group - sizes the "Enterprise Plus" targets.
+function wholeTenantAbrMin() {
+  var wf = getWindowFactor(), total = 0, scale = Math.max((DATA.workloads.sharepoint || []).length, (DATA.workloads.onedrive || []).length);
+  var tier = resolveLicenseTier(state.recovery.licenseTier, scale);
+  Object.keys(RECOVERY_FIELD_MAP).forEach(function (wl) {
+    var f = RECOVERY_FIELD_MAP[wl], rows = DATA.workloads[wl] || [], items = 0, stor = 0, ri = 0, rs = 0, objs = 0;
+    rows.forEach(function (r) {
+      var it = parseFloat(r.metrics[f.itemField]) || 0, st = parseFloat(r.metrics[f.storageField]) || 0;
+      var rec = Math.max(0, Math.min(parseFloat(r.metrics[RECENT_FIELD[wl]]) || 0, it));
+      if ((parseFloat(r.metrics.TotalActivity) || 0) > 0) { objs++; ri += rec; rs += it > 0 ? st * rec / it : 0; }
+      items += it; stor += st;
+    });
+    var avg = items > 0 ? stor / items : 0;
+    total = Math.max(total, recoveryTimeMinutes(f.type, objs, ri * wf, rs * wf, avg, tier, true));
+  });
+  return total;
+}
+// Enterprise Plus: sized to the tenant. The last group's target is the whole-tenant ABR time (rounded up), Group 1 is
+// Day 1 (24 hr, or less on a small tenant), and the groups in between are spaced geometrically so each group is a bit
+// larger than the one before. Cumulative hours, rounded to 12 hr (1 hr on small tenants), always editable.
+function enterprisePlusHours(n) {
+  var A = wholeTenantAbrMin() / 60, big = A >= 240, step = big ? 12 : 1;
+  var endH = Math.max(step * 2, Math.ceil(A / step) * step);
+  var g1 = Math.max(step, Math.min(24, Math.round(endH / n / step) * step));
+  var out = [], prev = 0;
+  for (var k = 1; k <= n; k++) {
+    var h = k === 1 ? g1 : (k === n ? endH : g1 * Math.pow(endH / g1, (k - 1) / (n - 1)));
+    h = Math.max(prev + step, Math.round(h / step) * step);
+    out.push(h); prev = h;
+  }
+  return out;
+}
 var FRIENDLY = { SendRecvActivity:"Send/receive volume", ReadActivity:"Read volume", Size:"Mailbox size",
-  FileActivity:"File activity", Storage:"Storage size", PageViews:"Page views", ActiveFiles:"Active files",
-  ActiveUsers:"Active users", ChannelMsgs:"Channel messages", Meetings:"Meetings organized",
+  FileActivity:"File activity", Storage:"Storage size", PageViews:"Page views", ActiveFiles:"Recently used files",
+  ActiveUsers:"Participating users", ChannelMsgs:"Channel messages", Meetings:"Meetings organized",
   TitleWeight:"Job title" };
 // spExOd (non-null for Mailboxes/OneDrive/SharePoint) flags the three
 // workloads with an independent, throughput-based recovery-time model - used
@@ -3098,10 +3751,10 @@ var FRIENDLY = { SendRecvActivity:"Send/receive volume", ReadActivity:"Read volu
 // Reports.Read.All only (AuditLog.Read.All existed solely to pull sign-in
 // logs for this workload).
 var WORKLOAD_DEFS = [
-  {key:"mailboxes", label:"Mailboxes", idLabel:"UPN", itemField:"ItemCount", itemLabel:"Items", storageField:"StorageUsedMB", storageLabel:"Storage (MB)", spExOd:"EX"},
-  {key:"onedrive", label:"OneDrive Accounts", idLabel:"Site URL / Owner UPN", itemField:"FileCount", itemLabel:"Files", storageField:"StorageUsedGB", storageLabel:"Storage (GB)", spExOd:"OD"},
-  {key:"sharepoint", label:"SharePoint Sites", idLabel:"Site URL / Owner UPN", itemField:"FileCount", itemLabel:"Files", storageField:"StorageUsedGB", storageLabel:"Storage (GB)", spExOd:"SP"},
-  {key:"teams", label:"Teams", idLabel:"Team Id", itemField:"ActiveUsersCount", itemLabel:"Active Users", storageField:null, storageLabel:"", spExOd:null}
+  {key:"mailboxes", label:"Mailboxes", idLabel:"UPN", itemField:"ItemCount", itemLabel:"Items", storageField:"StorageUsedMB", storageLabel:"Storage", spExOd:"EX"},
+  {key:"onedrive", label:"OneDrive Accounts", idLabel:"Site URL / Owner UPN", itemField:"FileCount", itemLabel:"Files", storageField:"StorageUsedGB", storageLabel:"Storage", spExOd:"OD"},
+  {key:"sharepoint", label:"SharePoint Sites", idLabel:"Site URL / Owner UPN", itemField:"FileCount", itemLabel:"Files", storageField:"StorageUsedGB", storageLabel:"Storage", spExOd:"SP"},
+  {key:"teams", label:"Teams", idLabel:"Team Id", itemField:"ActiveUsersCount", itemLabel:"Participating Users", storageField:null, storageLabel:"", spExOd:null}
 ];
 // NEW v3.1.0: real "recent/active data" telemetry field per workload
 // (already collected, no invented numbers) - the recent item/file count
@@ -3112,7 +3765,7 @@ var WORKLOAD_DEFS = [
 // product capability, not a -Period choice - so these point at the *7d
 // fields (always collected at Period=D7, independent of whatever -Period
 // drove scoring/dormancy) rather than the scoring-signal fields of the same
-// name without the suffix. See RECOVERY-MODEL-METHODOLOGY.md.
+// name without the suffix. See the Methodology tab.
 var RECENT_FIELD = { mailboxes:"SendRecvActivity7d", onedrive:"ViewedOrEditedCount7d", sharepoint:"ActiveFiles7d" };
 
 // NEW v3.8.0/Phase 2: item/storage field names + recoveryTimeMinutes()
@@ -3131,7 +3784,7 @@ var RECOVERY_FIELD_MAP = {
 // NEW v3.8.0: shared with computeRecoveryModel (Recovery heredoc) so the
 // tiering walk and the rendered ABR figures can never drift out of sync -
 // both call this same function rather than each computing windowFactor
-// inline. See RECOVERY-MODEL-METHODOLOGY.md.
+// inline. See the Methodology tab.
 function getWindowFactor() {
   return Math.max(0, Math.min(7, state.recovery.windowDays || 0)) / 7;
 }
@@ -3155,12 +3808,12 @@ function assignBudgetTiers(active, itemField, storageField, recentField, avgItem
   // computeRecoveryModel same as before. Group 3 (the last real tier)
   // always absorbs every remaining active object regardless of fit - there
   // is no active-overflow tier, matching the v3.1.0 "every active object is
-  // in Group 1/2/3" invariant. See RECOVERY-MODEL-METHODOLOGY.md.
-  var tierNames = ["Critical Group 1", "Critical Group 2", "Critical Group 3"];
+  // in Group 1/2/3" invariant. See the Methodology tab.
+  var tierNames = critKeys(), G = tierNames.length;
   var n = active.length;
   var cursor = 0;
   var priorTiersTime = 0;
-  for (var t = 0; t < 3; t++) {
+  for (var t = 0; t < G; t++) {
     var budget = targetsMin[t] - priorTiersTime;
     var cumObjs = 0, cumItems = 0, cumStorage = 0;
     while (cursor < n) {
@@ -3174,13 +3827,13 @@ function assignBudgetTiers(active, itemField, storageField, recentField, avgItem
       var candItems = cumItems + (ri * windowFactor);
       var candStorage = cumStorage + (ts * frac * windowFactor);
       var candTime = recoveryTimeMinutes(workloadType, candObjs, candItems, candStorage, avgItemSize, spodTier, true);
-      if (t < 2 && budget > 0 && candTime > budget && cumObjs > 0) {
+      if (t < G - 1 && budget > 0 && candTime > budget && cumObjs > 0) {
         break; // this tier is full relative to its budget - move to the next tier
       }
       row.ComputedTier = tierNames[t];
       cumObjs = candObjs; cumItems = candItems; cumStorage = candStorage;
       cursor++;
-      if (t < 2 && budget > 0 && candTime > budget) {
+      if (t < G - 1 && budget > 0 && candTime > budget) {
         break; // just accepted the one object that alone overflows an empty tier - close it now
       }
     }
@@ -3220,12 +3873,56 @@ var state = {
     // defaults. Live-adjustable in the Recovery tab; changing these triggers
     // a FULL retiering recompute (recomputeAll), not just a recovery-time
     // recompute, since tiering itself now depends on these targets.
-    group1Hours: DATA.meta.group1TargetHours, group2Hours: DATA.meta.group2TargetHours, group3Hours: DATA.meta.group3TargetHours,
+    groupCount: (IS_PREVIEW || IS_SUMMARY) ? 3 : Math.max(3, Math.min(12, parseInt(DATA.meta.groupCount, 10) || 3)),
+    groupHours: [DATA.meta.group1TargetHours, DATA.meta.group2TargetHours, DATA.meta.group3TargetHours],
     rtoPreset: DATA.meta.rtoPresetResolved || "Standard", rtoPresetReason: DATA.meta.rtoPresetReason || "",
     autoBannerDismissed: false
   },
-  activeFilters: {}
+  activeFilters: {},
+  // v2.0 Recovery Insights. exclude: peer-outlier / concentration objects are left out of the HEADLINE recovery
+  // estimates (ABR and Mass alike, so the comparison stays like-for-like) and called out; the customer can toggle them
+  // back in. Preview/Summary builds never exclude (the baseline cannot be recomputed without Groups 2-4).
+  // floorInHeadline: long-pole floor is shown as an insight only until the single-object restore rates are confirmed.
+  insights: { exclude: !(IS_PREVIEW || IS_SUMMARY), floorInHeadline: false }
 };
+
+// Groups 1-3 targets stay readable/writable as state.recovery.group1Hours..group3Hours (older code paths); both views are one array.
+[0, 1, 2].forEach(function (i) {
+  Object.defineProperty(state.recovery, "group" + (i + 1) + "Hours", { enumerable: false, configurable: true,
+    get: function () { return state.recovery.groupHours[i]; }, set: function (v) { state.recovery.groupHours[i] = v; } });
+});
+rebuildTiers();
+// Called once at start-up (Recovery constants are defined later in the file): a report opened with more than 3 groups
+// starts on the sized Enterprise Plus targets.
+function initGroupCount() {
+  var n = state.recovery.groupCount;
+  if (n > 3) {
+    state.recovery.groupHours = enterprisePlusHours(n);
+    state.recovery.rtoPreset = "Enterprise Plus";
+    state.recovery.rtoPresetReason = "Enterprise Plus targets sized to this tenant for " + n + " criticality groups.";
+  }
+  rebuildTiers();
+}
+// Live change of N from the Recovery modeling inputs (Full report only).
+function setGroupCount(v) {
+  if (!canEditTiers()) { return; }
+  var n = Math.max(MIN_GROUPS, Math.min(MAX_GROUPS, Math.round(parseFloat(v)) || 3)), old = groupN();
+  if (n === old) { renderGroupsTab(); return; }
+  var preset = state.recovery.rtoPreset, hrs = state.recovery.groupHours.slice();
+  state.recovery.groupCount = n;
+  if (preset === "Custom") {
+    while (hrs.length < n) { hrs.push(Math.ceil((hrs[hrs.length - 1] || 24) * 1.5 / 12) * 12); }
+    state.recovery.groupHours = hrs.slice(0, n);
+  } else if (n > 3 || preset === "Enterprise Plus") {
+    state.recovery.rtoPreset = "Enterprise Plus";
+    state.recovery.groupHours = enterprisePlusHours(n);
+  } else {
+    state.recovery.groupHours = hrs.slice(0, 3);
+  }
+  rebuildTiers();
+  Object.keys(uiState.acc).forEach(function (k) { if (/^grp-/.test(k) && k !== "grp-controls-acc") { delete uiState.acc[k]; } });
+  recomputeAll();
+}
 
 WORKLOAD_DEFS.forEach(function (wd) {
   (DATA.workloads[wd.key] || []).forEach(function (row) {
@@ -3299,6 +3996,18 @@ function computeHubSite(rows) {
 function computeScoresAndTiers(workloadKey) {
   var rows = DATA.workloads[workloadKey] || [];
   if (rows.length === 0) { return; }
+  if (IS_PREVIEW || IS_SUMMARY) {
+    // v2.0: Preview/Summary builds never re-score. The scoring population (every object in the
+    // tenant) is not in the page - Groups 2-4 were stripped at generation time - so a client-side
+    // percentile-rank would give different numbers. Use what PowerShell computed and shipped.
+    rows.forEach(function (row) {
+      row._Score = (typeof row.Score === "number") ? row.Score : (row._Score || 0);
+      row.Tier = row.ComputedTier || row.Tier;
+      row.IsOverride = false;
+      row.OverrideReason = "";
+    });
+    return;
+  }
   var weights = Object.assign({}, state.weights[workloadKey] || {});
 
   if (workloadKey === "mailboxes" || workloadKey === "onedrive") {
@@ -3346,14 +4055,15 @@ function computeScoresAndTiers(workloadKey) {
     var avgItemSize = wlTotalItems > 0 ? wlTotalStorage / wlTotalItems : 0;
     var scale = Math.max((DATA.workloads.sharepoint || []).length, (DATA.workloads.onedrive || []).length);
     var spodTier = resolveLicenseTier(state.recovery.licenseTier, scale);
-    var targetsMin = [state.recovery.group1Hours * 60, state.recovery.group2Hours * 60, state.recovery.group3Hours * 60];
+    var targetsMin = state.recovery.groupHours.slice(0, groupN()).map(function (h) { return h * 60; });
     assignBudgetTiers(active, recoveryFieldInfo.itemField, recoveryFieldInfo.storageField, RECENT_FIELD[workloadKey], avgItemSize, spodTier, recoveryFieldInfo.type, targetsMin, getWindowFactor());
   } else {
     var n = active.length;
-    var t1 = Math.ceil(n * state.tierSplit[0]);
-    var t2 = Math.ceil(n * (state.tierSplit[0] + state.tierSplit[1]));
+    var G = groupN(), cuts = [];
+    for (var c = 1; c < G; c++) { cuts.push(Math.ceil(n * (G === 3 ? (c === 1 ? state.tierSplit[0] : state.tierSplit[0] + state.tierSplit[1]) : c / G))); }
     active.forEach(function (row, i) {
-      row.ComputedTier = i < t1 ? "Critical Group 1" : (i < t2 ? "Critical Group 2" : "Critical Group 3");
+      var g = 0; while (g < cuts.length && i >= cuts[g]) { g++; }
+      row.ComputedTier = critKey(g + 1);
     });
   }
   inactive.forEach(function (row) {
@@ -3363,7 +4073,7 @@ function computeScoresAndTiers(workloadKey) {
   rows.forEach(function (row) {
     var key = workloadKey + "|" + row.Identifier;
     if (state.overrides[key]) {
-      row.Tier = state.overrides[key].tier;
+      row.Tier = (TIER_ORDER.indexOf(state.overrides[key].tier) >= 0) ? state.overrides[key].tier : lastCritKey();
       row.IsOverride = true;
       row.OverrideReason = state.overrides[key].reason || "";
     } else {
@@ -3421,11 +4131,10 @@ function getTierTotals(workloadKey, rowsOverride) {
 $script:ReportJsRecovery = @'
 var SPOD_TIER_TABLE = DATA.meta.spodTierTable;
 var EX_BENCHMARK = DATA.meta.exBenchmark;
-// NEW v3.10.0 (M365 MVC Recovery Time Estimator - RSC M365 Restoration
-// Benchmark, Mar 2025 / M365 Sizing Guidance, Jan 2026): read back out of
+// NEW v3.10.0 (Rubrik's M365 recovery time model): read back out of
 // meta (PowerShell is the single source of truth) rather than hardcoded
 // here a second time, so the two can never drift. See
-// RECOVERY-MODEL-METHODOLOGY.md and Get-RecoveryTimeMinutes.
+// the Methodology tab and Get-RecoveryTimeMinutes.
 var SP_ITEMS_PER_MIN_PER_UNIT = DATA.meta.spItemsPerMinPerUnit;
 var OD_ITEMS_PER_MIN_PER_UNIT = DATA.meta.odItemsPerMinPerUnit;
 var SIZE_FACTOR_BASELINE_MB = DATA.meta.sizeFactorBaselineMB;
@@ -3440,7 +4149,7 @@ function resolveLicenseTier(requested, objectScale) {
   return SPOD_TIER_TABLE[SPOD_TIER_TABLE.length - 1];
 }
 
-// v3.10.0: reworked to match the M365 MVC Recovery Time Estimator, replacing
+// v3.10.0: reworked to match Rubrik's M365 recovery time model, replacing
 // the earlier export this formula was originally reverse-engineered from.
 // Two structural changes from before: (1) SharePoint/OneDrive no longer have
 // an independent bytes/min cap - an oversized average item now inflates the
@@ -3451,7 +4160,7 @@ function resolveLicenseTier(requested, objectScale) {
 // (every object touched needs its own restore job, regardless of how much
 // of it changed) plus a 5-minute floor - what ABR actually costs on top of
 // raw transfer time. A full/undifferentiated Mass Recovery restore has
-// neither - pass false for those calls. See RECOVERY-MODEL-METHODOLOGY.md.
+// neither - pass false for those calls. See the Methodology tab.
 function recoveryTimeMinutes(workloadType, objectCount, itemCount, storageAmount, avgItemSize, spodTier, includeOverhead) {
   var transferMin;
   if (workloadType === "SP" || workloadType === "OD") {
@@ -3482,7 +4191,7 @@ function sliceTotals(rows, itemField, storageField, recentField, tierName) {
   // artifact could otherwise push it slightly over), then that fraction is
   // applied to storage, mirroring PowerShell's Add-RecentDataEstimate
   // exactly so server-side and client-side figures never diverge.
-  var subset = rows.filter(function (r) { return r.Tier === tierName; });
+  var subset = rows.filter(function (r) { return r.Tier === tierName && !isExcludedRow(r); });
   var items = 0, storage = 0, recentItems = 0, recentStorage = 0;
   subset.forEach(function (r) {
     var ti = parseFloat(r.metrics[itemField]) || 0;
@@ -3503,34 +4212,75 @@ function sumField(rows, field) {
   return s;
 }
 
+// v2.0: the recovery model no longer reads per-object rows directly. It asks these two helpers,
+// which use the rows when they are present (Full) and the generation-time aggregates when they
+// are not (Preview: Group 1 rows + whole-tenant totals; Summary: tier aggregates only). In Full
+// the numbers are identical to 3.x because the same row arithmetic runs.
+var RECOVERY_FIELDS = {
+  mailboxes:  { item: "ItemCount", storage: "StorageUsedMB", recent: "SendRecvActivity7d" },
+  onedrive:   { item: "FileCount", storage: "StorageBytes",  recent: "ViewedOrEditedCount7d" },
+  sharepoint: { item: "FileCount", storage: "StorageBytes",  recent: "ActiveFiles7d" }
+};
+// v2.0: an object flagged by Recovery Insights as a peer outlier / concentration object (row._excl, set in
+// computeInsights) is left out of the headline recovery model while state.insights.exclude is on.
+function isExcludedRow(r) { return !!(r && r._excl) && !!(state.insights && state.insights.exclude); }
+function tenantTotalsFor(wlKey, includeExcluded) {
+  var rows = DATA.workloads[wlKey] || [];
+  var f = RECOVERY_FIELDS[wlKey];
+  if (DATA.tenantTotals && DATA.tenantTotals[wlKey]) {
+    var t = DATA.tenantTotals[wlKey];
+    return { objectCount: t.objectCount || 0, itemCount: t.itemCount || 0, storage: t.storage || 0 };
+  }
+  if (!f) { return { objectCount: rows.length, itemCount: 0, storage: 0 }; }
+  var kept = includeExcluded ? rows : rows.filter(function (r) { return !isExcludedRow(r); });
+  return { objectCount: kept.length, itemCount: sumField(kept, f.item), storage: sumField(kept, f.storage) };
+}
+function tierSliceFor(wlKey, tierName) {
+  var f = RECOVERY_FIELDS[wlKey];
+  var rows = DATA.workloads[wlKey] || [];
+  if (!IS_SUMMARY && rows.length > 0) {
+    var anyTier = rows.some(function (r) { return r.Tier === tierName; });
+    if (anyTier || !IS_PREVIEW || tierName === "Critical Group 1") {
+      return sliceTotals(rows, f.item, f.storage, f.recent, tierName);
+    }
+    return null; // Preview: Groups 2-4 are not in the page
+  }
+  if (DATA.tierAgg && DATA.tierAgg[wlKey] && DATA.tierAgg[wlKey][tierName]) {
+    var a = DATA.tierAgg[wlKey][tierName];
+    return { objectCount: a.objectCount || 0, itemCount: a.itemCount || 0, storage: a.storage || 0, recentItemCount: a.recentItemCount || 0, recentStorage: a.recentStorage || 0 };
+  }
+  return null;
+}
+
 function computeRecoveryModel() {
-  var sp = DATA.workloads.sharepoint || [];
-  var od = DATA.workloads.onedrive || [];
-  var ex = DATA.workloads.mailboxes || [];
+  var spT = tenantTotalsFor("sharepoint"), odT = tenantTotalsFor("onedrive"), exT = tenantTotalsFor("mailboxes");
+  var spTotalItems = spT.itemCount, spTotalBytes = spT.storage;
+  var odTotalItems = odT.itemCount, odTotalBytes = odT.storage;
+  var exTotalItems = exT.itemCount, exTotalMB = exT.storage;
 
-  var spTotalItems = sumField(sp, "FileCount"), spTotalBytes = sumField(sp, "StorageBytes");
-  var odTotalItems = sumField(od, "FileCount"), odTotalBytes = sumField(od, "StorageBytes");
-  var exTotalItems = sumField(ex, "ItemCount"), exTotalMB = sumField(ex, "StorageUsedMB");
+  // v2.0: the average item size (size factor / per-item rates) is a property of the WHOLE tenant, so it is taken from the
+  // totals that include any outlier-excluded objects. Excluding an object then changes only the work to be done, never
+  // the per-item cost, which keeps "excluded" vs "included" like-for-like. Identical to 3.x when nothing is excluded.
+  var spAll = tenantTotalsFor("sharepoint", true), odAll = tenantTotalsFor("onedrive", true), exAll = tenantTotalsFor("mailboxes", true);
+  var spAvg = spAll.itemCount > 0 ? spAll.storage / spAll.itemCount : 0;
+  var odAvg = odAll.itemCount > 0 ? odAll.storage / odAll.itemCount : 0;
+  var exAvg = exAll.itemCount > 0 ? exAll.storage / exAll.itemCount : 0;
 
-  var spAvg = spTotalItems > 0 ? spTotalBytes / spTotalItems : 0;
-  var odAvg = odTotalItems > 0 ? odTotalBytes / odTotalItems : 0;
-  var exAvg = exTotalItems > 0 ? exTotalMB / exTotalItems : 0;
-
-  var scale = Math.max(sp.length, od.length);
+  var scale = Math.max(spT.objectCount, odT.objectCount);
   var spodTier = resolveLicenseTier(state.recovery.licenseTier, scale);
 
   // v3.1.0: ABR time (cumSP/cumOD/cumEX) is now the RECENT/hot-scope
   // cumulative recovery time - what ABR actually restores first - instead
   // of each tier's full data. Mass Recovery (cumSPObjs/... below) is
   // UNCHANGED: full-data cumulative-batch figure, since Mass Recovery has no
-  // hot/cold distinction. See RECOVERY-MODEL-METHODOLOGY.md.
+  // hot/cold distinction. See the Methodology tab.
   // NEW: ABR's recent-data fields (RECENT_FIELD) are always real D7 counts,
   // regardless of -Period. The live "Recovery window (days)" control (0-7)
   // linearly scales that D7 baseline down for a shorter window - e.g. a
   // 1-day window assumes 1/7 of the D7 activity happened in-scope. This is a
   // proportional estimate (Graph has no finer-than-day telemetry, and no
   // per-item change log at all), not a literal day-level figure - disclosed
-  // in the Recovery tab copy. See RECOVERY-MODEL-METHODOLOGY.md.
+  // in the Recovery tab copy. See the Methodology tab.
   var windowFactor = Math.max(0, Math.min(7, state.recovery.windowDays || 0)) / 7;
 
   var cumSP = 0, cumOD = 0, cumEX = 0;
@@ -3539,10 +4289,18 @@ function computeRecoveryModel() {
   var cumEXObjs = 0, cumEXItems = 0, cumEXStorage = 0;
   var milestones = {};
   var prevWall = 0;
+  var lockedBeyond = false;
   TIER_ORDER.forEach(function (tierName) {
-    var spSlice = sliceTotals(sp, "FileCount", "StorageBytes", RECENT_FIELD.sharepoint, tierName);
-    var odSlice = sliceTotals(od, "FileCount", "StorageBytes", RECENT_FIELD.onedrive, tierName);
-    var exSlice = sliceTotals(ex, "ItemCount", "StorageUsedMB", RECENT_FIELD.mailboxes, tierName);
+    if (lockedBeyond) { milestones[tierName] = { locked: true }; return; }
+    var spSlice = tierSliceFor("sharepoint", tierName);
+    var odSlice = tierSliceFor("onedrive", tierName);
+    var exSlice = tierSliceFor("mailboxes", tierName);
+    if (!spSlice || !odSlice || !exSlice) {
+      // v2.0 Preview: this group's data is not in the page, so there is nothing to calculate.
+      milestones[tierName] = { locked: true };
+      lockedBeyond = true;
+      return;
+    }
 
     var spRecentItems = spSlice.recentItemCount * windowFactor, spRecentStorage = spSlice.recentStorage * windowFactor;
     var odRecentItems = odSlice.recentItemCount * windowFactor, odRecentStorage = odSlice.recentStorage * windowFactor;
@@ -3590,9 +4348,10 @@ function computeRecoveryModel() {
   // Target" tier - each of Group 1/2/3's own ABR (hot-scope) cumulative time
   // is checked against its target; if it runs over, flag it in place rather
   // than exiling the responsible object(s) to a 5th tier.
-  var targetsMin = [state.recovery.group1Hours * 60, state.recovery.group2Hours * 60, state.recovery.group3Hours * 60];
-  ["Critical Group 1", "Critical Group 2", "Critical Group 3"].forEach(function (tierName, idx) {
+  var targetsMin = state.recovery.groupHours.map(function (h) { return h * 60; });
+  critKeys().forEach(function (tierName, idx) {
     var m = milestones[tierName];
+    if (m.locked) { return; }
     var target = targetsMin[idx];
     if (target > 0 && m.wallClockCumMin > target) {
       m.exceedsTarget = true;
@@ -3600,9 +4359,9 @@ function computeRecoveryModel() {
     }
   });
 
-  var fullSP = recoveryTimeMinutes("SP", sp.length, spTotalItems, spTotalBytes, spAvg, spodTier, false);
-  var fullOD = recoveryTimeMinutes("OD", od.length, odTotalItems, odTotalBytes, odAvg, spodTier, false);
-  var fullEX = recoveryTimeMinutes("EX", ex.length, exTotalItems, exTotalMB, exAvg, spodTier, false);
+  var fullSP = recoveryTimeMinutes("SP", spT.objectCount, spTotalItems, spTotalBytes, spAvg, spodTier, false);
+  var fullOD = recoveryTimeMinutes("OD", odT.objectCount, odTotalItems, odTotalBytes, odAvg, spodTier, false);
+  var fullEX = recoveryTimeMinutes("EX", exT.objectCount, exTotalItems, exTotalMB, exAvg, spodTier, false);
   var fullRestoreMin = Math.max(fullSP, fullOD, fullEX);
 
   // Whole-tenant Mass Recovery figure - used ONLY by the Total section now
@@ -3635,443 +4394,1483 @@ function esc(s) { var d = document.createElement("div"); d.textContent = (s === 
 
 #endregion
 
+#region ---------- HTML report JS: v2 shared UI toolkit (units, sorting, accordions, info bubbles, links) ----------
+
+$script:ReportJsUi = @'
+// ===================================================================================
+// v2.0 shared UI toolkit. Loaded after the recovery engine, before every renderer.
+// Everything a renderer needs that is NOT specific to one tab lives here:
+//   - storage units (one unit for the whole report: GB, or TB when the tenant is large)
+//   - sortable tables (DOM sort for static tables, data sort helpers for object tables)
+//   - accordions (collapsed by default, lazy body render, state survives re-render)
+//   - info bubbles (click popovers)
+//   - linked summaries (data-link navigation: tab -> section -> expanded accordion)
+//   - cost-avoided calculation (single place, used by Exec / Report / Summary)
+//   - Preview lock helpers
+// ASCII only (the .ps1 that embeds this must stay ASCII for Windows PowerShell 5.1).
+// ===================================================================================
+
+var uiState = { acc: { "grp-controls-acc": true }, sort: {}, unit: null, openInfo: null };
+
+// ---------- period / language helpers ----------
+function periodDays() {
+  var m = /D(\d+)/i.exec((DATA.meta && DATA.meta.period) || "");
+  return m ? parseInt(m[1], 10) : 180;
+}
+// Group 4 wording. Never says active/inactive/dormant; always states the real lookback period.
+function group4Disclaimer() {
+  return lowName() + " holds objects with little to no activity in the past " + periodDays() + " days.";
+}
+
+// ---------- storage units ----------
+var BYTES_PER_GB = 1073741824;
+var BYTES_PER_TB = 1099511627776;
+var TB_THRESHOLD_BYTES = 5 * BYTES_PER_TB; // above this the whole report switches to TB
+
+function rowStorageBytes(wlKey, row) {
+  var m = (row && row.metrics) || {};
+  if (wlKey === "mailboxes") { return (parseFloat(m.StorageUsedMB) || 0) * 1048576; }
+  var b = parseFloat(m.StorageBytes);
+  if (!isNaN(b) && b > 0) { return b; }
+  return (parseFloat(m.StorageUsedGB) || parseFloat(m.Storage) || 0) * BYTES_PER_GB;
+}
+function tenantStorageBytes() {
+  var sp = tenantTotalsFor("sharepoint"), od = tenantTotalsFor("onedrive"), ex = tenantTotalsFor("mailboxes");
+  return sp.storage + od.storage + ex.storage * 1048576;
+}
+function autoStorageUnit() { return tenantStorageBytes() > TB_THRESHOLD_BYTES ? "TB" : "GB"; }
+function storageUnit() {
+  if (!uiState.unit) { uiState.unit = autoStorageUnit(); }
+  return uiState.unit;
+}
+function setStorageUnit(u) {
+  if (u !== "GB" && u !== "TB") { return; }
+  uiState.unit = u;
+  recomputeAll();
+}
+function bytesToUnit(bytes) { return (bytes || 0) / (storageUnit() === "TB" ? BYTES_PER_TB : BYTES_PER_GB); }
+// Number only (no unit label) - for table cells under a header that already says the unit.
+function fmtStorageNum(bytes) {
+  var v = bytesToUnit(bytes);
+  if (!isFinite(v) || v <= 0) { return "0"; }
+  var digits = storageUnit() === "TB" ? 3 : 2;
+  var min = Math.pow(10, -digits);
+  if (v < min) { return "<" + min.toFixed(digits); }
+  return v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function fmtStorage(bytes) { return fmtStorageNum(bytes) + " " + storageUnit(); }
+function fmtStorageMB(mb) { return fmtStorage((mb || 0) * 1048576); }
+function fmtStorageGBVal(gb) { return fmtStorage((gb || 0) * BYTES_PER_GB); }
+function storageHeader(label) { return (label || "Storage") + " (" + storageUnit() + ")"; }
+
+function setTheme(name) {
+  document.documentElement.setAttribute("data-theme", name === "dark" ? "dark" : "light");
+  try { window.localStorage.setItem("m365Theme", name === "dark" ? "dark" : "light"); } catch (e) {}
+  renderHeaderExtras();
+}
+function renderHeaderExtras() {
+  var cal = document.getElementById("hdr-calib");
+  if (cal) {
+    cal.innerHTML = 'Recovery model: <b>calibration ' + esc((DATA.meta && DATA.meta.calibrationVersion) || "v1") + '</b> ' + infoBtn("calibration", "About the recovery model calibration");
+  }
+  var th = document.getElementById("hdr-theme");
+  if (th) {
+    var cur = document.documentElement.getAttribute("data-theme") || "light";
+    th.innerHTML = 'Theme: <span class="unit-toggle" role="group" aria-label="Color theme">' +
+      '<button type="button" class="unit-btn' + (cur === "light" ? " active" : "") + '" onclick="setTheme(\'light\')" aria-pressed="' + (cur === "light") + '">Light</button>' +
+      '<button type="button" class="unit-btn' + (cur === "dark" ? " active" : "") + '" onclick="setTheme(\'dark\')" aria-pressed="' + (cur === "dark") + '">Dark</button></span>';
+  }
+  var el = document.getElementById("hdr-unit");
+  if (!el) { return; }
+  var u = storageUnit();
+  el.innerHTML = 'Units: <span class="unit-toggle" role="group" aria-label="Storage units">' +
+    '<button type="button" class="unit-btn' + (u === "GB" ? " active" : "") + '" onclick="setStorageUnit(\'GB\')" aria-pressed="' + (u === "GB") + '">GB</button>' +
+    '<button type="button" class="unit-btn' + (u === "TB" ? " active" : "") + '" onclick="setStorageUnit(\'TB\')" aria-pressed="' + (u === "TB") + '">TB</button></span>';
+}
+
+// ---------- sortable tables ----------
+// Static tables: every <table> that has a <thead> and is not class="no-sort" is made sortable by
+// enhanceTables(root). Cells may carry data-sort="<number or text>"; otherwise the text is parsed.
+// Object tables (capped to the top N rows) sort the FULL filtered data set before the cap - those use
+// sortThHtml()/getSort()/applySort() below instead, so the cap never hides the real top/bottom rows.
+function parseCellValue(cell) {
+  if (cell.hasAttribute("data-sort")) {
+    var d = cell.getAttribute("data-sort");
+    var n0 = parseFloat(d);
+    return (isNaN(n0) || String(n0) !== String(d).trim()) ? { t: d.toLowerCase() } : { n: n0 };
+  }
+  var txt = (cell.textContent || "").replace(/\s+/g, " ").trim();
+  var m = /^[~<>]?\s*\$?\s*(-?[\d,]*\.?\d+)\s*(min|hr|days|day|%|gb|tb|mb|x)?\b/i.exec(txt);
+  if (m) {
+    var v = parseFloat(m[1].replace(/,/g, ""));
+    var u = (m[2] || "").toLowerCase();
+    if (u === "hr") { v *= 60; } else if (u === "day" || u === "days") { v *= 1440; }
+    else if (u === "tb") { v *= 1024; } else if (u === "mb") { v /= 1024; }
+    return { n: v };
+  }
+  return { t: txt.toLowerCase() };
+}
+function sortDomTable(table, colIdx, dir) {
+  var tbody = table.tBodies[0];
+  if (!tbody) { return; }
+  var rows = Array.prototype.slice.call(tbody.rows).filter(function (r) { return !r.classList.contains("no-sort-row") && r.cells.length > colIdx; });
+  var keyed = rows.map(function (r, i) { return { r: r, i: i, v: parseCellValue(r.cells[colIdx]) }; });
+  var numeric = keyed.filter(function (k) { return k.v.n !== undefined; }).length >= keyed.length / 2;
+  keyed.sort(function (a, b) {
+    var c;
+    if (numeric) {
+      var av = a.v.n === undefined ? -Infinity : a.v.n, bv = b.v.n === undefined ? -Infinity : b.v.n;
+      c = av - bv; if (isNaN(c)) { c = 0; }
+    } else {
+      var at = a.v.t !== undefined ? a.v.t : String(a.v.n), bt = b.v.t !== undefined ? b.v.t : String(b.v.n);
+      c = at.localeCompare(bt);
+    }
+    if (c === 0) { return a.i - b.i; }
+    return dir === "asc" ? c : -c;
+  });
+  keyed.forEach(function (k) { tbody.appendChild(k.r); });
+  Array.prototype.forEach.call(table.tHead.rows[table.tHead.rows.length - 1].cells, function (th, i) {
+    th.classList.remove("sort-asc", "sort-desc");
+    th.removeAttribute("aria-sort");
+    if (i === colIdx) { th.classList.add(dir === "asc" ? "sort-asc" : "sort-desc"); th.setAttribute("aria-sort", dir === "asc" ? "ascending" : "descending"); }
+  });
+}
+function tableSortId(table) {
+  if (!table.__sortId) {
+    var host = table.closest("[id]");
+    var all = host ? host.querySelectorAll("table") : [];
+    table.__sortId = (host ? host.id : "doc") + "#" + Array.prototype.indexOf.call(all, table);
+  }
+  return table.__sortId;
+}
+function enhanceTables(root) {
+  var scope = root || document;
+  Array.prototype.forEach.call(scope.querySelectorAll("table"), function (table) {
+    if (table.classList.contains("no-sort") || table.hasAttribute("data-datasort") || !table.tHead || !table.tBodies.length) { return; }
+    var hr = table.tHead.rows[table.tHead.rows.length - 1];
+    Array.prototype.forEach.call(hr.cells, function (th) { th.classList.add("sortable-th"); th.setAttribute("tabindex", "0"); });
+    var saved = uiState.sort[tableSortId(table)];
+    if (saved && saved.col < hr.cells.length) { sortDomTable(table, saved.col, saved.dir); }
+  });
+}
+function onSortActivate(th) {
+  var table = th.closest("table");
+  if (!table || table.classList.contains("no-sort") || table.hasAttribute("data-datasort") || !th.classList.contains("sortable-th")) { return; }
+  var idx = Array.prototype.indexOf.call(th.parentNode.cells, th);
+  var id = tableSortId(table);
+  var cur = uiState.sort[id];
+  // first click: numeric columns high to low, text columns A to Z
+  var sample = table.tBodies[0] && table.tBodies[0].rows[0] && table.tBodies[0].rows[0].cells[idx];
+  var numericFirst = sample ? (parseCellValue(sample).n !== undefined) : false;
+  var dir = (cur && cur.col === idx) ? (cur.dir === "asc" ? "desc" : "asc") : (numericFirst ? "desc" : "asc");
+  uiState.sort[id] = { col: idx, dir: dir };
+  sortDomTable(table, idx, dir);
+}
+document.addEventListener("click", function (e) {
+  var th = e.target.closest ? e.target.closest("th.sortable-th") : null;
+  if (th) { onSortActivate(th); }
+});
+document.addEventListener("keydown", function (e) {
+  if ((e.key === "Enter" || e.key === " ") && e.target.classList && e.target.classList.contains("sortable-th")) { e.preventDefault(); onSortActivate(e.target); }
+});
+
+// Data-driven sorting for capped object tables. tableKey identifies the table (e.g. "obj-mailboxes").
+// cols: [{key, label, type: "num"|"text", get: function(row) -> value, cls}] ; rerender: function() called after a click.
+var SORT_RERENDER = {};
+function getSort(tableKey, defaultCol, defaultDir) {
+  return uiState.sort["data:" + tableKey] || { col: defaultCol, dir: defaultDir || "desc" };
+}
+function setTableSort(tableKey, colKey, type) {
+  var cur = uiState.sort["data:" + tableKey];
+  var dir = (cur && cur.col === colKey) ? (cur.dir === "asc" ? "desc" : "asc") : (type === "text" ? "asc" : "desc");
+  uiState.sort["data:" + tableKey] = { col: colKey, dir: dir };
+  if (SORT_RERENDER[tableKey]) { SORT_RERENDER[tableKey](); }
+}
+function sortThHtml(tableKey, col, defaultCol, defaultDir) {
+  var s = getSort(tableKey, defaultCol, defaultDir);
+  var active = s.col === col.key;
+  var cls = "sortable-th" + (col.cls ? " " + col.cls : "") + (active ? (s.dir === "asc" ? " sort-asc" : " sort-desc") : "");
+  return '<th class="' + cls + '" tabindex="0" ' + (active ? 'aria-sort="' + (s.dir === "asc" ? "ascending" : "descending") + '" ' : "") +
+    'onclick="setTableSort(\'' + tableKey + '\',\'' + col.key + '\',\'' + (col.type || "num") + '\')" ' +
+    'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();setTableSort(\'' + tableKey + '\',\'' + col.key + '\',\'' + (col.type || "num") + '\');}">' + col.label + '</th>';
+}
+function applySort(rows, tableKey, cols, defaultCol, defaultDir) {
+  var s = getSort(tableKey, defaultCol, defaultDir);
+  var col = cols.filter(function (c) { return c.key === s.col; })[0] || cols[0];
+  var sign = s.dir === "asc" ? 1 : -1;
+  var keyed = rows.map(function (r, i) { return { r: r, i: i, v: col.get(r) }; });
+  keyed.sort(function (a, b) {
+    var c;
+    if (col.type === "text") { c = String(a.v == null ? "" : a.v).toLowerCase().localeCompare(String(b.v == null ? "" : b.v).toLowerCase()); }
+    else { c = (parseFloat(a.v) || 0) - (parseFloat(b.v) || 0); }
+    return c === 0 ? a.i - b.i : c * sign;
+  });
+  return keyed.map(function (k) { return k.r; });
+}
+
+// ---------- accordions ----------
+var ACC_BODY = {};   // id -> function returning the body html (rendered lazily on first open)
+// opts: {id, title, summary (html, always visible), body (html string or function), level, cls}
+function accHtml(opts) {
+  var id = opts.id;
+  ACC_BODY[id] = (typeof opts.body === "function") ? opts.body : function () { return opts.body || ""; };
+  var open = !!uiState.acc[id];
+  var inner = open ? ACC_BODY[id]() : "";
+  return '<div class="acc ' + (opts.cls || "") + (open ? " open" : "") + '" id="acc-' + id + '" data-acc="' + id + '">' +
+    '<button type="button" class="acc-head" aria-expanded="' + (open ? "true" : "false") + '" aria-controls="accb-' + id + '" onclick="toggleAcc(\'' + id + '\')">' +
+      '<span class="acc-chev" aria-hidden="true">&#9656;</span>' +
+      '<span class="acc-title">' + opts.title + '</span>' +
+      '<span class="acc-summary">' + (opts.summary || "") + '</span>' +
+    '</button>' +
+    '<div class="acc-body" id="accb-' + id + '"' + (open ? "" : " hidden") + (open ? ' data-rendered="1"' : "") + '>' + inner + '</div>' +
+  '</div>';
+}
+function toggleAcc(id, forceOpen) {
+  var host = document.getElementById("acc-" + id);
+  if (!host) { return; }
+  var body = document.getElementById("accb-" + id);
+  var open = (forceOpen === undefined) ? !uiState.acc[id] : !!forceOpen;
+  uiState.acc[id] = open;
+  host.classList.toggle("open", open);
+  host.querySelector(".acc-head").setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    if (!body.getAttribute("data-rendered") && ACC_BODY[id]) { body.innerHTML = ACC_BODY[id](); body.setAttribute("data-rendered", "1"); enhanceTables(body); }
+    body.removeAttribute("hidden");
+  } else { body.setAttribute("hidden", ""); }
+}
+function openAcc(id) { toggleAcc(id, true); }
+
+// ---------- info bubbles ----------
+var INFO = {}; // key -> {title, html}
+function registerInfo(key, title, html) { INFO[key] = { title: title, html: html }; }
+function infoBtn(key, label) {
+  return '<button type="button" class="info-btn" aria-label="' + (label || "More information") + '" aria-haspopup="dialog" onclick="showInfo(event,\'' + key + '\')">i</button>';
+}
+function closeInfo() {
+  var p = document.getElementById("info-pop");
+  if (p) { p.parentNode.removeChild(p); }
+  if (uiState.openInfo && uiState.openInfo.btn) { uiState.openInfo.btn.setAttribute("aria-expanded", "false"); }
+  uiState.openInfo = null;
+}
+function showInfo(ev, key) {
+  ev.stopPropagation();
+  var btn = ev.currentTarget || ev.target;
+  var wasOpen = uiState.openInfo && uiState.openInfo.key === key && uiState.openInfo.btn === btn;
+  closeInfo();
+  if (wasOpen) { return; }
+  var info = INFO[key];
+  if (!info) { return; }
+  var pop = document.createElement("div");
+  pop.id = "info-pop"; pop.className = "info-pop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", info.title);
+  pop.innerHTML = '<div class="info-pop-title">' + info.title + '<button type="button" class="info-pop-close" aria-label="Close" onclick="closeInfo()">&times;</button></div><div class="info-pop-body">' + info.html + '</div>';
+  document.body.appendChild(pop);
+  var r = btn.getBoundingClientRect();
+  var w = Math.min(420, window.innerWidth - 24);
+  pop.style.width = w + "px";
+  var left = Math.max(12, Math.min(r.left + window.pageXOffset - 16, window.pageXOffset + window.innerWidth - w - 12));
+  pop.style.left = left + "px";
+  pop.style.top = (r.bottom + window.pageYOffset + 8) + "px";
+  btn.setAttribute("aria-expanded", "true");
+  uiState.openInfo = { key: key, btn: btn };
+}
+document.addEventListener("click", function (e) {
+  if (!uiState.openInfo) { return; }
+  var pop = document.getElementById("info-pop");
+  if (pop && pop.contains(e.target)) { return; }
+  closeInfo();
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeInfo(); } });
+
+// ---------- linked summaries ----------
+// A summary element carries data-link="tab[:sectionId[:accId,accId,...]]". Clicking it switches to the tab,
+// opens the listed accordions, scrolls the section into view and flashes it. navAttr() builds the attributes.
+function navAttr(target) { return 'data-link="' + target + '" role="link" tabindex="0"'; }
+function navigateTo(target) {
+  var parts = String(target).split(":");
+  var tab = parts[0], section = parts[1] || "", acc = parts[2] ? parts[2].split(",") : [];
+  switchTab(tab);
+  acc.forEach(function (id) { if (document.getElementById("acc-" + id)) { openAcc(id); } });
+  var el = section ? (document.getElementById(section) || document.getElementById("acc-" + section)) : null;
+  if (!el && acc.length) { el = document.getElementById("acc-" + acc[acc.length - 1]); }
+  if (el) {
+    if (el.scrollIntoView) { el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    el.classList.add("link-flash");
+    setTimeout(function () { el.classList.remove("link-flash"); }, 1600);
+  } else if (window.scrollTo) { window.scrollTo(0, 0); }
+}
+document.addEventListener("click", function (e) {
+  var el = e.target.closest ? e.target.closest("[data-link]") : null;
+  if (el && !(e.target.closest && e.target.closest(".info-btn"))) { e.preventDefault(); navigateTo(el.getAttribute("data-link")); }
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Enter") { return; }
+  var el = e.target.closest ? e.target.closest("[data-link]") : null;
+  if (el) { e.preventDefault(); navigateTo(el.getAttribute("data-link")); }
+});
+
+// ---------- cost avoided (single source for Exec / Report / Summary) ----------
+// Baseline: restoring the whole tenant as one undifferentiated job (Mass Recovery) - data is usable when that job finishes.
+// ABR: the milestone at which Groups 1..N are back. Hours saved never goes negative (ABR is capped at Mass for the same scope,
+// and per-object scheduling can make later milestones exceed the whole-tenant baseline on small tenants - shown as 0, not negative).
+function computeCostAvoided(model) {
+  var perHour = parseFloat(state.recovery.costPerHour) || 0;
+  var baseline = model.fullRestoreMin;
+  var rows = [];
+  critKeys().map(function (key, i) { return [key, scopeName(i + 1) + " online", "Group " + (i + 1)]; }).forEach(function (d) {
+    var m = model.milestones[d[0]];
+    if (!m || m.locked) { rows.push({ tier: d[0], label: d[1], short: d[2], locked: true }); return; }
+    var saved = Math.max(0, baseline - m.wallClockCumMin);
+    rows.push({ tier: d[0], label: d[1], short: d[2], locked: false, abrMin: m.wallClockCumMin, baselineMin: baseline, savedMin: saved, savedHours: saved / 60, cost: (saved / 60) * perHour });
+  });
+  return { perHour: perHour, baselineMin: baseline, rows: rows, hasRate: perHour > 0 };
+}
+function costPromptHtml() {
+  return '<span class="cost-prompt">Enter your estimated downtime cost per hour to see potential cost avoidance.</span>';
+}
+
+// ---------- Preview lock helpers ----------
+function pvLocked(placeholder) {
+  return '<span class="pv-locked-value">' + (placeholder || "&bull;&bull;&bull;&bull;") + '</span><span class="pv-locked-tag">Full assessment</span>';
+}
+var CONTACT_SALES_URL = "https://www.rubrik.com/contact-sales?v2";
+function pvLockedPanel(title, note) {
+  return '<div class="pv-locked-panel"><div class="pv-locked-panel-icon">&#128274;</div>' +
+    '<div class="pv-locked-panel-title">' + esc(title) + '</div>' +
+    '<div class="pv-locked-panel-note">' + esc(note || "Available in the full assessment.") + ' <a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">Contact your Rubrik representative</a>.</div></div>';
+}
+function offlineBannerHtml() {
+  var m = (typeof DATA !== "undefined" && DATA.meta) || {};
+  if (!m.offlineMode) { return ""; }
+  var miss = (m.offlineMissing && m.offlineMissing.length) ? " Not supplied: " + m.offlineMissing.map(esc).join(", ") + "." : "";
+  return '<div class="pv-banner"><b>Offline run - reduced confidence.</b> Built from exported admin center usage reports, with no tenant connection. ' +
+    'Not collected: user profile enrichment (title, department, manager, groups), license-based mailbox classification, Team-to-site mapping, archive mailbox and Recoverable Items sizes. ' +
+    'Mailbox counts may include unlicensed or shared mailboxes, and sizes exclude Recoverable Items.' + miss + ' Do not compare directly with a live run.</div>';
+}
+function previewBannerHtml() {
+  return '<div class="pv-banner"><b>Preview.</b> This report shows Critical Group 1 only. Group 2-4 detail, recovery sequencing, and cost avoidance by group are available in the full assessment. ' +
+    '<a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">Contact your Rubrik representative</a> to run the full assessment (it requires re-running the script against your tenant).</div>';
+}
+
+registerInfo("calibration", "Recovery model calibration",
+  "<p>Recovery times use the throughput constants from the Rubrik M365 recovery time estimator (SharePoint/OneDrive items per minute per parallel unit, Exchange per-mailbox rates, job scheduling cost, size factor). " +
+  "These constants are the same as the previous version of this assessment, so a repeat run on the same data produces the same recovery times.</p>" +
+  "<p>If Rubrik updates the benchmarks, the calibration version shown here changes so any difference between two runs can be explained.</p>");
+
+'@
+
+#endregion
+
+#region ---------- HTML report JS: v2 Recovery Insights (abnormal-object detection) ----------
+
+$script:ReportJsInsights = @'
+// ===================================================================================
+// v2.0 Recovery Insights - abnormal-object detection.
+//
+//   computeInsights()        - runs after tiering on every recomputeAll(). Sets row._excl (true = peer outlier or
+//                              concentration object, excluded from the headline model while state.insights.exclude)
+//                              and row._flags (array of flag ids, or null) on every object row. Result in INSIGHTS.
+//   getInsights()            - the full result object (shape below)
+//   getInsightsSummary()     - small shape used by the Executive Summary and the Groups & Recovery Model tab
+//   modelWithExclusion(flag) - computeRecoveryModel() with exclusion forced on/off, then restored
+//   setExcludeOutliers(bool) - toggles state.insights.exclude and re-renders everything
+//   setInsightFilter(flagId) - filters the Insights table to one flag (null = all)
+//   renderInsightsTab()      - renders #panel-insights
+//
+// How "abnormal" is decided (no fixed size thresholds - each tenant is compared with ITS OWN distribution):
+//   peer-size / peer-items : value > 5x the workload's own 99th percentile AND >= 0.1% of the workload total
+//   concentration          : one object holds >= 2% of the workload's total storage or items
+//   long-pole-abr          : the object's own hot-data (last 7 days) restore time exceeds its group's pooled ABR time
+//   long-pole-mass         : the object's own full restore time exceeds the pooled whole-workload Mass time
+//   high-recent-change     : peer-outlier test on the 7-day change field
+//   critical-lower-group   : score in the top decile of its workload but the object sits in Critical Group 3 / Group 4
+//   near-mailbox-limit     : mailbox storage >= 95% of its mailbox limit (MailboxLimitBytes, when known)
+// Only peer-size, peer-items and concentration set row._excl. Long-pole times for SharePoint/OneDrive are shown as a
+// RANGE (full tier rate .. one parallel unit) because single-object parallelism is unconfirmed, and are never part of
+// any headline number (state.insights.floorInHeadline stays false).
+//
+// INSIGHTS shape:
+//   { flagged: [ { wl, row, flags:[ids], excluded:bool (peer/concentration), reason:"plain-language sentence(s)",
+//                  storageBytes, items, recent, singleObjectMin (number: mailbox full time; SP/OD low end),
+//                  singleObjectMinHigh (SP/OD one-unit time, else same as singleObjectMin),
+//                  hotObjectMin, hotObjectMinHigh } ],
+//     byFlag: { "peer-size": 3, ... }, excludedCount: 3,
+//     baselines: { sharepoint: { n, scope:"tenant"|"group1", storageP50, storageP95, storageP99, itemsP50, itemsP95, itemsP99,
+//                                recentP50, recentP95, recentP99, totalStorage, totalItems } } }
+// getInsightsSummary() shape:
+//   { total, excludedCount, byFlag, topRisks:[{id,title,detail,link}], headline:{excludedG1Min,includedG1Min,deltaG1Min,excludedMassMin,includedMassMin}|null }
+// ASCII only.
+// ===================================================================================
+var INSIGHT_PEER_MULT = 5;          // x the workload's own 99th percentile
+var INSIGHT_PEER_MIN_SHARE = 0.001; // and at least 0.1% of the workload total
+var INSIGHT_CONC_SHARE = 0.02;      // 2% of the workload total
+var INSIGHT_PEER_MIN_N = 20;        // below this many objects a percentile baseline is not meaningful
+var INSIGHT_CONC_MIN_N = 100;       // below this many objects every object would "hold 2%"
+var INSIGHT_LIMIT_FRAC = 0.95;      // mailbox at 95% of its limit
+var INSIGHT_TOP_DECILE = 0.9;
+var INSIGHT_MIN_POLE_MIN = 60;      // a long pole only matters if the object alone takes at least an hour
+var INSIGHT_TABLE_CAP = 500;
+var INSIGHT_WL = ["mailboxes", "onedrive", "sharepoint"];
+var INSIGHT_WL_META = {
+  mailboxes:  { one: "mailbox", plural: "mailboxes", yours: "your mailboxes", label: "Mailboxes", key: "ex", noun: "mailboxes" },
+  onedrive:   { one: "OneDrive account", plural: "OneDrive accounts", yours: "your OneDrive accounts", label: "OneDrive", key: "od", noun: "OneDrive accounts" },
+  sharepoint: { one: "site", plural: "SharePoint sites", yours: "your SharePoint sites", label: "SharePoint", key: "sp", noun: "SharePoint sites" }
+};
+var INSIGHT_FLAGS = {
+  "peer-size":            { label: "Much larger than peers",       tile: "Unusually large",           impact: "A single very large object cannot be split up, so it can stretch recovery well past the rest.", excl: true },
+  "peer-items":           { label: "Far more items than peers",    tile: "Unusually many items",      impact: "Restore speed is limited by items per minute, so an object with a huge item count takes far longer.", excl: true },
+  "concentration":        { label: "Large share of workload",      tile: "Large share of a workload", impact: "One object that holds a big share of a workload can move that workload's totals by itself.", excl: true },
+  "long-pole-abr":        { label: "Slow to restore (ABR)",        tile: "Sets the pace for ABR",     impact: "Its group is only fully back when this object finishes." , excl: false },
+  "long-pole-mass":       { label: "Slow to restore (Mass)",       tile: "Sets the pace for Mass",    impact: "A whole-tenant restore is only finished when this object finishes.", excl: false },
+  "high-recent-change":   { label: "Heavy recent change",          tile: "Heavy recent change",       impact: "The more that changed in the last 7 days, the longer ABR takes for this object.", excl: false },
+  "critical-lower-group": { label: "Looks critical, lower group",  tile: "Looks critical, lower group", impact: "Its score is in the top 10% of its workload but it is not in Group 1 or 2. Worth a manual check.", excl: false },
+  "near-mailbox-limit":   { label: "Near mailbox limit",           tile: "Near mailbox limit",        impact: "A full mailbox is the slowest kind to restore and a growth risk.", excl: false }
+};
+var INSIGHT_FLAG_ORDER = ["peer-size", "peer-items", "concentration", "long-pole-abr", "long-pole-mass", "high-recent-change", "critical-lower-group", "near-mailbox-limit"];
+
+var INSIGHTS = { flagged: [], byFlag: {}, baselines: {}, excludedCount: 0 };
+var insightFilter = null;
+var insightSummaryCache = null;
+var NO_INSIGHT_FLAGS = null;
+
+// ---------- small helpers ----------
+function insightPct(sorted, p) {
+  var n = sorted.length;
+  if (n === 0) { return 0; }
+  var idx = Math.ceil(p * n) - 1;
+  if (idx < 0) { idx = 0; }
+  if (idx >= n) { idx = n - 1; }
+  return sorted[idx];
+}
+function insightCount(n) {
+  if (n >= 1000000) { return (n / 1000000).toFixed(1) + " million"; }
+  return fmtNum(n);
+}
+function insightAddFlag(row, id) {
+  if (!row._flags) { row._flags = []; }
+  if (row._flags.indexOf(id) === -1) { row._flags.push(id); }
+  if (INSIGHT_FLAGS[id].excl) { row._excl = true; }
+}
+function insightTierShort(row) { var m = TIER_META[row.Tier]; return m ? m.short : (row.Tier || ""); }
+function insightIdentity(row) { return row.ObjectName || row.Identifier || "(unnamed)"; }
+
+// Single-object restore minutes. Mailboxes use the per-mailbox rates (one mailbox = one parallel restore).
+// SharePoint/OneDrive: [time at the full tier rate, time at one parallel unit] because how many parallel units one site/
+// OneDrive can use is not yet confirmed.
+function insightMailboxMin(mb, items) {
+  var byBytes = mb > 0 ? mb / EX_BENCHMARK.PerMailboxMBPerMin : 0;
+  var byItems = items > 0 ? items / EX_BENCHMARK.PerMailboxItemsPerMin : 0;
+  return Math.max(byBytes, byItems) * EX_BENCHMARK.OverheadBuffer;
+}
+
+// ---------- compute ----------
+function computeInsights() {
+  insightSummaryCache = null;
+  var res = { flagged: [], byFlag: {}, baselines: {}, excludedCount: 0 };
+  INSIGHT_FLAG_ORDER.forEach(function (id) { res.byFlag[id] = 0; });
+  var ctxs = {};
+
+  // reset every row every run
+  WORKLOAD_DEFS.forEach(function (wd) {
+    var rows = DATA.workloads[wd.key] || [];
+    for (var i = 0; i < rows.length; i++) { rows[i]._excl = false; rows[i]._flags = NO_INSIGHT_FLAGS; }
+  });
+  INSIGHTS = res;
+  if (IS_SUMMARY) { return; }
+
+  // ---- pass 1: baselines, peer outliers, concentration, high recent change, near-limit, critical-lower-group ----
+  INSIGHT_WL.forEach(function (wl) {
+    var rows = DATA.workloads[wl] || [];
+    var n = rows.length;
+    if (n === 0) { return; }
+    var f = RECOVERY_FIELDS[wl];
+    var stor = new Float64Array(n), items = new Float64Array(n), recent = new Float64Array(n), score = new Float64Array(n);
+    var totS = 0, totI = 0, totR = 0, i;
+    for (i = 0; i < n; i++) {
+      var r = rows[i], m = r.metrics || {};
+      var s = rowStorageBytes(wl, r);
+      var it = parseFloat(m[f.item]) || 0;
+      var rc = Math.max(0, Math.min(parseFloat(m[f.recent]) || 0, it));
+      stor[i] = s; items[i] = it; recent[i] = rc; score[i] = r._Score || 0;
+      totS += s; totI += it; totR += rc;
+    }
+    var sS = Float64Array.from(stor).sort(), sI = Float64Array.from(items).sort(), sR = Float64Array.from(recent).sort(), sSc = Float64Array.from(score).sort();
+    var base = {
+      n: n, scope: IS_PREVIEW ? "group1" : "tenant", totalStorage: totS, totalItems: totI, totalRecent: totR,
+      storageP50: insightPct(sS, 0.5), storageP95: insightPct(sS, 0.95), storageP99: insightPct(sS, 0.99),
+      itemsP50: insightPct(sI, 0.5), itemsP95: insightPct(sI, 0.95), itemsP99: insightPct(sI, 0.99),
+      recentP50: insightPct(sR, 0.5), recentP95: insightPct(sR, 0.95), recentP99: insightPct(sR, 0.99)
+    };
+    res.baselines[wl] = base;
+    var scoreCut = insightPct(sSc, INSIGHT_TOP_DECILE);
+    var peerOk = n >= INSIGHT_PEER_MIN_N, concOk = n >= INSIGHT_CONC_MIN_N;
+    var thS = base.storageP99 * INSIGHT_PEER_MULT, thI = base.itemsP99 * INSIGHT_PEER_MULT, thR = base.recentP99 * INSIGHT_PEER_MULT;
+    var minS = totS * INSIGHT_PEER_MIN_SHARE, minI = totI * INSIGHT_PEER_MIN_SHARE, minR = totR * INSIGHT_PEER_MIN_SHARE;
+    var concS = totS * INSIGHT_CONC_SHARE, concI = totI * INSIGHT_CONC_SHARE;
+    for (i = 0; i < n; i++) {
+      var row = rows[i];
+      if (peerOk) {
+        if (base.storageP99 > 0 && stor[i] > thS && stor[i] >= minS) { insightAddFlag(row, "peer-size"); }
+        if (base.itemsP99 > 0 && items[i] > thI && items[i] >= minI) { insightAddFlag(row, "peer-items"); }
+        if (base.recentP99 > 0 && recent[i] > thR && recent[i] >= minR) { insightAddFlag(row, "high-recent-change"); }
+      }
+      if (concOk && ((totS > 0 && stor[i] >= concS) || (totI > 0 && items[i] >= concI))) { insightAddFlag(row, "concentration"); }
+      if (wl === "mailboxes") {
+        var lim = parseFloat(row.MailboxLimitBytes) || 0;
+        if (lim > 0 && stor[i] >= INSIGHT_LIMIT_FRAC * lim) { insightAddFlag(row, "near-mailbox-limit"); }
+      }
+      if (!IS_PREVIEW && score[i] > 0 && score[i] >= scoreCut && (tierNum(row.Tier) >= Math.max(3, groupN()) || row.Tier === LOW_KEY)) { insightAddFlag(row, "critical-lower-group"); }
+    }
+    ctxs[wl] = { rows: rows, stor: stor, items: items, recent: recent, base: base, tot: { s: totS, i: totI } };
+  });
+
+  // ---- pass 2: long poles, against the pooled times of the (exclusion-aware) headline model ----
+  var model = computeRecoveryModel();
+  var spodTier = resolveLicenseTier(state.recovery.licenseTier, Math.max(tenantTotalsFor("sharepoint").objectCount, tenantTotalsFor("onedrive").objectCount));
+  var wf = getWindowFactor();
+  INSIGHT_WL.forEach(function (wl) {
+    var c = ctxs[wl];
+    if (!c) { return; }
+    var meta = INSIGHT_WL_META[wl];
+    var n = c.rows.length, i;
+    var massPooled = model.perWorkloadMassRecoveryMin ? model.perWorkloadMassRecoveryMin[meta.key] : 0;
+    var rate = 0, sf = 1, par = 1;
+    if (wl !== "mailboxes") {
+      rate = wl === "sharepoint" ? SP_ITEMS_PER_MIN_PER_UNIT : OD_ITEMS_PER_MIN_PER_UNIT;
+      par = Math.max(1, spodTier.Parallelism);
+      var avgMb = c.tot.i > 0 ? c.tot.s / c.tot.i / 1048576 : 0;
+      sf = avgMb > 0 ? Math.max(1, avgMb / SIZE_FACTOR_BASELINE_MB) : 1;
+    }
+    for (i = 0; i < n; i++) {
+      var row = c.rows[i];
+      var it = c.items[i];
+      if (it <= 0 && c.stor[i] <= 0) { continue; }
+      var rc = c.recent[i] * wf;
+      var fullHigh, fullLow, hotHigh, hotLow;
+      if (wl === "mailboxes") {
+        var mb = c.stor[i] / 1048576;
+        fullHigh = fullLow = insightMailboxMin(mb, it);
+        var frac = it > 0 ? c.recent[i] / it : 0;
+        hotHigh = hotLow = insightMailboxMin(mb * frac * wf, rc);
+      } else {
+        fullHigh = it * sf / rate; fullLow = fullHigh / par;
+        hotHigh = rc * sf / rate; hotLow = hotHigh / par;
+      }
+      var tierKey = row.Tier;
+      // ABR applies to Groups 1-3 only; compare with that group's own pooled ABR time for the workload
+      if (tierKey !== "Group 4" && hotHigh >= INSIGHT_MIN_POLE_MIN && model.milestones[tierKey] && !model.milestones[tierKey].locked) {
+        var pooledAbr = model.milestones[tierKey][meta.key].timeMin;
+        if (hotHigh > pooledAbr) { insightAddFlag(row, "long-pole-abr"); }
+      }
+      if (fullHigh >= INSIGHT_MIN_POLE_MIN && massPooled > 0 && fullHigh > massPooled) { insightAddFlag(row, "long-pole-mass"); }
+      if (row._flags) {
+        row._insTimes = [fullLow, fullHigh, hotLow, hotHigh];
+      }
+    }
+  });
+
+  // ---- collect ----
+  INSIGHT_WL.forEach(function (wl) {
+    var c = ctxs[wl];
+    if (!c) { return; }
+    var meta = INSIGHT_WL_META[wl];
+    for (var i = 0; i < c.rows.length; i++) {
+      var row = c.rows[i];
+      if (!row._flags) { continue; }
+      var t = row._insTimes || [0, 0, 0, 0];
+      var entry = {
+        wl: wl, row: row, flags: row._flags.slice(), excluded: !!row._excl,
+        storageBytes: c.stor[i], items: c.items[i], recent: c.recent[i],
+        singleObjectMin: t[0], singleObjectMinHigh: t[1], hotObjectMin: t[2], hotObjectMinHigh: t[3]
+      };
+      entry.reason = insightReason(wl, entry, c.base, meta, model);
+      res.flagged.push(entry);
+      entry.flags.forEach(function (id) { res.byFlag[id]++; });
+      if (entry.excluded) { res.excludedCount++; }
+    }
+  });
+}
+
+function insightTimeRange(entry, wl, hot) {
+  var lo = hot ? entry.hotObjectMin : entry.singleObjectMin, hi = hot ? entry.hotObjectMinHigh : entry.singleObjectMinHigh;
+  if (wl === "mailboxes" || Math.abs(hi - lo) < 0.5) { return fmtMin(hi); }
+  return fmtMin(lo) + " to " + fmtMin(hi);
+}
+
+function insightReason(wl, e, base, meta, model) {
+  var parts = [];
+  var row = e.row;
+  var has = function (id) { return e.flags.indexOf(id) !== -1; };
+  var sentenceCase = meta.one.charAt(0).toUpperCase() + meta.one.slice(1);
+  var scopeWord = base.scope === "group1" ? "Group 1 " : "";
+  var cmp = base.scope === "group1" ? "other Group 1 " + meta.plural : meta.yours;
+  if (has("peer-size")) {
+    parts.push("This " + meta.one + " holds " + fmtStorage(e.storageBytes) + "; 99% of " + cmp + " hold less than " + fmtStorage(base.storageP99) + " (typical: " + fmtStorage(base.storageP50) + ").");
+  }
+  if (has("peer-items")) {
+    parts.push("This " + meta.one + " holds " + insightCount(e.items) + " items; 99% of " + cmp + " hold fewer than " + fmtNum(base.itemsP99) + " (typical: " + fmtNum(base.itemsP50) + ").");
+  }
+  if (has("concentration")) {
+    var shS = base.totalStorage > 0 ? e.storageBytes / base.totalStorage : 0, shI = base.totalItems > 0 ? e.items / base.totalItems : 0;
+    var bits = [];
+    if (shS >= INSIGHT_CONC_SHARE) { bits.push((shS * 100).toFixed(1) + "% of all " + scopeWord + meta.noun + " storage"); }
+    if (shI >= INSIGHT_CONC_SHARE) { bits.push((shI * 100).toFixed(1) + "% of all " + scopeWord + meta.noun + " items"); }
+    parts.push("This " + meta.one + " alone holds " + bits.join(" and ") + ".");
+  }
+  if (has("long-pole-abr")) {
+    var pooledAbr = model.milestones[row.Tier] && !model.milestones[row.Tier].locked ? model.milestones[row.Tier][meta.key].timeMin : 0;
+    var txt = "Restoring just its last 7 days of changes takes roughly " + insightTimeRange(e, wl, true) + ", longer than the " + fmtMin(pooledAbr) + " estimated for its whole group, so it sets the pace for ABR.";
+    if (wl !== "mailboxes") { txt += " How many parallel restores one " + meta.one + " can use is still being confirmed, hence the range."; }
+    parts.push(txt);
+  }
+  if (has("long-pole-mass")) {
+    var pooledMass = model.perWorkloadMassRecoveryMin ? model.perWorkloadMassRecoveryMin[meta.key] : 0;
+    var txt2 = "Restored on its own, all of its data takes roughly " + insightTimeRange(e, wl, false) + ", longer than the " + fmtMin(pooledMass) + " estimated for all of " + meta.yours + " together.";
+    if (wl !== "mailboxes") { txt2 += " The range reflects restoring on the full tier rate versus a single parallel unit."; }
+    parts.push(txt2);
+  }
+  if (has("high-recent-change")) {
+    parts.push(insightCount(e.recent) + " items changed in the last 7 days; 99% of " + cmp + " saw fewer than " + fmtNum(base.recentP99) + ". The more that changed recently, the longer ABR takes for this " + meta.one + ".");
+  }
+  if (has("critical-lower-group")) {
+    parts.push("Its criticality score is in the top 10% of " + meta.yours + " but it sits in " + insightTierShort(row) + ". Consider whether it belongs in a higher group.");
+  }
+  if (has("near-mailbox-limit")) {
+    var lim = parseFloat(row.MailboxLimitBytes) || 0;
+    parts.push("This mailbox is at " + (lim > 0 ? Math.round(e.storageBytes / lim * 100) : 0) + "% of its " + fmtStorage(lim) + " limit. A full mailbox is the slowest kind to restore.");
+  }
+  if (e.excluded) { parts.push("It is excluded from the headline recovery estimates by default; include it to see the impact."); }
+  return parts.join(" ");
+}
+
+function getInsights() { return INSIGHTS; }
+
+// ---------- model with exclusion forced on/off ----------
+function modelWithExclusion(flag) {
+  var prev = state.insights.exclude;
+  state.insights.exclude = !!flag;
+  try { return computeRecoveryModel(); }
+  finally { state.insights.exclude = prev; }
+}
+function setExcludeOutliers(on) {
+  if (IS_PREVIEW || IS_SUMMARY) { return; }
+  state.insights.exclude = !!on;
+  recomputeAll();
+}
+function setInsightFilter(id) {
+  insightFilter = (id && INSIGHT_FLAGS[id]) ? id : null;
+  renderInsightsTab();
+}
+
+function insightHeadline() {
+  if (IS_PREVIEW || IS_SUMMARY || INSIGHTS.excludedCount === 0) { return null; }
+  var sig = [state.recovery.windowDays, state.recovery.licenseTier, state.recovery.groupCount, state.recovery.groupHours.join(','), INSIGHTS.excludedCount, DATA.workloads.mailboxes.length, DATA.workloads.sharepoint.length].join("|");
+  if (insightSummaryCache && insightSummaryCache.sig === sig) { return insightSummaryCache.headline; }
+  var ex = modelWithExclusion(true), inc = modelWithExclusion(false);
+  var g = "Critical Group 1";
+  var h = null;
+  if (ex.milestones[g] && !ex.milestones[g].locked && inc.milestones[g] && !inc.milestones[g].locked) {
+    h = {
+      excludedG1Min: ex.milestones[g].wallClockCumMin, includedG1Min: inc.milestones[g].wallClockCumMin,
+      deltaG1Min: inc.milestones[g].wallClockCumMin - ex.milestones[g].wallClockCumMin,
+      excludedMassMin: ex.fullRestoreMin, includedMassMin: inc.fullRestoreMin
+    };
+  }
+  insightSummaryCache = { sig: sig, headline: h };
+  return h;
+}
+
+function getInsightsSummary() {
+  var topRisks = [];
+  var groups = {}; // flagId|wl -> {count, g1, flagId, wl, example}
+  INSIGHTS.flagged.forEach(function (e) {
+    e.flags.forEach(function (id) {
+      var k = id + "|" + e.wl;
+      if (!groups[k]) { groups[k] = { id: id, wl: e.wl, count: 0, g1: 0, bytes: 0, maxMin: 0 }; }
+      var g = groups[k];
+      g.count++;
+      if (e.row.Tier === "Critical Group 1") { g.g1++; }
+      g.bytes += e.storageBytes;
+      if (e.singleObjectMinHigh > g.maxMin) { g.maxMin = e.singleObjectMinHigh; }
+    });
+  });
+  var weight = { "long-pole-abr": 6, "peer-size": 5, "peer-items": 5, "long-pole-mass": 4, "concentration": 3, "high-recent-change": 3, "critical-lower-group": 2, "near-mailbox-limit": 1 };
+  var list = Object.keys(groups).map(function (k) { return groups[k]; });
+  list.sort(function (a, b) {
+    var sa = (a.g1 > 0 ? 100 : 0) + (weight[a.id] || 0) * 10 + Math.min(9, a.count);
+    var sb = (b.g1 > 0 ? 100 : 0) + (weight[b.id] || 0) * 10 + Math.min(9, b.count);
+    return sb - sa;
+  });
+  list.slice(0, 5).forEach(function (g) {
+    var m = INSIGHT_WL_META[g.wl];
+    var noun = g.count === 1 ? m.one : m.plural;
+    var title, detail;
+    switch (g.id) {
+      case "peer-size": title = g.count + " " + noun + (g.count === 1 ? " holds" : " hold") + " far more data than the rest of " + m.yours; detail = "Together " + fmtStorage(g.bytes) + ". Large single objects cannot be split up and can stretch recovery."; break;
+      case "peer-items": title = g.count + " " + noun + (g.count === 1 ? " holds" : " hold") + " far more items than the rest of " + m.yours; detail = "Recovery speed is limited by items per minute, so these take much longer than their size suggests."; break;
+      case "concentration": title = g.count + " " + noun + (g.count === 1 ? " holds" : " hold") + " a large share of all " + m.plural; detail = "One object can move the whole workload's recovery estimate."; break;
+      case "long-pole-abr": title = g.count + " " + noun + (g.count === 1 ? " sets" : " set") + " the pace for ABR in its group"; detail = "Its group is only fully back when the slowest object finishes."; break;
+      case "long-pole-mass": title = g.count + " " + noun + (g.count === 1 ? " sets" : " set") + " the pace for a whole-tenant restore"; detail = "A full restore is only finished when the slowest object finishes."; break;
+      case "high-recent-change": title = g.count + " " + noun + " changed far more than usual in the last 7 days"; detail = "More recent change means more for ABR to restore first."; break;
+      case "critical-lower-group": title = g.count + " " + noun + (g.count === 1 ? " looks" : " look") + " critical but " + (g.count === 1 ? "sits" : "sit") + " in a lower group"; detail = "Worth a manual check on the Groups & Recovery Model tab."; break;
+      default: title = g.count + " " + noun + (g.count === 1 ? " is" : " are") + " near the mailbox limit"; detail = "A full mailbox is the slowest kind to restore and a growth risk.";
+    }
+    topRisks.push({ id: g.id, wl: g.wl, title: title, detail: detail, link: "insights:insights-table" });
+  });
+  return { total: INSIGHTS.flagged.length, excludedCount: INSIGHTS.excludedCount, byFlag: INSIGHTS.byFlag, topRisks: topRisks, headline: insightHeadline() };
+}
+
+// ---------- render ----------
+registerInfo("insights-method", "How abnormal objects are found",
+  "<p>Each workload is compared with <b>its own</b> distribution, not a fixed size. An object is flagged when it holds more than 5 times the 99th percentile of your own objects (and at least 0.1% of the workload), or holds 2% or more of the workload by itself.</p>" +
+  "<p>Objects that are unusually large, hold unusually many items, or hold a large share of a workload are <b>left out of the headline recovery estimates by default</b> (for both ABR and Mass, so the comparison stays like-for-like) because one object can stretch the whole window. You can include them again at any time.</p>" +
+  "<p>The other flags are for awareness only and never change a number.</p>");
+registerInfo("insights-single-object", "Single-object restore time",
+  "<p>Mailboxes restore at the per-mailbox rate. For SharePoint sites and OneDrive accounts it is not yet confirmed how many restores can run in parallel inside one site, so the table shows a range: the full restore rate for your size tier, up to a single parallel unit. SharePoint and OneDrive times are never part of the headline numbers.</p>");
+
+function insightsSummaryTilesHtml() {
+  var h = '<div class="ins-tiles" id="insights-tiles">';
+  INSIGHT_FLAG_ORDER.forEach(function (id) {
+    var n = INSIGHTS.byFlag[id] || 0;
+    if (id === "critical-lower-group" && IS_PREVIEW) { return; }
+    var meta = INSIGHT_FLAGS[id];
+    h += '<button type="button" class="ins-tile' + (n === 0 ? " zero" : "") + (insightFilter === id ? " active" : "") + '" ' + navAttr("insights:insights-table") + ' onclick="setInsightFilter(\'' + id + '\')" ' + (n === 0 ? "disabled" : "") + '>' +
+      '<span class="ins-tile-count">' + fmtNum(n) + '</span><span class="ins-tile-label">' + meta.tile + '</span><span class="ins-tile-impact">' + meta.impact + '</span></button>';
+  });
+  return h + "</div>";
+}
+
+function insightsBannerHtml() {
+  var h = '<div class="ins-banner">';
+  var n = INSIGHTS.excludedCount;
+  if (n === 0) {
+    return h + '<b>Nothing stands out.</b> No object is unusually large, item-heavy, or dominant compared with ' + (IS_PREVIEW ? "the other Group 1 objects" : "the rest of your environment") + ', so no object is excluded from the recovery estimates.</div>';
+  }
+  var on = state.insights.exclude;
+  h += '<div class="ins-banner-text">';
+  if (IS_PREVIEW) {
+    h += '<b>' + fmtNum(n) + ' Group 1 object' + (n === 1 ? "" : "s") + ' stand out</b> compared with the other Group 1 objects. In the Preview they are shown for awareness and are not removed from any estimate.';
+  } else if (on) {
+    h += '<b>' + fmtNum(n) + ' object' + (n === 1 ? " is" : "s are") + ' excluded from the recovery estimates.</b> They are abnormally large, item-heavy, or dominant compared with your other objects and would stretch recovery. They may be worth investigating.';
+  } else {
+    h += '<b>' + fmtNum(n) + ' abnormal object' + (n === 1 ? " is" : "s are") + ' included in the recovery estimates.</b> By default they are excluded because they would stretch recovery.';
+  }
+  h += ' ' + infoBtn("insights-method", "How abnormal objects are found") + '</div>';
+  var hl = insightHeadline();
+  if (hl) {
+    h += '<div class="ins-compare"><div class="ins-compare-card' + (on ? " current" : "") + '"><div class="ins-compare-label">Excluded (default)</div><div class="ins-compare-val">Group 1: ' + fmtMin(hl.excludedG1Min) + '</div><div class="ins-compare-sub">Whole tenant: ' + fmtMin(hl.excludedMassMin) + '</div></div>' +
+      '<div class="ins-compare-card' + (on ? "" : " current") + '"><div class="ins-compare-label">Included</div><div class="ins-compare-val">Group 1: ' + fmtMin(hl.includedG1Min) + '</div><div class="ins-compare-sub">Whole tenant: ' + fmtMin(hl.includedMassMin) + '</div></div></div>';
+  }
+  if (IS_PREVIEW) {
+    h += '<div class="ins-toggle" aria-disabled="true"><button type="button" class="ins-toggle-btn" disabled>Exclude</button><button type="button" class="ins-toggle-btn" disabled>Include</button><span class="ins-toggle-note">Locked in the Preview</span></div>';
+  } else {
+    h += '<div class="ins-toggle" role="group" aria-label="Abnormal objects in recovery estimates"><button type="button" class="ins-toggle-btn' + (on ? " active" : "") + '" aria-pressed="' + on + '" onclick="setExcludeOutliers(true)">Exclude</button>' +
+      '<button type="button" class="ins-toggle-btn' + (on ? "" : " active") + '" aria-pressed="' + (!on) + '" onclick="setExcludeOutliers(false)">Include</button></div>';
+  }
+  return h + "</div>";
+}
+
+var INSIGHT_COLS = [
+  { key: "wl", label: "Workload", type: "text", get: function (e) { return INSIGHT_WL_META[e.wl].label; } },
+  { key: "obj", label: "Object", type: "text", get: function (e) { return insightIdentity(e.row); } },
+  { key: "flags", label: "Flags", type: "text", get: function (e) { return e.flags.map(function (f) { return INSIGHT_FLAGS[f].label; }).join(", "); } },
+  { key: "why", label: "Why it is flagged", type: "text", get: function (e) { return e.reason; } },
+  { key: "storage", label: "Storage", type: "num", cls: "num", get: function (e) { return e.storageBytes; } },
+  { key: "items", label: "Items", type: "num", cls: "num", get: function (e) { return e.items; } },
+  { key: "recent", label: "Changed in last 7 days", type: "num", cls: "num", get: function (e) { return e.recent; } },
+  { key: "group", label: "Group", type: "text", get: function (e) { return insightTierShort(e.row); } },
+  { key: "time", label: "Est. time to restore on its own", type: "num", cls: "num", get: function (e) { return e.singleObjectMinHigh; } },
+  { key: "excl", label: "In headline estimates?", type: "text", get: function (e) { return e.excluded ? (state.insights.exclude ? "Excluded" : "Included") : "Included"; } }
+];
+
+function insightsTableHtml() {
+  var all = INSIGHTS.flagged;
+  var list = insightFilter ? all.filter(function (e) { return e.flags.indexOf(insightFilter) !== -1; }) : all;
+  var sorted = applySort(list, "insights", INSIGHT_COLS, "time", "desc");
+  var shown = sorted.length > INSIGHT_TABLE_CAP ? sorted.slice(0, INSIGHT_TABLE_CAP) : sorted;
+  SORT_RERENDER["insights"] = renderInsightsTab;
+  var h = '<div class="ins-table-head"><h3>Flagged objects</h3>';
+  if (insightFilter) { h += '<span class="ins-filter">Showing: <b>' + INSIGHT_FLAGS[insightFilter].label + '</b> <button type="button" class="ins-clear" onclick="setInsightFilter(null)">Show all</button></span>'; }
+  h += ' ' + infoBtn("insights-single-object", "About single-object restore time") + '</div>';
+  h += '<div class="table-wrap"><table class="ins-table sort-data" data-datasort="1"><thead><tr>';
+  INSIGHT_COLS.forEach(function (c) { h += sortThHtml("insights", c, "time", "desc"); });
+  h += "</tr></thead><tbody>";
+  shown.forEach(function (e) {
+    var meta = INSIGHT_WL_META[e.wl];
+    var excl = e.excluded ? (state.insights.exclude ? "Excluded" : "Included") : "Included";
+    h += "<tr" + (e.excluded && state.insights.exclude ? ' class="ins-excluded"' : "") + ">" +
+      "<td>" + meta.label + "</td>" +
+      '<td><span class="linkout" ' + navAttr("groups:grp-by-workload:wl-" + e.wl) + ">" + esc(insightIdentity(e.row)) + "</span></td>" +
+      '<td class="ins-flags">' + e.flags.map(function (f) { return '<span class="ins-chip' + (INSIGHT_FLAGS[f].excl ? " excl" : "") + '">' + INSIGHT_FLAGS[f].label + "</span>"; }).join(" ") + "</td>" +
+      '<td class="ins-why">' + esc(e.reason) + "</td>" +
+      '<td class="num" data-sort="' + Math.round(e.storageBytes) + '">' + fmtStorageNum(e.storageBytes) + "</td>" +
+      '<td class="num" data-sort="' + Math.round(e.items) + '">' + fmtNum(e.items) + "</td>" +
+      '<td class="num" data-sort="' + Math.round(e.recent) + '">' + fmtNum(e.recent) + "</td>" +
+      "<td>" + esc(insightTierShort(e.row)) + "</td>" +
+      '<td class="num" data-sort="' + Math.round(e.singleObjectMinHigh) + '">' + insightTimeRange(e, e.wl, false) + "</td>" +
+      "<td>" + excl + "</td></tr>";
+  });
+  h += "</tbody></table></div>";
+  // storage header carries the unit; swap the plain label for the unit-aware one
+  h = h.replace(">Storage</th>", ">" + storageHeader("Storage") + "</th>");
+  if (sorted.length > INSIGHT_TABLE_CAP) {
+    h += '<div class="table-cap-notice">Showing the first ' + fmtNum(INSIGHT_TABLE_CAP) + ' of ' + fmtNum(sorted.length) + ' flagged objects in the current sort order. Click a column heading to change the order, or use the tiles above to narrow the list.</div>';
+  }
+  if (sorted.length === 0) { h += '<p class="ins-empty">No objects match this filter.</p>'; }
+  return h;
+}
+
+function insightsBaselineHtml() {
+  var h = '<h3>Your baseline</h3><p class="ins-sub">' + (IS_PREVIEW ? "Medians and percentiles compared with other Group 1 objects." : "Each workload is compared with its own objects. These are the numbers &quot;abnormal&quot; is measured against.") + "</p>";
+  h += '<div class="table-wrap"><table class="ins-base-table"><thead><tr><th>Workload</th><th class="num">Objects</th><th class="num">' + storageHeader("Median") + '</th><th class="num">' + storageHeader("95th pct.") + '</th><th class="num">' + storageHeader("99th pct.") + '</th>' +
+    '<th class="num">Median items</th><th class="num">95th pct. items</th><th class="num">99th pct. items</th><th class="num">99th pct. 7-day change</th></tr></thead><tbody>';
+  INSIGHT_WL.forEach(function (wl) {
+    var b = INSIGHTS.baselines[wl];
+    if (!b) { return; }
+    h += "<tr><td>" + INSIGHT_WL_META[wl].label + '</td><td class="num">' + fmtNum(b.n) + '</td><td class="num" data-sort="' + Math.round(b.storageP50) + '">' + fmtStorageNum(b.storageP50) + '</td><td class="num" data-sort="' + Math.round(b.storageP95) + '">' + fmtStorageNum(b.storageP95) +
+      '</td><td class="num" data-sort="' + Math.round(b.storageP99) + '">' + fmtStorageNum(b.storageP99) + '</td><td class="num">' + fmtNum(b.itemsP50) + '</td><td class="num">' + fmtNum(b.itemsP95) + '</td><td class="num">' + fmtNum(b.itemsP99) + '</td><td class="num">' + fmtNum(b.recentP99) + "</td></tr>";
+  });
+  return h + "</tbody></table></div>";
+}
+
+function renderInsightsTab() {
+  var p = document.getElementById("panel-insights");
+  if (!p) { return; }
+  var h = "<h2>Recovery Insights</h2>";
+  if (IS_SUMMARY) {
+    p.innerHTML = h + '<p class="ins-sub">Object-level insights (unusually large or item-heavy objects, objects that set the pace for recovery) are part of the interactive assessment.</p>';
+    return;
+  }
+  h += '<p class="ins-sub">Objects that look abnormal compared with the rest of your environment and can pull the recovery window out. Surfacing them early helps you decide what to review before an outage.</p>';
+  h += '<div id="insights-summary">' + insightsBannerHtml() + insightsSummaryTilesHtml() + "</div>";
+  if (INSIGHTS.flagged.length > 0) {
+    h += '<div id="insights-table">' + insightsTableHtml() + "</div>";
+  } else {
+    h += '<div id="insights-table"><p class="ins-empty">No objects were flagged.</p></div>';
+  }
+  h += '<div id="insights-baseline">' + insightsBaselineHtml() + "</div>";
+  if (IS_PREVIEW) {
+    h += pvLockedPanel("Insights for the remaining groups", "Insights for the remaining groups are part of the full assessment.");
+  }
+  p.innerHTML = h;
+  enhanceTables(p);
+}
+
+'@
+
+#endregion
+
 #region ---------- HTML report JS: rendering (exec summary, tables) ----------
 
 $script:ReportJsRenderA = @'
-function renderExecFinancialAndRecoveryTop() {
-  // NEW: the whole point of this assessment is breaking critical objects
-  // into groups to shrink recovery time - so financial impact and recovery
-  // times now lead the Executive Summary, ahead of the per-workload group
-  // breakdown. Reuses computeRecoveryModel() (same source of truth as the
-  // Recovery tab) so these numbers can never drift from what that tab shows.
-  var model = computeRecoveryModel();
-  var g1 = model.milestones["Critical Group 1"];
-  var g2 = model.milestones["Critical Group 2"];
-  var g3 = model.milestones["Critical Group 3"];
-  var exceedingGroups = ["Critical Group 1", "Critical Group 2", "Critical Group 3"]
-    .map(function (t, i) { return { label: "Group " + (i + 1), m: model.milestones[t] }; })
-    .filter(function (g) { return g.m.exceedsTarget; });
+// ===================================================================================
+// v2.0 Executive Summary (panel "exec") and Report tab (panel "report").
+//
+// Executive Summary = one-screen story, 10 blocks (section ids are fixed by the v2 layout):
+//   1 headline (exec-who + exec-fast)   2 hours saved / cost avoided (exec-worth)
+//   3 concentration proof (exec-concentration)   4 recovery ladder (exec-ladder)
+//   5 why speed is limited (exec-constraint)     6 who is in Group 1 (exec-g1list)
+//   7 RTO scorecard + gap analysis (exec-rto)    8 top risks (exec-risks)
+//   9 next steps (exec-next)  (the "expected wait" block was removed in v2.0)
+// Works in three modes (DATA.meta.buildMode): full (rows), preview (Group 1 rows + tenantTotals),
+// summary (tierAgg + tenantTotals + group1Profile, no rows). Nothing beyond Group 1 is ever
+// calculated in Preview: model.milestones[...].locked is honoured everywhere.
+// ASCII only. Colors via CSS variables only.
+// ===================================================================================
 
-  // NOTE: this compares Group 1's ABR time against the FULL-TENANT
-  // undifferentiated restore time (model.fullRestoreMin), NOT against Group
-  // 1's own cumulative-batch Mass Recovery figure (g1.massRecoveryCumMin).
-  // Those two are mathematically identical for Group 1 specifically - it's
-  // the first tier, so "mass-recover just Group 1's objects as one batch"
-  // and "ABR-recover Group 1" are the same computation, meaning Group 1 can
-  // never show savings against its own scope (nothing came before it to
-  // sequence against). The comparison that actually captures ABR's value is
-  // "how much sooner is my most critical data back, vs. an undifferentiated
-  // restore of literally everything, where there's no guarantee anything
-  // comes back before the whole job finishes." See chat 2026-07-15 ("why is
-  // cost avoided 0") and RECOVERY-MODEL-METHODOLOGY.md.
-  var abrTotalCostMoney = fmtHours(g1.wallClockCumMin) * state.recovery.costPerHour;
-  var g1SavingsHrs = Math.max(0, (model.fullRestoreMin - g1.wallClockCumMin) / 60);
-  var g1SavingsMoney = g1SavingsHrs * state.recovery.costPerHour;
-  var fullExposureMoney = fmtHours(model.fullRestoreMin) * state.recovery.costPerHour;
-  var pctReduction = fullExposureMoney > 0 ? Math.round((g1SavingsMoney / fullExposureMoney) * 100) : 0;
-  // NEW v3.1.0: replaces the old "Beyond Target" object-count callout. Every
-  // active object is now IN one of Group 1/2/3 (criticality-ranked, always
-  // populated) - what can still happen is a group's OWN ABR time running
-  // over ITS OWN target, which this flags per group instead of exiling
-  // objects to a 5th bucket.
-  var targetGapNote = exceedingGroups.length > 0
-    ? ("<span style=\"color:var(--red-target);font-weight:700;\">" + exceedingGroups.map(function (g) { return g.label; }).join(", ") + " exceed" + (exceedingGroups.length === 1 ? "s" : "") + " its stated RTO target</span> - " +
-        exceedingGroups.map(function (g) { return g.label + " by " + fmtMin(g.m.targetGapMin); }).join("; ") + ".")
-    : "All three groups' ABR recovery times are within their stated RTO targets.";
+// ---------------------------------------------------------------------------
+// Info bubble: how cost avoided is estimated (registered at load, used by Exec and Report)
+// ---------------------------------------------------------------------------
+registerInfo("cost-avoided", "How we estimate cost avoided",
+  "<p><b>Baseline.</b> Restoring your whole tenant as one undifferentiated Mass Recovery job. Data is only guaranteed usable when that job finishes.</p>" +
+  "<p><b>With ABR.</b> Autonomous Business Recovery restores in priority order. The milestone is the point where Group 1 (or Groups 1-2, 1-3 and so on up to the last criticality group) is back online.</p>" +
+  "<p><b>Time saved</b> = baseline time minus the ABR milestone time (never below zero). <b>Cost avoided</b> = hours saved &times; the downtime cost per hour you enter. Until you enter a rate, only hours are shown.</p>" +
+  "<p><b>Why Groups 2-3 are smaller.</b> Total throughput is the same either way, so prioritizing does not shrink the time to restore everything. It changes <i>when</i> each group returns. The gap closes as more data comes back.</p>" +
+  "<p><b>Expected wait.</b> Without prioritization a typical Group 1 object returns around the midpoint of the full restore, and the last one at the end.</p>");
 
-  // NEW v3.4.0: time-first framing, per feedback 2026-07-17 - the old
-  // punchline paired "$X saved" with "without changing total recovery
-  // time" in one sentence, which read as muddy to an exec (it invites "so I
-  // still wait 19 days?"). The real value is time-to-critical-data, not
-  // total recovery time, so that leads now ("your most critical data is
-  // usable in X instead of Y") and the dollar savings support it as
-  // corroborating evidence underneath, not the headline itself. The
-  // headline renders even when $/hour isn't set, since the time comparison
-  // stands on its own without a cost model.
-  var financialHtml = '<div class="exec-hero-label">Time to Critical Data</div>';
-  if (model.fullRestoreMin > 0) {
-    financialHtml += '<div class="exec-fin-headline">Your most critical data is usable in <b>' + fmtMin(g1.wallClockCumMin) + '</b> instead of <b>' + fmtMin(model.fullRestoreMin) + '</b>.</div>';
-  }
-  // Before/after comparison per feedback 2026-07-15 - still valuable as
-  // supporting evidence for the time-first headline above: same "before"
-  // (Mass Recovery, no prioritization) vs "after" (ABR, Group 1 online)
-  // split, in dollar terms, then closes with one line that leads with the
-  // dollar amount as a SUPPORTING fact ("that's a $X, Y% reduction...")
-  // rather than as the sentence's main verb, and replaces "without changing
-  // total recovery time" with the concrete mechanism (Mass Recovery
-  // continues in the background) so it reads as an explanation, not a
-  // caveat inviting "so I still wait?"
-  if (state.recovery.costPerHour > 0) {
-    financialHtml +=
-      '<div class="exec-fin-compare">' +
-        '<div class="exec-fin-compare-card before"><div class="exec-fin-compare-label">Mass Recovery (no prioritization)</div><div class="exec-fin-compare-time">' + fmtMin(model.fullRestoreMin) + '</div><div class="exec-fin-compare-cost">' + fmtMoney(fullExposureMoney) + " in downtime cost</div></div>" +
-        '<div class="exec-fin-compare-arrow">&rarr;</div>' +
-        '<div class="exec-fin-compare-card after"><div class="exec-fin-compare-label">ABR (Group 1 online)</div><div class="exec-fin-compare-time">' + fmtMin(g1.wallClockCumMin) + '</div><div class="exec-fin-compare-cost">' + fmtMoney(abrTotalCostMoney) + " in downtime cost</div></div>" +
-      "</div>" +
-      '<div class="exec-fin-punchline">That&rsquo;s a <b>' + fmtMoney(g1SavingsMoney) + "</b> reduction (" + pctReduction + "%) in downtime cost for the data that matters most - Mass Recovery keeps running in the background for everything else.</div>";
+// ---------------------------------------------------------------------------
+// Mode-aware aggregate helpers (rows in Full/Preview, tierAgg in Summary)
+// ---------------------------------------------------------------------------
+var EXEC_WL = ["mailboxes", "onedrive", "sharepoint", "teams"];
 
-    // Recovery Timeline: v3.3.0 "before/after tracks" - two genuinely
-    // to-scale rows on the same real timescale (model.fullRestoreMin), per
-    // a reference design the user provided. "Without ABR" is a full-width
-    // hatched bar (it literally represents the whole timescale). "With ABR"
-    // is the SAME timescale, so Group 1/2/3 collapse into a small chip
-    // cluster near the left, followed by a de-emphasized "rest of tenant
-    // continues in background" fill - the empty space IS the value being
-    // communicated. g1/g2/g3.wallClockCumMin are genuinely hot-scope
-    // (v3.1.0) - see RECOVERY-MODEL-METHODOLOGY.md.
-    if (model.fullRestoreMin > 0) {
-      var g1Seg = g1.wallClockCumMin;
-      var g2Seg = Math.max(0, g2.wallClockCumMin - g1.wallClockCumMin);
-      var g3Seg = Math.max(0, g3.wallClockCumMin - g2.wallClockCumMin);
-      var segCost = function (v) { return fmtHours(v) * state.recovery.costPerHour; };
-      var tlSegs = [
-        { label: "Group 1", dur: g1Seg, color: "#0E5BCF" },
-        { label: "Group 2", dur: g2Seg, color: "#2FCAFF" },
-        { label: "Group 3", dur: g3Seg, color: "#4DD2D2" }
-      ];
-
-      // Real proportion the critical-group cluster would occupy at true
-      // scale - typically tiny (hours out of ~19 days here). Floored at 6%
-      // of the bar's width so it stays visible as "a little bit," rather
-      // than rendering as literally nothing - the mockup's cluster is
-      // clearly a deliberate, legible sliver, not a sub-pixel line.
-      var realClusterPct = (g3.wallClockCumMin / model.fullRestoreMin) * 100;
-      var clusterPct = Math.min(94, Math.max(realClusterPct, 6));
-
-      var chipsHtml = tlSegs.map(function (s) {
-        var isEmpty = s.dur <= 0;
-        var bgStyle = isEmpty
-          ? "background:repeating-linear-gradient(45deg, var(--mid-gray) 0, var(--mid-gray) 2px, #fff 2px, #fff 4px);"
-          : ("background:" + s.color + ";");
-        // flex-grow proportional to this group's own real share of the
-        // cluster - min-width (see CSS) keeps a "0 min" group visible as a
-        // hairline instead of disappearing entirely.
-        var flexStyle = "flex:" + Math.max(s.dur, 0.01) + " 1 0;";
-        var titleText = s.label + " (ABR): " + fmtMin(s.dur) + ", " + fmtMoney(segCost(s.dur));
-        return '<div class="fin-tl-chip" style="' + bgStyle + flexStyle + '" title="' + titleText.replace(/"/g, "&quot;") + '"></div>';
-      }).join("");
-
-      // NEW v3.4.1: withAbrBarHtml is now a full track-row (bar + end label),
-      // matching withoutAbrBarHtml's shape, per feedback 2026-07-17 - both
-      // rows now fade out toward the SAME end label (model.fullRestoreMin),
-      // reinforcing that Mass Recovery is still running in the background
-      // for the same real duration either way; ABR just gets critical data
-      // back long before that background job matters.
-      var withAbrBarHtml = '<div class="fin-tl-track-row">' +
-        '<div class="fin-tl-track-bar with-abr">' +
-          '<div class="fin-tl-chip-cluster" style="flex:0 0 ' + clusterPct.toFixed(2) + '%;">' + chipsHtml + "</div>" +
-          '<div class="fin-tl-bg-fill" title="Mass Recovery still restoring in the background, in random order: ' + fmtMin(model.fullRestoreMin).replace(/"/g, "&quot;") + ", " + fmtMoney(fullExposureMoney) + '">rest of tenant restoring in random order</div>' +
-        "</div>" +
-        '<div class="fin-tl-track-endlabel">' + fmtMin(model.fullRestoreMin) + ' <span class="arrow">&#8599;</span></div>' +
-      "</div>";
-
-      // NEW v3.4.1: corrected the "Without ABR" label text per feedback
-      // 2026-07-17 - Mass Recovery does NOT hold all data unusable until the
-      // very end; each file/email/record becomes usable as its own restore
-      // completes. The real problem is RANDOM order: like a puzzle
-      // reassembled with pieces returned in no particular sequence, the
-      // specific file, email, or record a user actually needs may not come
-      // back until the whole job finishes - that's the accurate framing,
-      // not "nothing is usable until the end."
-      var withoutAbrBarHtml = '<div class="fin-tl-track-row">' +
-        '<div class="fin-tl-track-bar hatched"><span class="fin-tl-track-bar-text">Restored in random order &ndash; the exact data a user needs may not come back until this finishes</span></div>' +
-        '<div class="fin-tl-track-endlabel">' + fmtMin(model.fullRestoreMin) + ' <span class="arrow">&#8599;</span></div>' +
-      "</div>";
-
-      var legendHtml = '<div class="fin-tl-legend">' + tlSegs.map(function (s) {
-        var swatchStyle = s.dur <= 0
-          ? "background:repeating-linear-gradient(45deg, var(--mid-gray) 0, var(--mid-gray) 3px, #fff 3px, #fff 6px);"
-          : ("background:" + s.color + ";");
-        return '<div class="fin-tl-legend-item"><span class="fin-tl-swatch" style="' + swatchStyle + '"></span><span>' + s.label + "</span></div>";
-      }).join("") + '<div class="fin-tl-legend-item"><span class="fin-tl-swatch" style="background:var(--mid-gray);"></span><span>Mass recovery</span></div>' + "</div>";
-
-      // NEW v3.4.2: description tightened and extended the puzzle analogy
-      // per feedback 2026-07-17 - "corners and edges first" (how people
-      // actually assemble a puzzle) now explicitly maps to ABR restoring
-      // recently accessed/modified/created data first, i.e. the pieces that
-      // "actually give you something to work with," vs. Mass Recovery
-      // gluing down whatever piece it grabs, in no order. Carefully worded
-      // as "nothing forms a COMPLETE, usable picture until the whole box is
-      // done" rather than "nothing is usable until the end" - individual
-      // pieces (files/emails/records) genuinely are usable as each one
-      // lands, per the v3.4.1 correction above; it's the complete picture
-      // that is missing until the whole random-order job finishes.
-      financialHtml += '<div class="fin-timeline">' +
-        '<div class="fin-tl-title">Mass Recovery vs. ABR: Same Timescale, Different Order</div>' +
-        '<div class="fin-tl-desc">Mass Recovery &ndash; the industry standard, Rubrik included &ndash; restores pieces in random order: like dumping out a puzzle and gluing down whatever you grab first, nothing forms a complete, usable picture until the whole box is done, ' + fmtMin(model.fullRestoreMin) + ' here. ABR does what any puzzle solver does first &ndash; corners and edges, the pieces that actually give you something to work with &ndash; prioritizing recently accessed, modified, and created data so the business is operational in ' + fmtMin(g1.wallClockCumMin) + '.</div>' +
-        '<div class="fin-tl-track-block">' +
-          '<div class="fin-tl-track-label">Without ABR</div>' +
-          '<div class="fin-tl-track-sublabel">Mass Recovery &ndash; random restore order</div>' +
-          withoutAbrBarHtml +
-        "</div>" +
-        '<div class="fin-tl-track-block">' +
-          '<div class="fin-tl-track-label">With ABR</div>' +
-          '<div class="fin-tl-track-sublabel">recently active data restored first</div>' +
-          withAbrBarHtml +
-        "</div>" +
-        '<div class="fin-tl-gap-callout">Same timescale for both rows. The data your users actually need is back in <b>' + fmtMin(g3.wallClockCumMin) + "</b> with ABR, vs. <b>" + fmtMin(model.fullRestoreMin) + "</b> for a fully random-order restore.</div>" +
-        legendHtml +
-      "</div>";
-    }
-  } else {
-    financialHtml += '<div class="exec-hero-note">Downtime cost ($/hour) is not set, so dollar figures are $0 below. Set it on the <span class="exec-hero-linkout" onclick="switchTab(\'recovery\')">Recovery tab</span> to turn these into real cost-avoidance numbers for this customer.</div>';
-  }
-
-  // NEW v3.4.0: Dormant Data callout, per feedback 2026-07-17 - "Dormant:
-  // N" was sitting as one equally-weighted cell in the tier totals grid,
-  // easy to miss even though it's often the single most striking fact in
-  // the whole report: a large majority of a tenant can be genuinely
-  // dormant, which Mass Recovery restores blindly and in full every time,
-  // while ABR already knows to leave it for last. Computed across ALL FIVE
-  // workloads (not just the three with a wall-clock recovery-time model),
-  // and shown unconditionally - this is an object-count story, not a
-  // dollar one, so it doesn't depend on $/hour being set.
-  // NEW v3.6.0: moved out of financialHtml into its own dormantHtml block,
-  // per feedback 2026-07-22 - rendered into #exec-dormant at the very
-  // bottom of the Report tab (see panel-report in the HTML template),
-  // collapsed by default behind a toggle button. It's supporting color for
-  // what ABR already deprioritizes, not part of the primary financial/
-  // recovery-time case the tab leads with.
-  // NEW v3.10.1: recovery time per tile. Group 4 has no ABR priority and no
-  // separate recovery job of its own - per RECOVERY-MODEL-METHODOLOGY.md,
-  // it "rides along" with whatever else hasn't come back yet, which means a
-  // Group 4 object's data is only guaranteed back once that WORKLOAD's own
-  // Mass Recovery finishes end to end (Mass Recovery doesn't sequence by
-  // group). So the honest per-tile time is that workload's own full-dataset
-  // Mass Recovery total (model.perWorkloadMassRecoveryMin), not an isolated
-  // "just Group 4" figure - there is no such isolated job. Teams has no
-  // independent recovery-time model (its content lives in SharePoint/
-  // Exchange - see "Why Teams needs no recovery-time split" in the
-  // methodology doc), so its tile gets a note instead of a number.
-  var MASS_RECOVERY_KEY_BY_WORKLOAD = { mailboxes: "ex", onedrive: "od", sharepoint: "sp" };
-  var inactiveTierName = TIER_ORDER[TIER_ORDER.length - 1];
-  var dormantByWorkload = WORKLOAD_DEFS.map(function (wd) {
-    var rows = DATA.workloads[wd.key] || [];
-    var inactiveCount = rows.filter(function (r) { return r.Tier === inactiveTierName; }).length;
-    var pct = rows.length > 0 ? Math.round((inactiveCount / rows.length) * 100) : 0;
-    var massKey = MASS_RECOVERY_KEY_BY_WORKLOAD[wd.key];
-    var massRecoveryMin = massKey ? model.perWorkloadMassRecoveryMin[massKey] : null;
-    return { label: wd.label, inactiveCount: inactiveCount, total: rows.length, pct: pct, massRecoveryMin: massRecoveryMin };
-  }).filter(function (d) { return d.total > 0; });
-  var totalObjectsAll = dormantByWorkload.reduce(function (s, d) { return s + d.total; }, 0);
-  var totalInactiveAll = dormantByWorkload.reduce(function (s, d) { return s + d.inactiveCount; }, 0);
-  var overallDormantPct = totalObjectsAll > 0 ? Math.round((totalInactiveAll / totalObjectsAll) * 100) : 0;
-  var sortedDormant = dormantByWorkload.slice().sort(function (a, b) { return b.pct - a.pct; });
-
-  // NEW v3.7.0: retitled from "Dormant Data - What ABR Already Knows" to a
-  // Group 4 framing, per feedback 2026-07-30 - Dormant folded into Group 4
-  // everywhere (TIER_ORDER/TIER_META), no longer branded as its own
-  // "dormant" category. Still collapsed by default at the bottom of the
-  // Report tab - this is detail for anyone who digs in, not a headline.
-  var dormantHtml = "";
-  if (totalObjectsAll > 0) {
-    dormantHtml = '<div class="exec-collapsible">' +
-      '<button type="button" class="exec-collapsible-toggle" onclick="toggleCollapsible(this)" aria-expanded="false">' +
-        '<span class="exec-collapsible-chevron">&#9656;</span>' +
-        '<span class="exec-collapsible-title">Group 4 Detail</span>' +
-        '<span class="exec-collapsible-summary">' + overallDormantPct + '% (' + fmtNum(totalInactiveAll) + ' of ' + fmtNum(totalObjectsAll) + ' objects)</span>' +
-      "</button>" +
-      '<div class="exec-collapsible-body" hidden>' +
-        '<div class="exec-dormant-headline"><b>' + overallDormantPct + '%</b> of this tenant (' + fmtNum(totalInactiveAll) + ' of ' + fmtNum(totalObjectsAll) + ' objects) falls into Group 4 - limited activity across every metric in the reporting window. Group 4 gets no ABR priority and is recovered entirely by Mass Recovery, alongside whatever else hasn\'t come back yet.</div>' +
-        '<div class="exec-dormant-grid">' +
-          sortedDormant.map(function (d) {
-            var timeHtml = d.massRecoveryMin !== null
-              ? '<div class="exec-dormant-time">Mass Recovery: ~' + fmtMin(d.massRecoveryMin) + ' (whole workload)</div>'
-              : '<div class="exec-dormant-time-na">No independent recovery-time model - Teams content lives in SharePoint/Exchange</div>';
-            return '<div class="exec-dormant-cell"><div class="exec-dormant-pct">' + d.pct + '%</div><div class="exec-dormant-label">' + esc(d.label) + '</div><div class="exec-dormant-sub">' + fmtNum(d.inactiveCount) + ' of ' + fmtNum(d.total) + ' in Group 4</div>' + timeHtml + '</div>';
-          }).join("") +
-        "</div>" +
-      "</div>" +
-    "</div>";
-  }
-
-  // Flag when a group has zero objects - rare now that all workloads use
-  // criticality-ranked -TierSplit (guarantees population as long as there's
-  // enough active data), but can still happen on a very small tenant. Call
-  // it out rather than showing an unexplained identical cumulative number.
-  var g1Count = g1.sp.objectCount + g1.od.objectCount + g1.ex.objectCount;
-  var g2Count = g2.sp.objectCount + g2.od.objectCount + g2.ex.objectCount;
-  var g3Count = g3.sp.objectCount + g3.od.objectCount + g3.ex.objectCount;
-  var g2EmptyBadge = g2Count === 0 ? ' <span class="badge empty-tier">Empty</span>' : "";
-  var g3EmptyBadge = g3Count === 0 ? ' <span class="badge empty-tier">Empty</span>' : "";
-  var g2EmptyNote = g2Count === 0 ? '<div class="exec-empty-note">Same as Group 1 - no objects fall in Group 2.</div>' : "";
-  var g3EmptyNote = g3Count === 0 ? '<div class="exec-empty-note">Same as Groups 1-2 - no objects fall in Group 3.</div>' : "";
-
-  var recoveryHtml = '<div class="exec-hero-label">Recovery Times (ABR, sequenced by group)</div>' +
-    '<div class="exec-hero-caption">"Cumulative" = elapsed time from the start of recovery, not added on top of the group before it - Groups 1-2 online in ' + fmtMin(g2.wallClockCumMin) + ' means ' + fmtMin(g2.wallClockCumMin) + ' total since recovery began, ' + fmtMin(g1.wallClockCumMin) + ' of which is Group 1 recovering first.</div>' +
-    '<div class="exec-hero-grid">' +
-      '<div class="exec-hero-card"><div class="exec-hero-tag">Group 1 online in</div><div class="exec-hero-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="exec-hero-sub">' + fmtNum(g1Count) + " objects - target: " + state.recovery.group1Hours + " hr</div></div>" +
-      '<div class="exec-hero-card"><div class="exec-hero-tag">Groups 1-2 online in' + g2EmptyBadge + '</div><div class="exec-hero-value">' + fmtMin(g2.wallClockCumMin) + '</div><div class="exec-hero-sub">cumulative - target: ' + state.recovery.group2Hours + " hr</div>" + g2EmptyNote + "</div>" +
-      '<div class="exec-hero-card"><div class="exec-hero-tag">Groups 1-3 online in' + g3EmptyBadge + '</div><div class="exec-hero-value">' + fmtMin(g3.wallClockCumMin) + '</div><div class="exec-hero-sub">cumulative - target: ' + state.recovery.group3Hours + " hr</div>" + g3EmptyNote + "</div>" +
-      '<div class="exec-hero-card' + (exceedingGroups.length > 0 ? " exposure" : "") + '"><div class="exec-hero-tag">Full tenant, no prioritization</div><div class="exec-hero-value">' + fmtMin(model.fullRestoreMin) + '</div><div class="exec-hero-sub">Mass Recovery baseline for comparison</div></div>' +
-    "</div>" +
-    '<div class="exec-hero-note">' + targetGapNote + ' <span class="exec-hero-linkout" onclick="switchTab(\'recovery\')">Adjust RTO targets on the Recovery tab &rarr;</span></div>';
-
-  // NEW v3.5.0: "Downtime Cost Avoided by Group" table, added to the Report
-  // tab per feedback 2026-07-17 - extends the existing Group-1-vs-Full
-  // comparison above to show cost avoided at EVERY milestone (Groups 1,
-  // 1-2, and 1-3 cumulative), not just Group 1. On a tenant where hot data
-  // is concentrated in Group 1 (see the RubrikDemo outlier discussed in
-  // RECOVERY-MODEL-METHODOLOGY.md), all three rows land near the same
-  // reduction percentage - that is expected, not a bug - but on a tenant
-  // with more evenly distributed hot data this table will show real
-  // escalation across the three rows.
-  var costTableHtml = "";
-  if (state.recovery.costPerHour > 0 && model.fullRestoreMin > 0) {
-    var costRows = [
-      { label: "Group 1 online", m: g1 },
-      { label: "Groups 1-2 online", m: g2 },
-      { label: "Groups 1-3 online", m: g3 }
-    ].map(function (row) {
-      var cost = fmtHours(row.m.wallClockCumMin) * state.recovery.costPerHour;
-      var avoided = Math.max(0, fullExposureMoney - cost);
-      var pct = fullExposureMoney > 0 ? Math.round((avoided / fullExposureMoney) * 100) : 0;
-      return "<tr><td>" + row.label + "</td><td>" + fmtMin(row.m.wallClockCumMin) + "</td><td>" + fmtMoney(cost) + "</td><td>" + fmtMoney(avoided) + "</td><td>" + pct + "%</td></tr>";
-    }).join("") + '<tr class="total-row"><td>Full tenant (Mass Recovery baseline)</td><td>' + fmtMin(model.fullRestoreMin) + "</td><td>" + fmtMoney(fullExposureMoney) + "</td><td>&mdash;</td><td>&mdash;</td></tr>";
-    costTableHtml = '<div class="exec-hero-label" style="margin-top:1.8rem;">Downtime Cost Avoided by Group</div>' +
-      '<div class="exec-cost-table-wrap"><table class="exec-cost-table"><thead><tr><th>Milestone</th><th>Time</th><th>Downtime Cost</th><th>Cost Avoided</th><th>Reduction</th></tr></thead><tbody>' + costRows + "</tbody></table></div>";
-  }
-
-  document.getElementById("exec-financial").innerHTML = financialHtml;
-  document.getElementById("exec-recovery-times").innerHTML = recoveryHtml;
-  document.getElementById("exec-cost-table").innerHTML = costTableHtml;
-  document.getElementById("exec-dormant").innerHTML = dormantHtml;
+function execStorageBytesOf(wlKey, storageField) {
+  // tierAgg/tenantTotals: mailboxes storage is in MB, OneDrive/SharePoint in bytes, Teams has none.
+  if (wlKey === "mailboxes") { return (storageField || 0) * 1048576; }
+  if (wlKey === "teams") { return 0; }
+  return storageField || 0;
 }
 
-// NEW v3.5.0: lean, hard-hitting Executive Summary - split out of the
-// (now much longer) detailed content per feedback 2026-07-17: the original
-// single Executive Summary tab had grown too long for an exec skim. This
-// renders into the new #exec-lean panel (the Executive Summary tab), while
-// renderExecFinancialAndRecoveryTop/renderExecSummary below continue to
-// render the full detail into the Report tab (same element ids as before -
-// only their surrounding panel moved). Exactly three numbers - time to
-// critical data, downtime cost avoided, and dormant-data percentage - plus
-// one sentence on the mechanism and a link to the Report tab. Deliberately
-// does not reuse renderExecFinancialAndRecoveryTop()'s computed values,
-// since that function targets Report-tab-only elements; this recomputes
-// the (cheap) handful of numbers it needs directly from computeRecoveryModel()
-// and DATA, so the lean tab has no dependency on the detailed tab's DOM.
-// NEW: Recovery Ladder - single to-scale horizontal timeline for the lean
-// Executive Summary tab, added per feedback 2026-08-10. Leadership wants to
-// see how Group 1/2/3 stack up in sequence, not just the single Group 1
-// "Time to Critical Data" number - this shows cumulative milestones (Group
-// 1 online, Groups 1-2 online, Groups 1-3 online) against the Mass Recovery
-// baseline, all drawn on the SAME timescale so the visual gap tells the
-// story. Groups are relabeled here ONLY (Mission-Critical/Business-
-// Important/Standard) as a plain-English translation scoped to this one
-// visual - "Group N" stays the term of record everywhere else in the
-// report (filters, columns, methodology, CSV).
-// Segment widths are true-to-scale (% of model.fullRestoreMin). Flag
-// (label) x-positions are separately clamped to a minimum spacing so the
-// time values don't visually collide when milestones land close together -
-// this does NOT change the underlying track segment widths, only where the
-// label callouts anchor, keeping the time value readable above its pin
-// instead of overlapping the track. A tier with zero populated objects is
-// dropped entirely (no flag, no phantom milestone) rather than showing a
-// redundant/confusing duplicate of the previous time.
+// Totals for one workload in one tier. Returns null when that tier is not in the page (Preview Groups 2-4).
+function execWlTier(wlKey, tierName) {
+  var rows = DATA.workloads[wlKey] || [];
+  if (!IS_SUMMARY && rows.length > 0) {
+    var any = false, n = 0, bytes = 0, act = 0, items = 0;
+    rows.forEach(function (r) {
+      if (r.Tier !== tierName) { return; }
+      any = true; n++;
+      bytes += rowStorageBytes(wlKey, r);
+      act += parseFloat(r.metrics && r.metrics.TotalActivity) || 0;
+      var f = RECOVERY_FIELDS[wlKey];
+      if (f) { items += parseFloat(r.metrics && r.metrics[f.item]) || 0; }
+    });
+    if (!any && IS_PREVIEW && tierName !== "Critical Group 1") { return null; }
+    return { objectCount: n, storageBytes: bytes, activity: act, itemCount: items };
+  }
+  if (DATA.tierAgg && DATA.tierAgg[wlKey] && DATA.tierAgg[wlKey][tierName]) {
+    var a = DATA.tierAgg[wlKey][tierName];
+    return { objectCount: a.objectCount || 0, storageBytes: execStorageBytesOf(wlKey, a.storage), activity: a.activity || 0, itemCount: a.itemCount || 0 };
+  }
+  if (IS_PREVIEW && tierName === "Critical Group 1") { return { objectCount: 0, storageBytes: 0, activity: 0, itemCount: 0 }; }
+  return null;
+}
+
+// Whole-tenant totals for one workload (all objects, all groups).
+function execWlTenant(wlKey) {
+  var rows = DATA.workloads[wlKey] || [];
+  if (DATA.tenantTotals && DATA.tenantTotals[wlKey]) {
+    var t = DATA.tenantTotals[wlKey];
+    return { objectCount: t.objectCount || 0, storageBytes: execStorageBytesOf(wlKey, t.storage), activity: (typeof t.activity === "number") ? t.activity : null, itemCount: t.itemCount || 0 };
+  }
+  var bytes = 0, act = 0, items = 0;
+  var f = RECOVERY_FIELDS[wlKey];
+  rows.forEach(function (r) {
+    bytes += rowStorageBytes(wlKey, r);
+    act += parseFloat(r.metrics && r.metrics.TotalActivity) || 0;
+    if (f) { items += parseFloat(r.metrics && r.metrics[f.item]) || 0; }
+  });
+  return { objectCount: rows.length, storageBytes: bytes, activity: act, itemCount: items };
+}
+
+// Sum across workloads for one tier. Returns null if any workload's tier data is missing (locked).
+function execTierSum(tierName) {
+  var objects = 0, bytes = 0, locked = false;
+  EXEC_WL.forEach(function (k) {
+    var t = execWlTier(k, tierName);
+    if (!t) { locked = true; return; }
+    objects += t.objectCount; bytes += t.storageBytes;
+  });
+  return locked ? null : { objects: objects, bytes: bytes };
+}
+function execTenantSum() {
+  var objects = 0, bytes = 0;
+  EXEC_WL.forEach(function (k) { var t = execWlTenant(k); objects += t.objectCount; bytes += t.storageBytes; });
+  return { objects: objects, bytes: bytes };
+}
+
+// Group 1 share of objects / storage / activity. Activity is averaged across workloads (each workload's
+// activity unit is different, so a straight sum would let mailbox event counts swamp everything else).
+function execConcentration() {
+  var g1 = execTierSum("Critical Group 1");
+  var ten = execTenantSum();
+  if (!g1 || ten.objects <= 0) { return null; }
+  var shares = [];
+  EXEC_WL.forEach(function (k) {
+    var t1 = execWlTier(k, "Critical Group 1");
+    var tt = execWlTenant(k);
+    if (t1 && tt.activity !== null && tt.activity > 0) { shares.push(t1.activity / tt.activity); }
+  });
+  var actPct = shares.length ? (shares.reduce(function (s, v) { return s + v; }, 0) / shares.length) * 100 : null;
+  return {
+    objects: g1.objects, tenantObjects: ten.objects,
+    objPct: (g1.objects / ten.objects) * 100,
+    bytes: g1.bytes, tenantBytes: ten.bytes,
+    bytesPct: ten.bytes > 0 ? (g1.bytes / ten.bytes) * 100 : null,
+    actPct: actPct
+  };
+}
+
+// Distinct person key for Group 1 mailbox / OneDrive rows
+function execPersonKey(r) { return String((r.ObjectName || r.Identifier || "")).trim().toLowerCase(); }
+
+// Who is in Group 1: distinct people, top departments, title-keyword hits.
+function execGroup1Profile() {
+  var gp = (DATA.meta && DATA.meta.group1Profile) || DATA.group1Profile || null;
+  var rows = ["mailboxes", "onedrive"].reduce(function (acc, k) {
+    return acc.concat((DATA.workloads[k] || []).filter(function (r) { return r.Tier === "Critical Group 1"; }));
+  }, []);
+  if (IS_SUMMARY || (rows.length === 0 && gp)) {
+    if (!gp) { return { people: 0, departments: [], titles: [], available: false }; }
+    return { people: gp.group1People || 0, departments: (gp.topDepartments || []).slice(0, 8), titles: (gp.titleKeywordHits || []).slice(0, 8), available: true };
+  }
+  var people = {}, deptCount = {}, titleCount = {};
+  rows.forEach(function (r) {
+    var key = execPersonKey(r);
+    if (!key) { return; }
+    var seen = people[key];
+    if (!seen) { people[key] = { dept: r.Department || "", titles: {} }; seen = people[key]; }
+    if (!seen.dept && r.Department) { seen.dept = r.Department; }
+    var m = /Title match: ([^;]+)/.exec(r.CriteriaTags || "");
+    if (m) { seen.titles[m[1].trim()] = true; }
+  });
+  Object.keys(people).forEach(function (k) {
+    var p = people[k];
+    if (p.dept) { deptCount[p.dept] = (deptCount[p.dept] || 0) + 1; }
+    Object.keys(p.titles).forEach(function (t) { titleCount[t] = (titleCount[t] || 0) + 1; });
+  });
+  function top(map, keyName) {
+    return Object.keys(map).map(function (k) { var o = { count: map[k] }; o[keyName] = k; return o; })
+      .sort(function (a, b) { return b.count - a.count || (a[keyName] < b[keyName] ? -1 : 1); }).slice(0, 8);
+  }
+  return { people: Object.keys(people).length, departments: top(deptCount, "name"), titles: top(titleCount, "keyword"), available: true };
+}
+
+// Hours-saved formatter (always hours, minutes only when under an hour)
+function fmtSaved(min) {
+  if (!isFinite(min) || min <= 0) { return "0 hr"; }
+  if (min < 60) { return Math.round(min) + " min"; }
+  var h = min / 60;
+  return h.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " hr";
+}
+
+function onExecCostChange(v) {
+  var n = parseFloat(String(v).replace(/[^0-9.]/g, ""));
+  state.recovery.costPerHour = (isNaN(n) || n < 0) ? 0 : n;
+  recomputeAll();
+}
+
+// "Confirm your Group 1" export (Full only)
+function exportGroup1Csv() {
+  if (IS_PREVIEW || IS_SUMMARY) { return; }
+  var cols = ["Workload", "ObjectName", "Identifier", "JobTitle", "Department", "Manager", "ScorePct", "WhyInGroup1", "LastActivityDate", "ItemCount", "Storage (" + storageUnit() + ")"];
+  var out = [];
+  WORKLOAD_DEFS.forEach(function (wd) {
+    (DATA.workloads[wd.key] || []).forEach(function (r) {
+      if (r.Tier !== "Critical Group 1") { return; }
+      var row = {
+        "Workload": wd.label, "ObjectName": r.ObjectName || "", "Identifier": r.Identifier || "", "JobTitle": r.JobTitle || "",
+        "Department": r.Department || "", "Manager": r.Manager || "", "ScorePct": Math.round((r._Score || 0) * 100),
+        "WhyInGroup1": r.CriteriaTags || "", "LastActivityDate": r.LastActivityDate || "",
+        "ItemCount": (r.metrics && r.metrics[wd.itemField] != null) ? r.metrics[wd.itemField] : ""
+      };
+      row["Storage (" + storageUnit() + ")"] = wd.storageField ? fmtStorageNum(rowStorageBytes(wd.key, r)) : "";
+      row._s = r._Score || 0; row._w = wd.label;
+      out.push(row);
+    });
+  });
+  out.sort(function (a, b) { return a._w === b._w ? b._s - a._s : (a._w < b._w ? -1 : 1); });
+  var blob = new Blob([rowsToCsv(out, cols)], { type: "text/csv;charset=utf-8;" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "Group1_ToConfirm_" + DATA.meta.runId + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+// ---------------------------------------------------------------------------
+// Binding constraint per workload (what actually limits recovery speed)
+// ---------------------------------------------------------------------------
+function execConstraints(model) {
+  var out = [];
+  var spT = tenantTotalsFor("sharepoint"), odT = tenantTotalsFor("onedrive"), exT = tenantTotalsFor("mailboxes");
+  var spodTier = resolveLicenseTier(state.recovery.licenseTier, Math.max(spT.objectCount, odT.objectCount));
+  function spod(label, key, t, rate, massMin) {
+    if (t.objectCount <= 0) { return; }
+    var ipm = Math.min(t.objectCount, spodTier.Parallelism) * rate;
+    var avgMb = t.itemCount > 0 ? (t.storage / t.itemCount) / 1048576 : 0;
+    var sf = avgMb > 0 ? Math.max(1, avgMb / SIZE_FACTOR_BASELINE_MB) : 1;
+    out.push({ label: label, kind: "items", constraint: "Item count (API throughput)", ipm: ipm, items: t.itemCount, massMin: massMin,
+      note: "No byte-rate cap; restore time follows items restored per minute" + (sf > 1 ? " (larger average file raises the effective item cost " + sf.toFixed(2) + "x)." : ".") });
+  }
+  spod("SharePoint", "sp", spT, SP_ITEMS_PER_MIN_PER_UNIT, model.perWorkloadMassRecoveryMin.sp);
+  spod("OneDrive", "od", odT, OD_ITEMS_PER_MIN_PER_UNIT, model.perWorkloadMassRecoveryMin.od);
+  if (exT.objectCount > 0) {
+    var eff = Math.min(exT.objectCount, EX_BENCHMARK.MaxParallelMailboxes);
+    var tBytes = exT.storage / (eff * EX_BENCHMARK.PerMailboxMBPerMin);
+    var tItems = exT.itemCount / (eff * EX_BENCHMARK.PerMailboxItemsPerMin);
+    var itemBound = tItems > tBytes;
+    var exBytesPerMin = eff * EX_BENCHMARK.PerMailboxMBPerMin * 1048576;
+    out.push({ label: "Exchange", kind: itemBound ? "items" : "bytes", constraint: itemBound ? "Item count (items restored per minute)" : "Data volume (per-mailbox transfer rate)",
+      ipm: eff * EX_BENCHMARK.PerMailboxItemsPerMin, ceilingText: itemBound ? null : (fmtStorage(exBytesPerMin) + "/min"), ceilingSort: itemBound ? null : exBytesPerMin,
+      items: exT.itemCount, massMin: model.perWorkloadMassRecoveryMin.ex,
+      note: itemBound ? "Items per minute is the slower of the two limits for this tenant." : "Transfer volume per mailbox is the slower of the two limits for this tenant; item count is the second limit." });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Executive Summary blocks
+// ---------------------------------------------------------------------------
+function exLink(target, text) { return '<span class="linkout ex2-details" ' + navAttr(target) + '>' + (text || "Details") + ' &rarr;</span>'; }
+function exLocked(label) { return '<span class="ex2-locked">' + pvLocked("&bull;&bull;&bull;") + '</span>'; }
+
+function exBlockHeadline(c) {
+  var conc = c.conc, prof = c.profile, g1 = c.g1;
+  var nSites = (execWlTier("sharepoint", "Critical Group 1") || { objectCount: 0 }).objectCount + (execWlTier("teams", "Critical Group 1") || { objectCount: 0 }).objectCount;
+  var nPeople = prof.people;
+  var who = '<b>' + fmtNum(nPeople + nSites) + '</b> users and sites';
+  var sentence;
+  if (conc) {
+    sentence = who + ' (<b>' + Math.round(conc.objPct) + '%</b> of your tenant' + (conc.bytes > 0 ? ', <b>' + fmtStorage(conc.bytes) + '</b>' : '') + ') drive your business. Rubrik brings them back in <b>' + fmtMin(g1.wallClockCumMin) +
+      '</b>, instead of waiting <b>' + fmtMin(c.model.fullRestoreMin) + '</b> for a full restore.';
+  } else {
+    sentence = who + ' drive your business. Rubrik brings them back in <b>' + fmtMin(g1.wallClockCumMin) + '</b>, instead of waiting <b>' + fmtMin(c.model.fullRestoreMin) + '</b> for a full restore.';
+  }
+  var sub = '<div class="ex2-sub">' + fmtNum(nPeople) + ' people (mailbox and OneDrive owners) and ' + fmtNum(nSites) + ' SharePoint sites and Teams are in Critical Group 1 ' + exLink("groups:grp-by-group:grp-g1", "See Group 1") + '</div>';
+  return '<section class="ex2-block ex2-hero" id="exec-who"><div class="ex2-eyebrow">Who matters most</div><div class="ex2-headline">' + sentence + '</div>' + sub + '</section>';
+}
+
+function exBlockFast(c) {
+  return '<section class="ex2-block ex2-tile" id="exec-fast"><div class="ex2-eyebrow">Time to critical data ' + exLink("report:report-by-group", "Details") + '</div>' +
+    '<div class="ex2-big">' + fmtMin(c.g1.wallClockCumMin) + '</div>' +
+    '<div class="ex2-tile-sub">instead of <b>' + fmtMin(c.model.fullRestoreMin) + '</b> with a traditional, random-order restore</div></section>';
+}
+
+function exBlockWorth(c) {
+  var ca = c.ca, r1 = ca.rows[0], r2 = ca.rows[1], r3 = ca.rows[groupN() - 1];
+  var rateInput = '<label class="ex2-rate">Downtime cost per hour (USD) <input type="number" min="0" step="100" id="exec-cost-input" value="' + (ca.perHour || 0) + '" onchange="onExecCostChange(this.value)" aria-label="Estimated downtime cost per hour in dollars"></label>';
+  var big = r1.locked ? exLocked() : fmtSaved(r1.savedMin);
+  var dollars;
+  if (r1.locked) { dollars = exLocked(); }
+  else if (ca.hasRate) { dollars = '<span class="ex2-money">' + fmtMoney(r1.cost) + '</span> cost avoided'; }
+  else { dollars = costPromptHtml(); }
+  function small(r, label) {
+    if (r.locked) { return '<div class="ex2-small-row"><span>' + label + '</span><span>' + exLocked() + '</span></div>'; }
+    var d = ca.hasRate ? ' &middot; ' + fmtMoney(r.cost) : '';
+    return '<div class="ex2-small-row"><span>' + label + '</span><span><b>' + fmtSaved(r.savedMin) + '</b> saved' + d + '</span></div>';
+  }
+  return '<section class="ex2-block ex2-tile ex2-worth" id="exec-worth"><div class="ex2-eyebrow">Hours saved to reach Group 1 ' + infoBtn("cost-avoided", "How we estimate cost avoided") + ' ' + exLink("report:report-by-group", "Details") + '</div>' +
+    '<div class="ex2-big">' + big + '</div>' +
+    '<div class="ex2-dollars">' + dollars + '</div>' +
+    '<div class="ex2-smalls">' + small(r2, "Groups 1-2 online") + small(r3, scopeName(groupN()) + " online") + '</div>' +
+    rateInput + '</section>';
+}
+
+function exBlockConcentration(c) {
+  var conc = c.conc;
+  var body;
+  if (!conc) { body = '<div class="ex2-note">Not enough data to compare Group 1 with the rest of the tenant.</div>'; }
+  else {
+    function bar(label, pct, detail) {
+      if (pct === null || isNaN(pct)) { return ""; }
+      var w = Math.max(1, Math.min(100, pct));
+      return '<div class="ex2-conc-row"><div class="ex2-conc-label">' + label + '</div><div class="ex2-conc-track" role="img" aria-label="' + label + ' ' + Math.round(pct) + ' percent"><span style="width:' + w.toFixed(1) + '%"></span></div><div class="ex2-conc-val">' + Math.round(pct) + '%</div><div class="ex2-conc-detail">' + detail + '</div></div>';
+    }
+    body = '<div class="ex2-conc">' +
+      bar("Objects", conc.objPct, fmtNum(conc.objects) + ' of ' + fmtNum(conc.tenantObjects)) +
+      bar("Storage", conc.bytesPct, fmtStorage(conc.bytes) + ' of ' + fmtStorage(conc.tenantBytes)) +
+      bar("Recent activity", conc.actPct, 'average share across workloads') +
+      '</div>' +
+      '<div class="ex2-note">Group 1 is <b>' + Math.round(conc.objPct) + '%</b> of your objects and <b>' + (conc.bytesPct === null ? "n/a" : Math.round(conc.bytesPct) + '%') + '</b> of your storage' +
+      (conc.actPct !== null ? ', but <b>' + Math.round(conc.actPct) + '%</b> of the recent activity' : '') + '. That concentration is why restoring in priority order works in your environment.</div>';
+  }
+  return '<section class="ex2-block" id="exec-concentration"><div class="ex2-eyebrow">Why prioritizing works ' + exLink("groups:grp-headline", "Group 1 detail") + '</div>' + body + '</section>';
+}
+
+function exBlockLadder(c) {
+  var ladder = buildRecoveryLadderHtml(c.model);
+  var pv = "";
+  if (IS_PREVIEW) { pv = pvLockedPanel("Group 2 and 3 milestones", "The Groups 1-2 and 1-3 milestones are calculated in the full assessment."); }
+  return '<section class="ex2-block ex2-wide" id="exec-ladder"><div class="ex2-eyebrow">Recovery ladder ' + exLink("groups:grp-by-group", "Group breakdown") + '</div>' + ladder + pv + '</section>';
+}
+
+function exBlockConstraint(c) {
+  var cons = execConstraints(c.model);
+  var allItems = cons.length > 0 && cons.every(function (x) { return x.kind === "items"; });
+  var line = allItems
+    ? "Recovery speed is limited by how many items can be restored per minute, not by bandwidth or storage size. Adding network capacity does not shorten it; restoring the right items first does."
+    : "Recovery speed is limited by items restored per minute for SharePoint and OneDrive, and by whichever is slower, item rate or per-mailbox transfer rate, for Exchange. It is not limited by your network bandwidth.";
+  var rows = cons.map(function (x) {
+    return '<tr><td>' + esc(x.label) + '</td><td>' + esc(x.constraint) + '</td><td data-sort="' + Math.round(x.ceilingSort != null ? x.ceilingSort : x.ipm) + '">' + (x.ceilingText || (fmtNum(x.ipm) + ' items/min')) + '</td><td data-sort="' + Math.round(x.massMin) + '">' + fmtMin(x.massMin) + '</td></tr>';
+  }).join("");
+  var table = rows ? '<div class="table-wrap"><table class="ex2-table"><thead><tr><th>Workload</th><th>What limits speed</th><th>Throughput ceiling</th><th>Whole-workload restore</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="ex2-note">No recovery-time workloads were found.</div>';
+  return '<section class="ex2-block ex2-wide" id="exec-constraint"><div class="ex2-eyebrow">Why recovery speed is limited ' + exLink("methodology", "How it is calculated") + '</div><div class="ex2-lead">' + line + '</div>' + table + '</section>';
+}
+
+function exBlockG1List(c) {
+  var p = c.profile;
+  var body;
+  if (!p.available) { body = '<div class="ex2-note">Group 1 profile data is not available in this build.</div>'; }
+  else {
+    var dRows = p.departments.map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td data-sort="' + d.count + '">' + fmtNum(d.count) + '</td></tr>'; }).join("") || '<tr><td colspan="2">No department data in this tenant</td></tr>';
+    var tRows = p.titles.map(function (t) { return '<tr><td>' + esc(t.keyword) + '</td><td data-sort="' + t.count + '">' + fmtNum(t.count) + '</td></tr>'; }).join("") || '<tr><td colspan="2">No title-keyword matches</td></tr>';
+    body = '<div class="ex2-two">' +
+      '<div><div class="ex2-mini-title">Top departments (people)</div><div class="table-wrap"><table class="ex2-table"><thead><tr><th>Department</th><th>People</th></tr></thead><tbody>' + dRows + '</tbody></table></div></div>' +
+      '<div><div class="ex2-mini-title">Title keywords matched</div><div class="table-wrap"><table class="ex2-table"><thead><tr><th>Keyword</th><th>People</th></tr></thead><tbody>' + tRows + '</tbody></table></div></div></div>';
+  }
+  var btn = (IS_PREVIEW || IS_SUMMARY) ? "" : '<button type="button" class="ex2-btn full-only" onclick="exportGroup1Csv()">Confirm your Group 1 (CSV)</button>';
+  var lede = '<div class="ex2-lead"><b>' + fmtNum(p.people) + '</b> people own the mailboxes and OneDrive accounts in Group 1. Take this list to the business owners and confirm it matches how they would rank their own people and sites.</div>';
+  return '<section class="ex2-block ex2-wide" id="exec-g1list"><div class="ex2-eyebrow">Who is in Group 1 ' + exLink("groups:grp-by-group:grp-g1", "Full Group 1 list") + '</div>' + lede + body + btn + '</section>';
+}
+
+function exBlockRto(c) {
+  var model = c.model;
+  var defs = critKeys().map(function (key, i) { return [key, scopeName(i + 1), groupHoursOf(i + 1)]; });
+  var rows = defs.map(function (d) {
+    var m = model.milestones[d[0]];
+    if (!m || m.locked) {
+      return '<tr><td>' + d[1] + '</td><td data-sort="' + (d[2] * 60) + '">' + d[2] + ' hr</td><td>' + exLocked() + '</td><td>' + exLocked() + '</td></tr>';
+    }
+    var met = !m.exceedsTarget;
+    var badge = met ? '<span class="ex2-badge ok">Within target</span>' : '<span class="ex2-badge bad">Over by ' + fmtMin(m.targetGapMin) + '</span>';
+    return '<tr><td>' + d[1] + '</td><td data-sort="' + (d[2] * 60) + '">' + d[2] + ' hr</td><td data-sort="' + Math.round(m.wallClockCumMin) + '">' + fmtMin(m.wallClockCumMin) + '</td><td>' + badge + '</td></tr>';
+  }).join("");
+  var table = '<div class="table-wrap"><table class="ex2-table"><thead><tr><th>Milestone</th><th>Your Recovery Window (RTO)</th><th>Modeled with ABR</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+  var gap = "";
+  var g1 = c.g1;
+  if (g1.exceedsTarget) {
+    var parts = [{ n: "SharePoint", v: g1.sp.cumMin }, { n: "OneDrive", v: g1.od.cumMin }, { n: "Exchange", v: g1.ex.cumMin }].sort(function (a, b) { return b.v - a.v; });
+    var pole = parts[0], next = parts[1];
+    var lines = [];
+    lines.push('<li><b>' + pole.n + '</b> is the long pole for Group 1 (' + fmtMin(pole.v) + ' of ABR time' + (next.v > 0 ? ', next slowest is ' + next.n + ' at ' + fmtMin(next.v) : '') + '). Bringing it down to the next workload would put Group 1 near ' + fmtMin(Math.max(next.v, 0)) + '.</li>');
+    var ins = (typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+    if (ins && ins.headline && ins.excludedCount > 0) {
+      var h = ins.headline;
+      lines.push('<li>Recovery Insights flagged ' + fmtNum(ins.excludedCount) + ' abnormal object' + (ins.excludedCount === 1 ? '' : 's') + '. Group 1 is <b>' + fmtMin(h.excludedG1Min) + '</b> without them and <b>' + fmtMin(h.includedG1Min) + '</b> with them ' + exLink("insights:insights-table", "Review flagged objects") + '.</li>');
+    }
+    lines.push('<li>Or set a Group 1 target that matches the modeled time (' + fmtMin(g1.wallClockCumMin) + '), or move some objects out of Group 1 ' + exLink("groups:grp-controls", "Adjust targets and scoring") + '.</li>');
+    gap = '<div class="ex2-gap"><div class="ex2-mini-title">Gap analysis: Group 1 misses its ' + state.recovery.group1Hours + ' hr target by ' + fmtMin(g1.targetGapMin) + '</div><ul>' + lines.join("") + '</ul></div>';
+  } else {
+    gap = '<div class="ex2-note">Group 1 is within its stated ' + state.recovery.group1Hours + ' hr target. ' + exLink("groups:grp-controls", "Adjust targets") + '</div>';
+  }
+  return '<section class="ex2-block ex2-wide" id="exec-rto"><div class="ex2-eyebrow">Recovery Window (RTO) scorecard ' + exLink("groups:grp-controls", "Targets and inputs") + '</div>' + table + gap + '</section>';
+}
+
+function exBlockRisks() {
+  var ins = (typeof getInsightsSummary === "function") ? getInsightsSummary() : { topRisks: [], total: 0 };
+  var items;
+  if (IS_SUMMARY) { items = '<div class="ex2-note">Object-level Recovery Insights are in the interactive report. ' + exLink("insights", "About Recovery Insights") + '</div>'; }
+  else if (ins.topRisks && ins.topRisks.length > 0) {
+    items = '<ol class="ex2-risks">' + ins.topRisks.slice(0, 3).map(function (r) {
+      return '<li><span class="ex2-risk-title" ' + navAttr(r.link || "insights:insights-table") + '>' + esc(r.title) + '</span><div class="ex2-risk-detail">' + esc(r.detail || "") + '</div></li>';
+    }).join("") + '</ol>';
+  } else {
+    items = '<div class="ex2-note">No abnormal objects were found that would extend your recovery time' + (IS_PREVIEW ? ' among the Group 1 objects.' : '.') + '</div>';
+  }
+  var pvNote = IS_PREVIEW ? '<div class="ex2-note">Insights for the remaining groups are part of the full assessment.</div>' : "";
+  return '<section class="ex2-block" id="exec-risks"><div class="ex2-eyebrow">Top risks to recovery speed ' + exLink("insights:insights-summary", "All insights") + '</div>' + items + pvNote + '</section>';
+}
+
+function exBlockNext() {
+  var items = [];
+  items.push('<li>Validate Group 1 with the business owners ' + (IS_PREVIEW || IS_SUMMARY ? exLink("groups:grp-by-group:grp-g1", "See who is in Group 1") : exLink("groups:grp-by-group:grp-g1", "Review and adjust Group 1")) + '</li>');
+  items.push('<li>Review the flagged objects and decide how to handle them ' + exLink("insights:insights-table", "Recovery Insights") + '</li>');
+  if (IS_PREVIEW) { items.push('<li>Run the full assessment for Group 2-4 detail and recovery sequencing: <a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">contact your Rubrik representative</a></li>'); }
+  else if (IS_SUMMARY) { items.push('<li>Open the interactive report for object-level detail and live adjustment of weights and targets</li>'); }
+  else { items.push('<li>Tune scoring weights and Recovery Window (RTO) targets to match your priorities ' + exLink("groups:grp-controls", "Groups &amp; Recovery Model") + '</li>'); }
+  return '<section class="ex2-block ex2-wide" id="exec-next"><div class="ex2-eyebrow">Suggested next steps</div><ol class="ex2-next">' + items.join("") + '</ol></section>';
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 Executive Summary: three numbers, one ladder, two status pills. Everything else lives on the Report tab.
+// ---------------------------------------------------------------------------
+var REC_NOW = new Date(); // "if recovery started now": dates in the ladder and calendar run from when the page was opened
+function recAt(min) { return new Date(REC_NOW.getTime() + min * 60000); }
+function recWhen(min) {
+  var d = recAt(min);
+  var today = d.toDateString() === REC_NOW.toDateString();
+  var t = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return today ? ("today at " + t) : (d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + (min < 2880 ? " " + t : ""));
+}
+function recDate(min) { return recAt(min).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }); }
+
+function xsTileFast(c) {
+  var n = reportMsObjs(c.g1);
+  return '<section class="xs-tile xs-teal" id="exec-fast" ' + navAttr("report:report-by-group") + '><div class="xs-big">' + fmtMin(c.g1.wallClockCumMin) + '</div>' +
+    '<div class="xs-cap">until your <b>' + fmtNum(n) + '</b> most critical objects are back (instead of <b>' + fmtMin(c.model.fullRestoreMin) + '</b>)</div></section>';
+}
+function xsTileWorth(c) {
+  var ca = c.ca, r1 = ca.rows[0];
+  var big = r1.locked ? exLocked() : fmtSaved(r1.savedMin);
+  var money = ca.hasRate ? ('<div class="xs-money">' + fmtMoney(r1.cost) + ' cost avoided</div>') : '';
+  return '<section class="xs-tile xs-mint" id="exec-worth"><div class="xs-big">' + big + '</div>' +
+    '<div class="xs-cap">of downtime avoided to reach Group 1 ' + infoBtn("cost-avoided", "How we estimate cost avoided") + '</div>' + money +
+    '<label class="xs-rate">At $ <input type="number" min="0" step="100" id="exec-cost-input" value="' + (ca.perHour || "") + '" placeholder="per hour" onchange="onExecCostChange(this.value)" aria-label="Estimated downtime cost per hour in US dollars"></label></section>';
+}
+function xsTileConc(c) {
+  var conc = c.conc;
+  if (!conc) { return '<section class="xs-tile" id="exec-concentration"><div class="xs-big">&mdash;</div><div class="xs-cap">Not enough data to compare Group 1 with the rest of the tenant.</div></section>'; }
+  var bits = [];
+  if (conc.bytesPct !== null) { bits.push('<b>' + Math.round(conc.bytesPct) + '%</b> of storage'); }
+  if (conc.actPct !== null) { bits.push('<b>' + Math.round(conc.actPct) + '%</b> of recent activity'); }
+  return '<section class="xs-tile" id="exec-concentration" ' + navAttr("report:report-concentration") + '><div class="xs-big">' + Math.round(conc.objPct) + '%</div>' +
+    '<div class="xs-cap">of objects carry ' + (bits.length ? bits.join(" and ") : "most of the value") + '. That is why order matters.</div></section>';
+}
+
+// Critical data back in X, then mass recovery takes Y: a dated timeline chart (to scale), read at a glance.
+function xlTicks(totalMin) {
+  var td = totalMin / 1440, out = [], i;
+  function lab(m) { return recAt(m).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+  if (td <= 10) { for (i = 0; i <= td; i++) { out.push({ m: i * 1440, l: i ? lab(i * 1440) : "Today" }); } }
+  else if (td <= 70) { for (i = 0; i <= td; i += 7) { out.push({ m: i * 1440, l: i ? lab(i * 1440) : "Today" }); } }
+  else {
+    out.push({ m: 0, l: "Today" });
+    var d = new Date(REC_NOW.getFullYear(), REC_NOW.getMonth() + 1, 1);
+    while ((d - REC_NOW) / 60000 < totalMin && out.length < 60) { out.push({ m: (d - REC_NOW) / 60000, l: d.toLocaleDateString(undefined, { month: "short" }) }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+  }
+  return out;
+}
+function xsLadderHtml(c) {
+  var ladder = buildRecoveryLadderHtml(c.model);
+  var head = '<div class="xs-ladder-h2"><span class="rl-title">Recovery Ladder</span> ' + exLink("report:report-calendar", "See it on a calendar") + '</div>';
+  return '<section class="recovery-ladder" id="exec-ladder">' + head + ladder.replace('<div class="recovery-ladder">', '<div class="rl-inner">') + '</section>';
+}
+
+function xsPills(c) {
+  var model = c.model;
+  var defs = critKeys().map(function (key, i) { return [key, groupHoursOf(i + 1)]; });
+  var ms = defs.map(function (d) { return reportMsOf(model, d[0]); }).filter(function (m) { return !!m; });
+  var met = ms.filter(function (m) { return !m.exceedsTarget; }).length;
+  var all = ms.length > 0 && met === ms.length;
+  var head = IS_PREVIEW ? (all ? "Group 1 within target" : "Group 1 over target") : (all ? "All " + ms.length + " within target" : met + " of " + ms.length + " within target");
+  var rto = '<div class="xs-pill' + (all ? "" : " warn") + '" ' + navAttr("report:exec-rto") + '><div class="xs-pill-big">' + head + '</div><div class="xs-pill-sub">Recovery Window (RTO) ' + (IS_PREVIEW ? state.recovery.group1Hours : (groupN() > 4 ? state.recovery.group1Hours + " ... " + groupHoursOf(groupN()) : state.recovery.groupHours.slice(0, groupN()).join(" / "))) + ' hr</div></div>';
+  var ins = (typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+  var risk;
+  if (IS_SUMMARY) { risk = '<div class="xs-pill" ' + navAttr("insights") + '><div class="xs-pill-big">Recovery Insights</div><div class="xs-pill-sub">Object-level flags are in the interactive report</div></div>'; }
+  else {
+    var n = ins ? (ins.total || 0) : 0;
+    risk = '<div class="xs-pill' + (n > 0 ? " warn" : "") + '" ' + navAttr("report:exec-risks") + '><div class="xs-pill-big">' + (n > 0 ? fmtNum(n) + " flagged" : "Nothing flagged") + '</div><div class="xs-pill-sub">' + (n > 0 ? "abnormal objects could slow recovery" : "no abnormal objects found") + '</div></div>';
+  }
+  return '<div class="xs-pills" id="exec-pills">' + rto + risk + '</div>';
+}
+
+function renderExecLean() {
+  var model = computeRecoveryModel();
+  var g1 = model.milestones["Critical Group 1"];
+  var el = document.getElementById("exec-lean");
+  if (!el) { return; }
+  if (!(model.fullRestoreMin > 0) || !g1 || g1.locked) {
+    el.innerHTML = '<div class="exec-hero-note">No objects with recent activity were found across the scanned workloads, so there is nothing to summarize yet.</div>';
+    return;
+  }
+  var c = { model: model, g1: g1, ca: computeCostAvoided(model), conc: execConcentration(), profile: execGroup1Profile() };
+  el.innerHTML =
+    '<div class="xs-hero">' + xsTileFast(c) + xsTileWorth(c) + xsTileConc(c) + '</div>' +
+    xsLadderHtml(c) + xsPills(c) +
+    '<div class="xs-foot"><span>This is the one-screen version. Everything behind it is one click away.</span> ' + exLink("report", "Open the full report") + '</div>';
+}
+
+// ---------------------------------------------------------------------------
+// Recovery ladder (shared by Exec block 4; Preview shows Group 1 + baseline only)
+// ---------------------------------------------------------------------------
+// Ladder geometry. Groups 1-3 end-lines are proportional to their cumulative times inside a fixed zone (with a minimum
+// segment width so a very fast Group 1 stays visible); mass recovery is the elastic middle and is never to scale; Group 4's
+// window is sized from its duration relative to Groups 1-3, log-compressed and clamped so any tenant (7 to 300+ days) fits.
+function ladderLayout(cums, g4startMin, fullMin, minSegPct, g4MinPct) {
+  // minSegPct = one flag's width in % of the track, so every end-line is at least a flag apart and each label can sit
+  // directly under its own line (no label ever has to be pushed over another group's line).
+  var n = cums.length, MINSEG = Math.max(3, minSegPct || 6), top = cums[n - 1] || 1;
+  var ZONE = Math.max(n >= 3 ? 34 : (n === 2 ? 24 : 10), n * MINSEG);
+  var abr = [], prev = 0;
+  for (var i = 0; i < n; i++) {
+    var p = ZONE * cums[i] / top;
+    p = Math.max(p, prev + MINSEG);
+    abr.push(p); prev = p;
+  }
+  var r = Math.max(0, fullMin - g4startMin) / top;
+  var g4w = Math.min(30, Math.max(8, g4MinPct || MINSEG, 12 * Math.log(1 + r) / Math.LN2));
+  return { abr: abr, g4w: g4w };
+}
+
 function buildRecoveryLadderHtml(model) {
   var full = model.fullRestoreMin;
   if (!full || full <= 0) { return ""; }
 
-  var defs = [
-    { tier: "Critical Group 1", short: "Mission-Critical", verb: "back online" },
-    { tier: "Critical Group 2", short: "Business-Important", verb: "cumulative" },
-    { tier: "Critical Group 3", short: "Standard", verb: "cumulative" }
-  ];
+  var defs = critKeys().slice(0, 3).map(function (key, i) {
+    return { tier: key, k: i + 1, short: tierTitle(i + 1), verb: i === 0 ? "back online" : "cumulative" };
+  });
 
-  function tierCount(tierName) {
-    var n = 0;
-    WORKLOAD_DEFS.forEach(function (wd) {
-      var rows = DATA.workloads[wd.key] || [];
-      n += rows.filter(function (r) { return r.Tier === tierName; }).length;
-    });
-    return n;
-  }
-
-  var milestones = defs.map(function (d) {
-    return {
-      tier: d.tier,
-      short: d.short,
-      verb: d.verb,
-      color: TIER_META[d.tier].bg,
-      cumMin: model.milestones[d.tier].wallClockCumMin,
-      count: tierCount(d.tier)
-    };
+  var milestones = defs.filter(function (d) {
+    var m = model.milestones[d.tier];
+    return m && !m.locked;
+  }).map(function (d) {
+    var t = execTierSum(d.tier);
+    return { tier: d.tier, k: d.k, short: d.short, verb: d.verb, color: groupColor(d.k), cumMin: model.milestones[d.tier].wallClockCumMin, count: t ? t.objects : 0 };
   }).filter(function (m) { return m.count > 0; });
 
   if (milestones.length === 0) { return ""; }
 
-  // The axis is max(Mass Recovery baseline, last ABR milestone) as a safety
-  // net. computeRecoveryModel caps every ABR milestone at the Mass Recovery
-  // time for the same scope, so milestones should never pass the baseline;
-  // everything is plotted on one true axis and the baseline is just another
-  // pin on it (right edge).
+  // Compact mode (5+ groups): every group keeps its line, but only Group 1 and the last group carry a full time/label flag;
+  // the groups in between show a small number under their line (time on hover) so 12 flags never collide.
+  var compact = false; // the ladder always shows Groups 1-3; any further groups are summarised in the note below it
   var lastCum = milestones[milestones.length - 1].cumMin;
-  var scaleMax = Math.max(full, lastCum);
-  function pctOf(min) { return Math.max(0, Math.min(100, (min / scaleMax) * 100)); }
-
-  // Track segments: true-to-scale, sequential deltas, then the hatched
-  // "Mass Recovery only" remainder (zero-width when ABR runs past baseline).
-  var prevPct = 0;
-  milestones.forEach(function (m) {
-    var pct = pctOf(m.cumMin);
-    m.segWidth = Math.max(0, pct - prevPct);
-    m.truePct = pct;
-    prevPct = pct;
-  });
-  var massSegWidth = Math.max(0, 100 - prevPct);
-
-  // Flags = the ABR milestones plus the Mass Recovery baseline, left to right.
-  var flags = milestones.map(function (m) {
-    return { time: fmtMin(m.cumMin), color: m.color, label: esc(m.short) + "<br>" + esc(m.verb), truePct: m.truePct, mass: false };
-  });
-  flags.push({ time: fmtMin(full), color: "#8A97A6", label: "Mass Recovery baseline<br>(no prioritization)", truePct: pctOf(full), mass: true });
-  flags.sort(function (a, b) { return a.truePct - b.truePct; });
-
-  // Label anchors: minimum-spaced in PIXELS (not %) so text can't collide at
-  // any width. The pin always stays at its true position; only the text
-  // block shifts, with a thin leader line back to the pin when it does.
+  var lastM = model.milestones[lastCritKey()] && !model.milestones[lastCritKey()].locked ? model.milestones[lastCritKey()] : null;
+  var g13Mass = lastM ? lastM.massRecoveryCumMin : 0;
+  var showG13 = g13Mass > lastCum && g13Mass < full * 0.97;
+  var C_G4 = "#F5A524", C_MASS = "#8793A6";
+  var lowN = lowName(), lastScope = scopeName(groupN()), ladderScope = scopeName(Math.min(3, groupN()));
   var wrapEl = document.getElementById("exec-lean");
   var wrapPx = Math.max(480, ((wrapEl && wrapEl.clientWidth) || 900) - 72);
-  var FLAG_PX = 132;
-  var minGap = ((FLAG_PX + 2) / wrapPx) * 100;
-  var halfPct = (FLAG_PX / 2 / wrapPx) * 100;
-  var lo = halfPct, hi = 100 - halfPct;
-  var lastPos = -999;
-  flags.forEach(function (fl) {
-    var pos = Math.max(fl.truePct, lo, lastPos + minGap);
-    fl.labelPos = pos;
-    lastPos = pos;
+  var nFlags = (compact ? 2 : milestones.length) + (showG13 ? 2 : 1);
+  var FLAG_PX = Math.max(84, Math.min(132, Math.floor(wrapPx / (nFlags + 0.6))));
+  var layout = ladderLayout(milestones.map(function (m) { return m.cumMin; }), showG13 ? g13Mass : lastCum, full, compact ? 4 : ((FLAG_PX + 4) / wrapPx) * 100, ((FLAG_PX + 4) / wrapPx) * 100);
+  var abrPos = layout.abr;
+  var pts = [], pos = 0;
+  milestones.forEach(function (m, i) {
+    pos = abrPos[i];
+    var minor = compact && i !== 0 && i !== milestones.length - 1;
+    pts.push({ pos: pos, time: fmtMin(m.cumMin), color: m.color, label: esc(compact ? "Group " + m.k : m.short) + "<br>" + esc(m.verb), kind: "abr", minor: minor, k: m.k });
   });
-  // If the run of labels overflowed the right edge, pull them back left
-  // (right-to-left) while keeping the minimum spacing.
-  var limit = hi;
-  for (var i = flags.length - 1; i >= 0; i--) {
-    if (flags[i].labelPos > limit) { flags[i].labelPos = limit; }
-    limit = flags[i].labelPos - minGap;
+  var g4dur = Math.max(0, full - (showG13 ? g13Mass : lastCum));
+  var g4w = layout.g4w;
+  var g4pos = 100, g4start = 100 - g4w;
+  var tailStart = pos + (g4start - pos) * 0.3;
+  if (showG13) {
+    pts.push({ pos: g4start, time: fmtMin(g13Mass), color: C_G4, label: esc(lowN) + " starts<br>(" + esc(lastScope) + " fully restored)", kind: "g4" });
+    pts.push({ pos: g4pos, time: fmtMin(full), color: C_G4, label: "Everything recovered<br>(" + esc(lowN) + " done, whole tenant back)", kind: "g4" });
+  } else {
+    pts.push({ pos: g4pos, time: fmtMin(full), color: C_G4, label: "Everything recovered<br>(" + esc(lowN) + " last, by mass recovery)", kind: "g4" });
   }
 
-  var segHtml = milestones.map(function (m) {
-    return '<div class="rl-seg" style="width:' + m.segWidth + '%;background:' + m.color + ';"></div>';
-  }).join("") + (massSegWidth > 0 ? '<div class="rl-seg mass" style="width:' + massSegWidth + '%;"></div>' : "");
+  var flagged = pts.filter(function (pt) { return !pt.minor; });
+  var minGap = ((FLAG_PX + 2) / wrapPx) * 100;
+  var halfPct = (FLAG_PX / 2 / wrapPx) * 100;
+  var lastPos = -999;
+  flagged.forEach(function (pt) {
+    pt.labelPos = Math.max(pt.pos, halfPct, lastPos + minGap);
+    lastPos = pt.labelPos;
+  });
+  var limit = 100 - halfPct;
+  for (var i = flagged.length - 1; i >= 0; i--) {
+    if (flagged[i].labelPos > limit) { flagged[i].labelPos = limit; }
+    limit = flagged[i].labelPos - minGap;
+  }
+  // Never let a label fall off the left edge (a narrow window used to push Group 1 out of view): re-run forward from the edge.
+  if (flagged[0].labelPos < halfPct) {
+    var lp = -999;
+    flagged.forEach(function (pt) { pt.labelPos = Math.max(pt.labelPos, halfPct, lp + minGap); lp = pt.labelPos; });
+  }
+  // A label held back from its line by the right edge is anchored to the line instead (text runs leftward from it).
+  flagged.forEach(function (pt) { if (pt.labelPos < pt.pos - 0.5) { pt.labelPos = pt.pos; pt.end = true; } });
+  // Likewise a first label held back by the left edge starts at its line and reads rightward.
+  if (flagged[0].labelPos > flagged[0].pos + 0.5 && (flagged.length < 2 || flagged[0].pos + 0.5 + (FLAG_PX / wrapPx) * 100 <= flagged[1].labelPos - (FLAG_PX / 2 / wrapPx) * 100)) { flagged[0].labelPos = flagged[0].pos; flagged[0].start = true; }
 
-  var flagsHtml = flags.map(function (fl) {
-    return '<div class="rl-pin' + (fl.mass ? ' mass' : '') + '" style="left:' + fl.truePct + '%;' + (fl.mass ? '' : 'background:' + fl.color + ';') + '"></div>' +
-      '<div class="rl-flag' + (fl.mass ? ' mass' : '') + '" style="left:' + fl.labelPos + '%;">' +
-        '<div class="rl-time">' + fl.time + '</div>' +
-        '<div class="rl-label">' + fl.label + '</div>' +
+  var segs = [], prev = 0;
+  milestones.forEach(function (m, i) { segs.push({ w: pts[i].pos - prev, bg: m.color, cls: "" }); prev = pts[i].pos; });
+  if (showG13) {
+    segs.push({ w: g4start - prev, bg: "", cls: " tail g13" }); prev = g4start;
+    segs.push({ w: g4pos - prev, bg: "", cls: " tail g4" });
+  } else {
+    segs.push({ w: g4pos - prev, bg: "", cls: " tail g13" });
+  }
+  var segHtml = segs.map(function (s) {
+    return '<div class="rl-seg' + s.cls + '" style="width:' + s.w + '%;' + (s.bg ? 'background:' + s.bg + ';' : '') + '"></div>';
+  }).join("");
+
+  var g3pt = pts[milestones.length - 1], g4pt = pts[milestones.length];
+  var segRoomPx = showG13 ? ((g4pt.labelPos - g3pt.labelPos - 2 * (FLAG_PX / 2 / wrapPx) * 100) / 100) * wrapPx : 0;
+  var segLabel = showG13 && segRoomPx >= 130 ? '<div class="rl-seglabel" style="left:' + ((g3pt.labelPos + g4pt.labelPos) / 2) + '%;"><span class="rl-seglabel-t">Mass recovery,<br>' + esc(lastScope) + ' older data</span></div>' : "";
+  var flagsHtml = segLabel + '<div class="rl-break" style="left:' + tailStart + '%;" title="Spacing after ' + esc(lastScope) + ' is not to scale">&#8776;</div>' + pts.map(function (pt) {
+    var line = '<div class="rl-line" style="left:' + pt.pos + '%;background:' + pt.color + ';"' + (pt.minor ? ' title="Group ' + pt.k + ' online in ' + pt.time + '"' : '') + '></div>';
+    if (pt.minor) { return line + '<div class="rl-tickn" style="left:' + pt.pos + '%;" title="Group ' + pt.k + ' online in ' + pt.time + '">' + pt.k + '</div>'; }
+    return line +
+      '<div class="rl-flag' + (pt.end ? ' end' : '') + (pt.start ? ' start' : '') + (compact ? ' compact' : '') + '" style="left:' + pt.labelPos + '%;width:' + FLAG_PX + 'px;">' +
+        '<div class="rl-time"' + (pt.kind === "g4" ? ' style="color:var(--g4-text,#B9740A)"' : '') + '>' + pt.time + '</div>' +
+        '<div class="rl-label">' + pt.label + '</div>' +
       '</div>';
   }).join("");
 
   var noteHtml = "";
-  var anyCapped = TIER_ORDER.some(function (t) { return model.milestones[t] && model.milestones[t].cappedByMass; });
+  var anyCapped = TIER_ORDER.some(function (t) { return model.milestones[t] && !model.milestones[t].locked && model.milestones[t].cappedByMass; });
   if (anyCapped) {
-    noteHtml = '<div class="rl-note">ABR is never slower than bulk-restoring the same groups: where per-object job scheduling would push a milestone past the Mass Recovery time for that scope, the milestone is held at the Mass Recovery time. Mission-Critical data is still back <b>' + fmtMin(Math.max(0, full - milestones[0].cumMin)) + ' sooner</b> than a bulk restore of the whole tenant.</div>';
+    noteHtml = '<div class="rl-note">ABR is never slower than bulk-restoring the same groups: where per-object job scheduling would push a milestone past the Mass Recovery time for that scope, the milestone is held at the Mass Recovery time. Critical (Group 1) data is still back <b>' + fmtMin(Math.max(0, full - milestones[0].cumMin)) + ' sooner</b> than a bulk restore of the whole tenant.</div>';
+  }
+
+  if (groupN() > 3) {
+    var gN = model.milestones[lastCritKey()];
+    noteHtml += '<div class="rl-note rl-more">The ladder shows Groups 1-3. <b>Groups 4-' + groupN() + '</b> follow with ABR' + (gN && !gN.locked ? ' (' + esc(scopeName(groupN())) + ' online in <b>' + fmtMin(gN.wallClockCumMin) + '</b>)' : '') + ' and are listed with their own times in ' + exLink("report:report-by-group", "Recovery by group") + '.</div>';
   }
 
   return '<div class="recovery-ladder">' +
-    '<div class="rl-title">Recovery Ladder</div>' +
-    '<div class="rl-sub">Same timescale, cumulative milestones &ndash; how fast the business comes back, group by group.</div>' +
+    '<div class="rl-sub">' + esc(ladderScope) + ' are drawn to scale against each other, and ' + esc(lowN) + ' is sized against them. Mass recovery in the middle is not to scale (&asymp;).</div>' +
     '<div class="rl-track-wrap">' +
       '<div class="rl-track">' + segHtml + '</div>' +
       flagsHtml +
@@ -4080,81 +5879,542 @@ function buildRecoveryLadderHtml(model) {
   '</div>';
 }
 
-function renderExecLean() {
-  var model = computeRecoveryModel();
-  var g1 = model.milestones["Critical Group 1"];
-  var fullExposureMoney = fmtHours(model.fullRestoreMin) * state.recovery.costPerHour;
-  var abrCostMoney = fmtHours(g1.wallClockCumMin) * state.recovery.costPerHour;
-  var savingsMoney = Math.max(0, fullExposureMoney - abrCostMoney);
-  var pctReduction = fullExposureMoney > 0 ? Math.round((savingsMoney / fullExposureMoney) * 100) : 0;
+// ---------------------------------------------------------------------------
+// Report tab
+// ---------------------------------------------------------------------------
+function reportTimelineHtml(model, g1) {
+  var tlSegs = [], prevCum = 0, lastCum = 0, g3ok = false;
+  critKeys().forEach(function (key, i) {
+    var m = model.milestones[key];
+    if (!m || m.locked) { return; }
+    tlSegs.push({ label: "Group " + (i + 1), dur: Math.max(0, m.wallClockCumMin - prevCum), color: groupColor(i + 1) });
+    prevCum = m.wallClockCumMin; lastCum = m.wallClockCumMin; g3ok = i > 0;
+  });
+  var g3 = { wallClockCumMin: lastCum };
+  var realClusterPct = (lastCum / model.fullRestoreMin) * 100;
+  var clusterPct = Math.min(94, Math.max(realClusterPct, 6));
 
-  var html;
-  if (model.fullRestoreMin > 0) {
-    var moneyTileHtml = state.recovery.costPerHour > 0
-      ? ('<div class="exec-lean-tile money"><div class="exec-lean-tile-label">Downtime Cost Avoided</div><div class="exec-lean-tile-value">' + fmtMoney(savingsMoney) + '</div><div class="exec-lean-tile-sub"><b>' + pctReduction + '%</b> reduction vs. a fully random-order restore</div></div>')
-      : ('<div class="exec-lean-tile money"><div class="exec-lean-tile-label">Downtime Cost Avoided</div><div class="exec-lean-tile-value">&mdash;</div><div class="exec-lean-tile-sub">Set $/hour on the <span class="exec-hero-linkout" onclick="switchTab(\'recovery\')">Recovery tab</span> to see this figure</div></div>');
-    // NEW v3.7.0: Dormant Data hero tile removed per feedback 2026-07-30 -
-    // Dormant folded into Group 4 (see TIER_ORDER/TIER_META), and Group 4 is
-    // no longer a headline number anywhere in the Executive Summary. Its
-    // count/percentage still lives in the Group Overview table and the
-    // collapsed Group 4 section at the bottom of the Report tab, for anyone
-    // who digs in - just not surfaced as one of the top-line stats.
-    html = '<div class="exec-lean-tiles">' +
-        '<div class="exec-lean-tile"><div class="exec-lean-tile-label">Time to Critical Data</div><div class="exec-lean-tile-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="exec-lean-tile-sub">instead of <b>' + fmtMin(model.fullRestoreMin) + '</b> with a traditional, random-order restore</div></div>' +
-        moneyTileHtml +
-      "</div>" +
-      buildRecoveryLadderHtml(model) +
-      // NEW v3.7.0: plain, literal (non-metaphor) definition of both terms,
-      // per feedback 2026-07-30 - the puzzle analogy on the Report tab stays
-      // as the fuller narrative version; this is the short, unambiguous
-      // companion for anyone who wants the mechanism in one read.
-      '<div class="exec-lean-mechanism">Mass Recovery restores data in undifferentiated, random order until everything is back - there is no telling when any one piece of data returns. ABR (Autonomous Business Recovery) uses real activity data to identify what was <b>recently accessed, modified, or created</b> and restores that first, so the business is operational in hours, not weeks - Mass Recovery then continues in the background to complete the older data.</div>' +
-      '<div class="exec-lean-footer-link">Full breakdown, per-group detail, and methodology &rarr; <span class="exec-hero-linkout" onclick="switchTab(\'report\')">See the Report tab</span></div>';
-  } else {
-    html = '<div class="exec-hero-note">No active objects were found across the scanned workloads - nothing to summarize yet.</div>';
+  var chipsHtml = tlSegs.map(function (s) {
+    var isEmpty = s.dur <= 0;
+    var bgStyle = isEmpty ? "background:repeating-linear-gradient(45deg, var(--mid-gray) 0, var(--mid-gray) 2px, var(--bg-card) 2px, var(--bg-card) 4px);" : ("background:" + s.color + ";");
+    var flexStyle = "flex:" + Math.max(s.dur, 0.01) + " 1 0;";
+    var titleText = s.label + " (ABR): " + fmtMin(s.dur);
+    return '<div class="fin-tl-chip" style="' + bgStyle + flexStyle + '" title="' + titleText.replace(/"/g, "&quot;") + '"></div>';
+  }).join("");
+
+  var withAbrBarHtml = '<div class="fin-tl-track-row">' +
+    '<div class="fin-tl-track-bar with-abr">' +
+      '<div class="fin-tl-chip-cluster" style="flex:0 0 ' + clusterPct.toFixed(2) + '%;">' + chipsHtml + "</div>" +
+      '<div class="fin-tl-bg-fill" title="Mass Recovery still restoring in the background, in random order: ' + fmtMin(model.fullRestoreMin).replace(/"/g, "&quot;") + '">rest of tenant restoring in random order</div>' +
+    "</div>" +
+    '<div class="fin-tl-track-endlabel">' + fmtMin(model.fullRestoreMin) + ' <span class="arrow">&#8599;</span></div>' +
+  "</div>";
+  var withoutAbrBarHtml = '<div class="fin-tl-track-row">' +
+    '<div class="fin-tl-track-bar hatched"><span class="fin-tl-track-bar-text">Restored in random order &ndash; the exact data a user needs may not come back until this finishes</span></div>' +
+    '<div class="fin-tl-track-endlabel">' + fmtMin(model.fullRestoreMin) + ' <span class="arrow">&#8599;</span></div>' +
+  "</div>";
+  var legendHtml = '<div class="fin-tl-legend">' + tlSegs.map(function (s) {
+    var swatchStyle = s.dur <= 0 ? "background:repeating-linear-gradient(45deg, var(--mid-gray) 0, var(--mid-gray) 3px, var(--bg-card) 3px, var(--bg-card) 6px);" : ("background:" + s.color + ";");
+    return '<div class="fin-tl-legend-item"><span class="fin-tl-swatch" style="' + swatchStyle + '"></span><span>' + s.label + "</span></div>";
+  }).join("") + '<div class="fin-tl-legend-item"><span class="fin-tl-swatch" style="background:var(--mid-gray);"></span><span>Mass recovery</span></div>' + "</div>";
+
+  var callout = g3ok
+    ? 'Same timescale for both rows. The data your users actually need is back in <b>' + fmtMin(g3.wallClockCumMin) + "</b> with ABR, vs. <b>" + fmtMin(model.fullRestoreMin) + "</b> for a fully random-order restore."
+    : 'Same timescale for both rows. Critical Group 1 is back in <b>' + fmtMin(g1.wallClockCumMin) + "</b> with ABR, vs. <b>" + fmtMin(model.fullRestoreMin) + "</b> for a fully random-order restore.";
+
+  return '<div class="fin-timeline">' +
+    '<div class="fin-tl-title">Mass Recovery vs. ABR: Same Timescale, Different Order</div>' +
+    '<div class="fin-tl-desc">Mass Recovery &ndash; the industry standard, Rubrik included &ndash; restores pieces in random order: like dumping out a puzzle and gluing down whatever you grab first, nothing forms a complete, usable picture until the whole box is done, ' + fmtMin(model.fullRestoreMin) + ' here. ABR does what any puzzle solver does first &ndash; corners and edges, the pieces that actually give you something to work with &ndash; prioritizing recently accessed, modified, and created data so the business is operational in ' + fmtMin(g1.wallClockCumMin) + '.</div>' +
+    '<div class="fin-tl-track-block"><div class="fin-tl-track-label">Without ABR</div><div class="fin-tl-track-sublabel">Mass Recovery &ndash; random restore order</div>' + withoutAbrBarHtml + "</div>" +
+    '<div class="fin-tl-track-block"><div class="fin-tl-track-label">With ABR</div><div class="fin-tl-track-sublabel">recently modified data restored first</div>' + withAbrBarHtml + "</div>" +
+    '<div class="fin-tl-gap-callout">' + callout + "</div>" +
+    legendHtml +
+  "</div>";
+}
+
+function reportLowActivityHtml(model) {
+  var g4 = TIER_ORDER[TIER_ORDER.length - 1];
+  if (IS_PREVIEW) {
+    return '<div id="report-low-activity-inner">' + accHtml({ id: "low", title: "Group 4 Detail", summary: '<span>Available in the full assessment</span>',
+      body: function () { return pvLockedPanel("Group 4 detail", "Group 4 counts and recovery times are part of the full assessment."); } }) + '</div>';
   }
-  document.getElementById("exec-lean").innerHTML = html;
+  var MASS_KEY = { mailboxes: "ex", onedrive: "od", sharepoint: "sp" };
+  var perWl = WORKLOAD_DEFS.map(function (wd) {
+    var t = execWlTier(wd.key, g4), ten = execWlTenant(wd.key);
+    var cnt = t ? t.objectCount : 0, tot = ten.objectCount;
+    var mk = MASS_KEY[wd.key];
+    return { label: wd.label, count: cnt, total: tot, pct: tot > 0 ? Math.round((cnt / tot) * 100) : 0, massMin: mk ? model.perWorkloadMassRecoveryMin[mk] : null };
+  }).filter(function (d) { return d.total > 0; });
+  var totAll = perWl.reduce(function (s, d) { return s + d.total; }, 0);
+  var cntAll = perWl.reduce(function (s, d) { return s + d.count; }, 0);
+  var pctAll = totAll > 0 ? Math.round((cntAll / totAll) * 100) : 0;
+  if (totAll <= 0) { return ""; }
+  var sorted = perWl.slice().sort(function (x, y) { return y.pct - x.pct; });
+  var body = function () {
+    return '<div class="exec-dormant-headline"><b>' + pctAll + '%</b> of this tenant (' + fmtNum(cntAll) + ' of ' + fmtNum(totAll) + ' objects) falls into Group 4 - limited activity across every metric in the reporting window. Group 4 gets no ABR priority and is recovered entirely by Mass Recovery, alongside whatever else hasn\'t come back yet.</div>' +
+      '<div class="exec-dormant-grid">' + sorted.map(function (d) {
+        var timeHtml = d.massMin !== null
+          ? '<div class="exec-dormant-time">Mass Recovery: ~' + fmtMin(d.massMin) + ' (whole workload)</div>'
+          : '<div class="exec-dormant-time-na">No independent recovery-time model - Teams content lives in SharePoint/Exchange</div>';
+        return '<div class="exec-dormant-cell"><div class="exec-dormant-pct">' + d.pct + '%</div><div class="exec-dormant-label">' + esc(d.label) + '</div><div class="exec-dormant-sub">' + fmtNum(d.count) + ' of ' + fmtNum(d.total) + ' in Group 4</div>' + timeHtml + '</div>';
+      }).join("") + '</div>';
+  };
+  return accHtml({ id: "low", title: "Group 4 Detail", summary: '<span>' + pctAll + '% (' + fmtNum(cntAll) + ' of ' + fmtNum(totAll) + ' objects)</span>', body: body });
+}
+
+function reportDataQualityHtml() {
+  var meta = DATA.meta || {};
+  var ci = mailboxClassInfo();
+  var rowsHtml = [];
+  function add(area, status, detail, ok) {
+    rowsHtml.push('<tr><td>' + esc(area) + '</td><td><span class="ex2-badge ' + (ok === true ? "ok" : (ok === false ? "bad" : "neutral")) + '">' + esc(status) + '</span></td><td>' + detail + '</td></tr>');
+  }
+  var counts = WORKLOAD_DEFS.map(function (wd) { return wd.label + ": " + fmtNum(execWlTenant(wd.key).objectCount); }).join(" &middot; ");
+  add("Lookback period", periodDays() + " days", "Usage reports were pulled for the last " + periodDays() + " days. Group 4 means little to no activity in that window. The 7-day recent-activity window used for ABR is always collected separately.", true);
+  add("Objects collected", "Collected", counts, true);
+  var zero = WORKLOAD_DEFS.filter(function (wd) { return execWlTenant(wd.key).objectCount === 0; }).map(function (wd) { return wd.label; });
+  if (zero.length) { add("Workloads with no data", zero.join(", "), "No objects were returned for these workloads (not licensed, not in use, or the report returned nothing). They contribute nothing to the figures.", null); }
+
+  if (ci.known) {
+    var mc = ci.mc;
+    add("License classification", "Available", "Licensed users: <b>" + fmtNum(mc.licensedCount) + "</b>. Shared / group / other mailboxes: <b>" + fmtNum(mc.sharedCount) + "</b> (protected, no license needed)." + (mc.unknownCount > 0 ? " Unclassified: " + fmtNum(mc.unknownCount) + "." : ""), true);
+    if (mc.excludedCount > 0) { add("Mailboxes excluded", fmtNum(mc.excludedCount) + " mailboxes", "Belong to enabled, unlicensed users (" + fmtStorage(mc.excludedStorageBytes) + ", " + fmtNum(mc.excludedItems) + " items). Rubrik does not protect them, so they are left out of every figure in this report.", null); }
+    if (mc.unmappedSkus && mc.unmappedSkus.length) {
+      add("Unrecognized license SKUs", fmtNum(mc.unmappedSkus.length) + " SKU" + (mc.unmappedSkus.length === 1 ? "" : "s"), "These are shown as &quot;Other&quot; in the plan breakdown: " + mc.unmappedSkus.slice(0, 5).map(function (s) { return esc((s.skuId || s.id || s.sku || JSON.stringify(s)) + (s.users != null ? " (" + s.users + " users)" : "")); }).join(", ") + ".", null);
+    }
+    add("Shared mailbox detection", ci.mc.exoConfirmedShared ? "Confirmed" : "Estimated", ci.mc.exoConfirmedShared ? "Confirmed through Exchange Online (" + fmtNum(ci.mc.exoSharedCount) + " shared mailboxes)." : "Estimated from license data. Run with -DetailedSizing to confirm shared mailboxes through Exchange Online.", ci.mc.exoConfirmedShared ? true : null);
+  } else {
+    add("License classification", "Not available", "Licensed versus shared mailboxes could not be classified from license data (profile enrichment failed or returned nothing). Every mailbox is included and no unlicensed mailboxes were excluded, so mailbox counts may be overstated.", false);
+  }
+
+  // Enrichment availability (rows only - not measurable in the Summary build)
+  if (IS_SUMMARY) {
+    add("Profile enrichment", "Not shown", "Job title, department and group coverage is measured in the interactive report.", null);
+  } else {
+    var enrichRows = ["mailboxes", "onedrive"].reduce(function (a, k) { return a.concat(DATA.workloads[k] || []); }, []);
+    var scope = IS_PREVIEW ? " (Group 1 objects)" : "";
+    if (enrichRows.length === 0) { add("Profile enrichment", "No data", "No mailbox or OneDrive objects to measure.", null); }
+    else {
+      function share(f) { var n = enrichRows.filter(function (r) { var v = r[f]; return Array.isArray(v) ? v.length > 0 : !!v; }).length; return Math.round((n / enrichRows.length) * 100); }
+      var jt = share("JobTitle"), dp = share("Department"), gr = share("Groups");
+      var okEnrich = jt >= 50 && dp >= 50;
+      add("Profile enrichment" + scope, okEnrich ? "Good" : "Limited", "Job title present for <b>" + jt + "%</b>, department for <b>" + dp + "%</b>, Entra group membership for <b>" + gr + "%</b> of mailbox and OneDrive objects. Title-weight scoring and department filters depend on these fields.", okEnrich ? true : null);
+    }
+  }
+  if (meta.offlineMode) { add("Collection method", "Offline", "Built from usage reports exported from the Microsoft 365 admin center. No Graph or Exchange connection was made, so directory, license, group and Exchange detail were not collected." + (meta.offlineMissing && meta.offlineMissing.length ? " Optional exports not supplied: " + meta.offlineMissing.map(esc).join(", ") + "." : ""), null); }
+  add("Entra group data", meta.groupsRequested ? "Collected" : "Skipped", meta.groupsRequested ? "Group membership was requested and powers filter-by-group tools." : "Group membership was skipped (-NoGroups), so group filters are empty.", meta.groupsRequested ? true : null);
+  add("Detailed sizing", meta.detailedSizingRequested ? "Collected" : "Not collected", meta.detailedSizingRequested ? "Archive mailbox and Recoverable Items sizing was collected." : "Archive mailbox storage and Recoverable Items were not sized (run with -DetailedSizing). They are not part of the figures.", meta.detailedSizingRequested ? true : null);
+
+  var cannot = [];
+  if (meta.offlineMode) { cannot.push("a live tenant connection (offline run, reduced confidence)"); }
+  if (!ci.known) { cannot.push("license-based mailbox classification"); }
+  if (!meta.detailedSizingRequested) { cannot.push("archive mailbox and Recoverable Items sizes"); }
+  if (!meta.groupsRequested) { cannot.push("Entra group membership"); }
+  if (zero.length) { cannot.push("data for " + zero.join(", ")); }
+  var stmt = cannot.length
+    ? '<div class="ex2-note"><b>Could not be collected or was not requested:</b> ' + cannot.join("; ") + '. Everything else in this report was collected as described above.</div>'
+    : '<div class="ex2-note">Everything this report relies on was collected. Nothing was skipped.</div>';
+
+  var table = '<div class="table-wrap"><table class="ex2-table"><thead><tr><th>Area</th><th>Status</th><th>Detail</th></tr></thead><tbody>' + rowsHtml.join("") + '</tbody></table></div>';
+  var summary = cannot.length ? '<span>' + cannot.length + ' item' + (cannot.length === 1 ? '' : 's') + ' not collected</span>' : '<span>All collected</span>';
+  return accHtml({ id: "dq", title: "Data quality &amp; coverage", summary: summary, body: function () { return table + stmt; } });
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 Report tab: the evidence behind the Executive Summary (no repeat of its hero or timeline).
+// Order: verdict + confidence, four-step case, recovery by group, drivers, sensitivity,
+// concentration, where objects sit, Group 4, decisions, data quality.
+// Preview/Summary: Group 1 only where Groups 2-4 would be needed (locked rows, never invented numbers).
+// ---------------------------------------------------------------------------
+function reportMsOf(model, tier) { var m = model.milestones[tier]; return (m && !m.locked) ? m : null; }
+function reportMsObjs(m) { return m.sp.objectCount + m.od.objectCount + m.ex.objectCount; }
+function reportMsItems(m) { return m.sp.itemCount + m.od.itemCount + m.ex.itemCount; }
+function reportMsBytes(m) { return m.sp.storage + m.od.storage + m.ex.storage * 1048576; }
+function reportLongPole(m) {
+  var parts = [{ n: "SharePoint", v: m.sp.cumMin, k: "items" }, { n: "OneDrive", v: m.od.cumMin, k: "items" }, { n: "Exchange", v: m.ex.cumMin, k: null }]
+    .sort(function (a, b) { return b.v - a.v; });
+  var p = parts[0];
+  if (!(p.v > 0)) { return "&mdash;"; }
+  var why = "items per minute";
+  if (p.n === "Exchange") {
+    var cons = execConstraints(computeRecoveryModel()).filter(function (x) { return x.label === "Exchange"; })[0];
+    why = (cons && cons.kind === "bytes") ? "data volume" : "items per minute";
+  }
+  return esc(p.n) + " (" + why + ")";
+}
+
+function reportConfidence() {
+  var meta = DATA.meta || {};
+  var ci = mailboxClassInfo();
+  var notes = [], level = "High";
+  function bump(l) { if (l === "Limited" || (l === "Moderate" && level === "High")) { level = l; } }
+  var zero = WORKLOAD_DEFS.filter(function (wd) { return execWlTenant(wd.key).objectCount === 0; }).map(function (wd) { return wd.label; });
+  if (zero.length) { notes.push("no data for " + zero.join(", ")); bump("Moderate"); }
+  if (!ci.known) { notes.push("licensed versus shared mailboxes not classified"); bump("Limited"); }
+  else {
+    if (ci.mc.excludedCount > 0) { notes.push(fmtNum(ci.mc.excludedCount) + " unlicensed mailboxes excluded"); }
+    if (!ci.mc.exoConfirmedShared) { notes.push("shared mailboxes estimated from license data"); bump("Moderate"); }
+  }
+  if (!IS_PREVIEW && !IS_SUMMARY) {
+    var ins = (typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+    if (ins && ins.excludedCount > 0 && state.insights.exclude) { notes.push(fmtNum(ins.excludedCount) + " abnormal object" + (ins.excludedCount === 1 ? "" : "s") + " left out of the estimates"); bump("Moderate"); }
+  }
+  notes.push("usage lookback " + periodDays() + " days");
+  return { level: level, notes: notes };
+}
+
+function reportVerdictHtml(model, g1, ca) {
+  var r1 = ca.rows[0];
+  var nObj = reportMsObjs(g1);
+  var tenant = execTenantSum();
+  var pct = tenant.objects > 0 ? Math.round((nObj / tenant.objects) * 100) : 0;
+  var conf = reportConfidence();
+  var saved = r1.locked ? "" : (' That saves <b>' + fmtSaved(r1.savedMin) + '</b>' + (ca.hasRate ? ' (<b>' + fmtMoney(r1.cost) + '</b> cost avoided at ' + fmtMoney(ca.perHour) + ' per hour).' : '.'));
+  return '<div class="rep-verdict"><div class="rep-verdict-text">Group 1 (<b>' + fmtNum(nObj) + '</b> objects, <b>' + pct + '%</b> of your tenant) is usable in <b>' + fmtMin(g1.wallClockCumMin) + '</b> with ABR, instead of <b>' + fmtMin(model.fullRestoreMin) + '</b> with a random-order restore.' + saved +
+    ' ' + exLink("exec", "Executive Summary") + '</div>' +
+    '<div class="rep-confidence" ' + navAttr("report:report-data-quality:dq") + '><span class="rep-conf-badge ' + conf.level.toLowerCase() + '">Confidence: ' + conf.level + '</span> <span class="rep-conf-notes">' + conf.notes.join(" &middot; ") + '</span> ' + exLink("report:report-data-quality:dq", "Data quality") + '</div></div>';
+}
+
+function reportCaseHtml(model, g1, conc) {
+  var g1Target = state.recovery.group1Hours;
+  var met = critKeys().filter(function (k) { var m = reportMsOf(model, k); return m && !m.exceedsTarget; }).length;
+  var avail = critKeys().filter(function (k) { return reportMsOf(model, k); }).length;
+  var evidence = conc
+    ? 'Group 1 is <b>' + Math.round(conc.objPct) + '%</b> of objects but <b>' + (conc.bytesPct === null ? "n/a" : Math.round(conc.bytesPct) + '%') + '</b> of storage' + (conc.actPct !== null ? ' and <b>' + Math.round(conc.actPct) + '%</b> of recent activity.' : '.')
+    : 'Group 1 is a small share of the tenant that carries most of the recent activity.';
+  function step(n, title, body, link) {
+    return '<div class="rep-step" ' + navAttr(link) + '><div class="rep-step-n">' + n + '</div><div class="rep-step-body"><div class="rep-step-title">' + title + '</div><div class="rep-step-text">' + body + '</div></div></div>';
+  }
+  return '<div class="rep-case">' +
+    step(1, "The problem", 'A tenant-wide restore takes <b>' + fmtMin(model.fullRestoreMin) + '</b> and returns data in no useful order.', "report:report-by-group") +
+    step(2, "What changes", 'ABR restores what people were just working on first. Group 1 is online in <b>' + fmtMin(g1.wallClockCumMin) + '</b>.', "groups:grp-headline") +
+    step(3, "The evidence", evidence, "report:report-concentration") +
+    step(4, "The decision", 'Confirm Group 1 and the Recovery Window (RTO) targets. <b>' + met + ' of ' + avail + '</b> targets are met' + (IS_PREVIEW ? " for Group 1." : "."), "report:report-decisions") +
+  '</div>';
+}
+
+function reportByGroupHtml(model) {
+  var ca = computeCostAvoided(model);
+  var defs = critKeys().map(function (key, i) { var k = i + 1; return [key, k === 1 ? "Critical users (Group 1)" : "+ " + (groupN() === 3 ? (k === 2 ? "Important users" : "Standard users") : "Group " + k) + " (" + scopeName(k) + ")", groupHoursOf(k)]; });
+  var rate = ca.hasRate;
+  var cumO = 0, cumI = 0, cumB = 0;
+  var rows = defs.map(function (d, idx) {
+    var m = reportMsOf(model, d[0]);
+    if (m) { cumO += reportMsObjs(m); cumI += reportMsItems(m); cumB += reportMsBytes(m); }
+    if (!m) {
+      return '<tr><td>' + d[1] + '</td><td colspan="' + (rate ? 10 : 9) + '">' + exLocked() + ' <span class="rep-lock-note">Run the Full assessment to see this row.</span></td></tr>';
+    }
+    var cr = ca.rows[idx];
+    var badge = m.exceedsTarget ? '<span class="ex2-badge bad">Over by ' + fmtMin(m.targetGapMin) + '</span>' : '<span class="ex2-badge ok">Within target</span>';
+    return '<tr><td>' + d[1] + '</td>' +
+      '<td data-sort="' + cumO + '">' + fmtNum(cumO) + '</td>' +
+      '<td data-sort="' + Math.round(cumI) + '">' + fmtNum(cumI) + '</td>' +
+      '<td data-sort="' + Math.round(cumB) + '">' + fmtStorageNum(cumB) + '</td>' +
+      '<td data-sort="' + Math.round(m.wallClockCumMin) + '">' + fmtMin(m.wallClockCumMin) + '</td>' +
+      '<td data-sort="' + (d[2] * 60) + '">' + d[2] + ' hr</td>' +
+      '<td>' + badge + '</td>' +
+      '<td data-sort="' + Math.round(m.massRecoveryCumMin) + '">~' + fmtMin(m.massRecoveryCumMin) + '</td>' +
+      '<td data-sort="' + Math.round(cr.savedMin) + '">' + fmtSaved(cr.savedMin) + '</td>' +
+      (rate ? '<td data-sort="' + Math.round(cr.cost) + '">' + fmtMoney(cr.cost) + '</td>' : '') +
+      '<td>' + reportLongPole(m) + '</td></tr>';
+  }).join("");
+  var full = '<tr class="total-row no-sort-row"><td>Full tenant</td><td colspan="3">Mass Recovery baseline, no prioritization</td><td>' + fmtMin(model.fullRestoreMin) + '</td><td colspan="' + (rate ? 6 : 5) + '"></td></tr>';
+  var head = '<tr><th>Milestone</th><th>Objects</th><th>Items / files</th><th>' + storageHeader("Storage") + '</th><th>ABR time</th><th>Recovery Window (RTO) target</th><th>Status</th><th>Mass Recovery, same scope</th><th>Hours saved</th>' + (rate ? '<th>Cost avoided</th>' : '') + '<th>Slowest workload (limit)</th></tr>';
+  var note = '<div class="ex2-note">Cumulative: each row includes the groups before it. ' + (rate ? "" : costPromptHtml() + ' ') + 'Recovery speed is limited by items restored per minute for SharePoint and OneDrive, and by the slower of item rate and per-mailbox transfer rate for Exchange, not by network bandwidth. ' + exLink("methodology", "How it is calculated") + ' ' + exLink("groups:grp-controls", "Adjust Recovery Window (RTO) targets") + '</div>';
+  return '<h2>Recovery by group</h2><div class="table-wrap"><table class="ex2-table rep-table"><thead>' + head + '</thead><tbody>' + rows + full + '</tbody></table></div>' + note;
+}
+
+function reportDriversHtml() {
+  var ins = (!IS_PREVIEW && !IS_SUMMARY && typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+  var model = computeRecoveryModel();
+  var items = [];
+  items.push(['Usage lookback', periodDays() + ' days', 'Set when the script ran (-Period). Decides who lands in ' + lowName() + '.', null]);
+  items.push(['Recent-data window', state.recovery.windowDays + ' days', 'How much recent data ABR restores first (maximum 7).', "groups:grp-controls"]);
+  items.push(['Recovery Window (RTO) targets', (groupN() > 4 ? state.recovery.group1Hours + ' ... ' + groupHoursOf(groupN()) : state.recovery.groupHours.slice(0, groupN()).join(' / ')) + ' hr', groupN() + ' criticality groups, cumulative. They move the group boundaries.', "groups:grp-controls"]);
+  var cells = items.map(function (x) {
+    return '<div class="rep-driver"' + (x[3] ? ' ' + navAttr(x[3]) : '') + '><div class="rep-driver-label">' + x[0] + '</div><div class="rep-driver-val">' + x[1] + '</div><div class="rep-driver-note">' + x[2] + '</div></div>';
+  }).join("");
+  var live = '<div class="rep-live"><label class="ex2-rate">Downtime cost per hour (USD) <input type="number" min="0" step="100" id="rep-cost-input" value="' + (parseFloat(state.recovery.costPerHour) || 0) + '" onchange="onExecCostChange(this.value)"></label>';
+  if (ins && ins.excludedCount > 0) {
+    var on = !!state.insights.exclude;
+    live += ' <span class="rep-toggle">Abnormal objects (' + fmtNum(ins.excludedCount) + '): <button type="button" class="ins-toggle-btn' + (on ? " active" : "") + '" aria-pressed="' + on + '" onclick="setExcludeOutliers(true)">Exclude</button><button type="button" class="ins-toggle-btn' + (on ? "" : " active") + '" aria-pressed="' + (!on) + '" onclick="setExcludeOutliers(false)">Include</button> <span class="linkout" ' + navAttr("insights:insights-table") + '>See which objects &rarr;</span></span>';
+  }
+  live += '</div>';
+  return '<h2>What drives these numbers</h2><div class="rep-drivers">' + cells + '</div>' + live;
+}
+
+// Scenario runs re-tier the tenant, so they are computed on request (Full only) and cached against the inputs.
+function reportScenarioSig() {
+  var r = state.recovery;
+  return [r.windowDays, r.licenseTier, r.groupCount, r.groupHours.join(','), state.insights.exclude, JSON.stringify(state.weights)].join("|");
+}
+function reportScenarioResult() {
+  var s = uiState.scenarios;
+  return (s && s.sig === reportScenarioSig()) ? s : null;
+}
+function runReportScenarios() {
+  if (IS_PREVIEW || IS_SUMMARY) { return; }
+  var keep = { w: state.recovery.windowDays, g: state.recovery.groupHours.slice() };
+  var sig = reportScenarioSig();
+  var tenantObjs = execTenantSum().objects;
+  var defs = [];
+  function sameHours(h) { return h.length === keep.g.length && h.every(function (v, i) { return v === keep.g[i]; }); }
+  [1, 3, 7].forEach(function (d) { defs.push({ label: "Recent-data window " + d + " day" + (d === 1 ? "" : "s"), w: d, g: keep.g.slice(), current: d === keep.w }); });
+  var presetDefs = groupN() === 3 ? [["Standard targets (4 / 24 / 72 hr)", [4, 24, 72]], ["Enterprise targets (24 / 120 / 240 hr)", [24, 120, 240]]] : [];
+  presetDefs.push(["Enterprise Plus targets (sized to tenant)", enterprisePlusHours(groupN())]);
+  presetDefs.forEach(function (p) { defs.push({ label: p[0], w: keep.w, g: p[1], current: sameHours(p[1]) }); });
+  var rows = [];
+  try {
+    defs.forEach(function (sc) {
+      state.recovery.windowDays = sc.w; state.recovery.groupHours = sc.g.slice();
+      WORKLOAD_DEFS.forEach(function (wd) { computeScoresAndTiers(wd.key); });
+      var m = computeRecoveryModel().milestones["Critical Group 1"];
+      if (m && !m.locked) { rows.push({ label: sc.label, current: sc.current, g1Objects: reportMsObjs(m), g1Min: m.wallClockCumMin, share: tenantObjs > 0 ? reportMsObjs(m) / tenantObjs : 0 }); }
+    });
+  } finally {
+    state.recovery.windowDays = keep.w; state.recovery.groupHours = keep.g;
+    WORKLOAD_DEFS.forEach(function (wd) { computeScoresAndTiers(wd.key); });
+  }
+  uiState.scenarios = { sig: sig, rows: rows };
+  recomputeAll();
+}
+
+function reportSensitivityHtml(model) {
+  var head = '<h2>Group 1 Insights</h2>';
+  if (IS_PREVIEW || IS_SUMMARY) {
+    return head + '<div class="ex2-note">Scenario runs re-sort the whole tenant, which needs the Full assessment. ' + (IS_PREVIEW ? '<a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">Contact your Rubrik representative</a>' : "Open the interactive report to run them.") + '</div>';
+  }
+  var sc = reportScenarioResult();
+  var intro = '<p class="ex2-note">Group 1 is sized to its own Recovery Window (RTO) target, so its online time stays close to the target. What moves is how many objects fit inside it. Each scenario re-sorts the tenant with that setting and leaves your current inputs untouched.</p>';
+  if (!sc) {
+    return head + intro + '<button type="button" class="ins-toggle-btn active" onclick="runReportScenarios()">Run scenarios</button>';
+  }
+  var body = sc.rows.map(function (r) {
+    return '<tr' + (r.current ? ' class="rep-current"' : '') + '><td>' + esc(r.label) + (r.current ? ' <span class="ex2-badge neutral">current</span>' : '') + '</td><td data-sort="' + r.g1Objects + '">' + fmtNum(r.g1Objects) + '</td><td data-sort="' + Math.round(r.share * 1000) + '">' + (r.share * 100).toFixed(1) + '%</td><td data-sort="' + Math.round(r.g1Min) + '">' + fmtMin(r.g1Min) + '</td></tr>';
+  }).join("");
+  var out = head + intro + '<div class="table-wrap"><table class="ex2-table"><thead><tr><th>Scenario</th><th>Group 1 objects</th><th>Share of tenant</th><th>Group 1 online in</th></tr></thead><tbody>' + body + '</tbody></table></div>';
+  var ins = (typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+  if (ins && ins.headline && ins.excludedCount > 0) {
+    out += '<div class="ex2-note">Abnormal objects: Group 1 is <b>' + fmtMin(ins.headline.excludedG1Min) + '</b> with the ' + fmtNum(ins.excludedCount) + ' flagged object' + (ins.excludedCount === 1 ? "" : "s") + ' left out and <b>' + fmtMin(ins.headline.includedG1Min) + '</b> with them included.</div>';
+  }
+  return out + '<button type="button" class="ins-toggle-btn" onclick="runReportScenarios()">Re-run</button>';
+}
+
+function reportDecisionItems(model, g1) {
+  var items = [];
+  var nG1 = reportMsObjs(g1);
+  items.push({ text: 'Confirm the ' + fmtNum(nG1) + ' Group 1 objects with the business owners' + ((IS_PREVIEW || IS_SUMMARY) ? '' : ' and move any that belong elsewhere'), link: "groups:grp-by-group:grp-g1", linkText: (IS_PREVIEW || IS_SUMMARY) ? "See Group 1" : "Review and adjust Group 1" });
+  var over = critKeys().map(function (key, i) { return [key, scopeName(i + 1)]; }).filter(function (d) { var m = reportMsOf(model, d[0]); return m && m.exceedsTarget; });
+  items.push({ text: over.length ? ('Decide how to close the Recovery Window (RTO) gap: ' + over.map(function (d) { return d[1] + ' is over by ' + fmtMin(reportMsOf(model, d[0]).targetGapMin); }).join("; ")) : 'Confirm the Recovery Window (RTO) targets (' + (groupN() > 4 ? state.recovery.group1Hours + ' ... ' + groupHoursOf(groupN()) : state.recovery.groupHours.slice(0, groupN()).join(' / ')) + ' hr); all are currently met', link: "groups:grp-controls", linkText: "Recovery Window (RTO) targets" });
+  var ins = (!IS_PREVIEW && !IS_SUMMARY && typeof getInsightsSummary === "function") ? getInsightsSummary() : null;
+  if (ins && ins.total > 0) { items.push({ text: 'Review the ' + fmtNum(ins.total) + ' flagged object' + (ins.total === 1 ? "" : "s") + ' and decide how to handle them', link: "insights:insights-table", linkText: "Recovery Insights" }); }
+  if (!(parseFloat(state.recovery.costPerHour) > 0)) { items.push({ text: 'Enter your estimated downtime cost per hour to see potential cost avoidance', link: "report:report-drivers", linkText: "Enter it here" }); }
+  var conf = reportConfidence();
+  if (conf.level !== "High") { items.push({ text: 'Close the data gaps behind the ' + conf.level.toLowerCase() + ' confidence rating', link: "report:report-data-quality:dq", linkText: "Data quality" }); }
+  if (IS_PREVIEW) { items.push({ text: 'Run the Full assessment to see Groups 2-4 and the complete recovery sequence', href: CONTACT_SALES_URL, linkText: "Contact your Rubrik representative" }); }
+  return items;
+}
+function reportDecisionsHtml(model, g1) {
+  var lis = reportDecisionItems(model, g1).map(function (d) {
+    var l = d.href ? ('<a href="' + d.href + '" target="_blank" rel="noopener">' + d.linkText + '</a>') : exLink(d.link, d.linkText);
+    return '<li><span class="rep-check" aria-hidden="true"></span><span>' + d.text + ' ' + l + '</span></li>';
+  }).join("");
+  return '<h2>Decisions and next steps</h2><ul class="rep-decisions">' + lis + '</ul>';
+}
+
+// Recovery calendar (Report tab): the ladder laid over real dates from when the page was opened.
+// Long recoveries show month 1, a fading month 2, a gap marker, then the final month fading back in.
+function reportCalendarHtml(model) {
+  var g1 = reportMsOf(model, "Critical Group 1");
+  var M = model.fullRestoreMin;
+  if (!(M > 0) || !g1) { return ""; }
+  var DAYM = 1440;
+  var s0 = new Date(REC_NOW); s0.setHours(0, 0, 0, 0);
+  var off = (REC_NOW - s0) / 60000;
+  var total = Math.ceil((M + off) / DAYM);
+  var big = total <= 31;
+  var ends = [], cols = [], prevEnd = 0;
+  critKeys().forEach(function (key, i) {
+    var m = reportMsOf(model, key);
+    prevEnd = Math.max(prevEnd, Math.min(m ? m.wallClockCumMin : prevEnd, M));
+    ends.push(prevEnd); cols.push(groupColor(i + 1));
+  });
+  ends.push(M); cols.push("var(--massc)");
+  function grad(d) {
+    var a = d * DAYM - off, b = a + DAYM, prev = Math.max(a, 0), stops = [];
+    if (b <= 0 || a >= M) { return ""; }
+    if (a < 0) { stops.push("var(--inset-cell) 0%", "var(--inset-cell) " + (-a / DAYM * 100).toFixed(1) + "%"); }
+    for (var k = 0; k < ends.length; k++) {
+      var e = Math.min(ends[k], b);
+      if (e > prev) { stops.push(cols[k] + " " + ((prev - a) / DAYM * 100).toFixed(1) + "%", cols[k] + " " + ((e - a) / DAYM * 100).toFixed(1) + "%"); prev = e; }
+    }
+    if (prev < b) { stops.push("var(--inset-cell) " + ((prev - a) / DAYM * 100).toFixed(1) + "%", "var(--inset-cell) 100%"); }
+    return "linear-gradient(90deg," + stops.join(",") + ")";
+  }
+  function fD(d) { return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); }
+  var m0 = new Date(s0.getFullYear(), s0.getMonth(), 1), endD = recAt(M);
+  var months = Math.min(60, (endD.getFullYear() - m0.getFullYear()) * 12 + endD.getMonth() - m0.getMonth() + 1);
+  function monthHtml(mi, cls) {
+    var ms = new Date(m0.getFullYear(), m0.getMonth() + mi, 1), dim = new Date(ms.getFullYear(), ms.getMonth() + 1, 0).getDate();
+    var lead = (ms.getDay() + 6) % 7;
+    var h = '<div class="cal-mon ' + (cls || "") + '"><h4>' + ms.toLocaleDateString(undefined, { month: "long", year: "numeric" }) + '</h4><div class="cal-g">' +
+      ["M", "T", "W", "T", "F", "S", "S"].map(function (x) { return '<div class="cal-h">' + x + '</div>'; }).join("");
+    for (var i = 0; i < lead; i++) { h += '<div class="cal-cell blank"></div>'; }
+    for (var dd = 1; dd <= dim; dd++) {
+      var dt = new Date(ms.getFullYear(), ms.getMonth(), dd), idx = Math.round((dt - s0) / 86400000);
+      var g = grad(idx), c = "cal-cell" + (g ? " in" : ""), tag = "";
+      if (idx === 0) { c += " today"; tag = '<span class="cal-tag">TODAY</span>'; }
+      if (idx === total - 1 && g) { c += " done"; tag = '<span class="cal-tag dtag">DONE</span>'; }
+      h += '<div class="' + c + '"' + (g ? ' style="background:' + g + '"' : '') + ' title="' + fD(dt) + '">' + dd + tag + '</div>';
+    }
+    return h + '</div></div>';
+  }
+  var html = '';
+  
+  if (months <= 3) { for (var mi = 0; mi < months; mi++) { html += monthHtml(mi, ""); } }
+  else {
+    html += monthHtml(0, "") + monthHtml(1, "fadeout");
+    var hidden = months - 3;
+    html += '<div class="cal-gap"><div class="cal-dots">&middot; &middot; &middot;</div><div class="cal-gap-n">' + hidden + ' more month' + (hidden === 1 ? "" : "s") + ' of recovery</div>' +
+      '<div>What launches, releases, audits and customer commitments land in these months, and what would it cost if the data behind them is still being restored?</div><div class="cal-dots">&middot; &middot; &middot;</div></div>';
+    html += monthHtml(months - 1, "fadein");
+  }
+  html += '</div><div class="cal-legend">' + critKeys().map(function (key, i) { return '<span><i style="background:' + groupColor(i + 1) + '"></i>' + (i === 0 ? 'Critical users (Group 1)' : tierTitle(i + 1)) + '</span>'; }).join("") + '<span><i style="background:var(--massc)"></i>Mass recovery still running</span></div>' +
+    '<div class="cal-ends"><span>Starts <b>' + fD(REC_NOW) + '</b></span><span>Mass recovery finishes <b>' + recDate(M) + '</b> (' + fmtMin(M) + ' from now)</span></div>';
+  return '<h2>If recovery started today</h2>' + html;
 }
 
 function renderExecSummary() {
-  renderExecFinancialAndRecoveryTop();
+  var model = computeRecoveryModel();
+  var g1 = reportMsOf(model, "Critical Group 1");
+  function put(id, html) { var el = document.getElementById(id); if (el) { el.innerHTML = html; } }
+  if (!(model.fullRestoreMin > 0) || !g1) {
+    put("report-verdict", '<div class="exec-hero-note">No objects with recent activity were found, so there is no recovery time to report yet.</div>');
+    ["report-case", "report-by-group", "report-calendar", "report-drivers", "report-sensitivity", "report-concentration", "report-g1list", "report-rto", "report-risks", "report-decisions"].forEach(function (id) { put(id, ""); });
+  } else {
+    var ca = computeCostAvoided(model);
+    var conc = execConcentration();
+    put("report-verdict", reportVerdictHtml(model, g1, ca));
+    put("report-case", reportCaseHtml(model, g1, conc));
+    put("report-by-group", reportByGroupHtml(model));
+    put("report-drivers", reportDriversHtml());
+    put("report-sensitivity", reportSensitivityHtml(model));
+    var c = { model: model, g1: g1, ca: ca, conc: conc, profile: execGroup1Profile() };
+    put("report-concentration", exBlockConcentration(c).replace(' id="exec-concentration"', ""));
+    put("report-calendar", reportCalendarHtml(model));
+    put("report-g1list", exBlockG1List(c));
+    put("report-rto", exBlockRto(c));
+    put("report-risks", exBlockRisks());
+    put("report-decisions", reportDecisionsHtml(model, g1));
+  }
+  put("report-low-activity", reportLowActivityHtml(model));
+  put("report-data-quality", reportDataQualityHtml());
+
+  // Where the objects sit: per-workload cards (unchanged data, now below the evidence).
   var cardsHtml = "";
-  var grandTotals = { objects: 0, tiers: {} };
-  TIER_ORDER.forEach(function (t) { grandTotals.tiers[t] = 0; });
-
   WORKLOAD_DEFS.forEach(function (wd) {
-    var rows = DATA.workloads[wd.key] || [];
-    var total = rows.length;
+    var ten = execWlTenant(wd.key);
+    var total = ten.objectCount;
     var segs = "", legend = "";
-    TIER_ORDER.forEach(function (t) {
-      var count = rows.filter(function (r) { return r.Tier === t; }).length;
-      grandTotals.tiers[t] += count; grandTotals.objects += (t === TIER_ORDER[0] ? 0 : 0);
-      if (total > 0 && count > 0) {
-        var pct = Math.round((count / total) * 10000) / 100;
-        segs += '<span style="width:' + pct + '%;background:' + TIER_META[t].bg + ';"></span>';
-      }
-      legend += '<div><span style="width:8px;height:8px;border-radius:50%;background:' + TIER_META[t].bg + ';display:inline-block;"></span>' + TIER_META[t].short + ": " + count + "</div>";
-    });
-    grandTotals.objects += total;
-    cardsHtml += '<div class="summary-card" style="--accent:var(--blue);" onclick="goToWorkload(\'' + wd.key + '\')">' +
-      "<h3>" + esc(wd.label) + '</h3><div class="total">' + total + '</div><div class="tier-bar">' + segs + '</div><div class="tier-legend">' + legend + "</div></div>";
+    if (IS_PREVIEW) {
+      var t1 = execWlTier(wd.key, "Critical Group 1") || { objectCount: 0 };
+      var rest = Math.max(0, total - t1.objectCount);
+      if (total > 0 && t1.objectCount > 0) { segs += '<span style="width:' + (Math.round((t1.objectCount / total) * 10000) / 100) + '%;background:' + TIER_META["Critical Group 1"].bg + ';"></span>'; }
+      legend += '<div><span class="ex2-dot" style="background:' + TIER_META["Critical Group 1"].bg + ';"></span>Group 1: ' + fmtNum(t1.objectCount) + '</div>';
+      legend += '<div><span class="ex2-dot" style="background:' + TIER_META["Group 4"].bg + ';"></span>Remaining groups: ' + fmtNum(rest) + '</div>';
+    } else {
+      TIER_ORDER.forEach(function (t) {
+        var x = execWlTier(wd.key, t);
+        var count = x ? x.objectCount : 0;
+        if (total > 0 && count > 0) { segs += '<span style="width:' + (Math.round((count / total) * 10000) / 100) + '%;background:' + TIER_META[t].bg + ';"></span>'; }
+        legend += '<div><span class="ex2-dot" style="background:' + TIER_META[t].bg + ';"></span>' + TIER_META[t].named + ": " + fmtNum(count) + "</div>";
+      });
+    }
+    var stor = wd.storageField ? '<div class="ex2-card-sub">' + fmtStorage(ten.storageBytes) + '</div>' : "";
+    cardsHtml += '<div class="summary-card" ' + navAttr("groups:grp-by-workload:wl-" + wd.key) + '>' +
+      "<h3>" + esc(wd.label) + '</h3><div class="total">' + fmtNum(total) + '</div>' + stor + '<div class="tier-bar">' + segs + '</div><div class="tier-legend">' + legend + "</div></div>";
   });
-  document.getElementById("exec-summary-cards").innerHTML = cardsHtml;
-
-  var totalsHtml = '<div class="totals-grid">';
-  TIER_ORDER.forEach(function (t) {
-    totalsHtml += '<div class="totals-cell"><div class="label">' + TIER_META[t].short + ' - Objects</div><div class="value">' + fmtNum(grandTotals.tiers[t]) + "</div></div>";
-  });
-  totalsHtml += "</div>";
-  document.getElementById("exec-totals").innerHTML = "<h2>Totals Across All Workloads</h2>" + totalsHtml;
+  var tenant = execTenantSum();
+  var totalLine = '<div class="ex2-note">Whole tenant: <b>' + fmtNum(tenant.objects) + '</b> objects, <b>' + fmtStorage(tenant.bytes) + '</b>.</div>';
+  put("report-group-overview", '<h2>Where your objects sit</h2><div class="summary-grid">' + cardsHtml + '</div>' + totalLine);
 }
 
+'@
+
+$script:ReportJsRenderTables = @'
+// ===================================================================================
+// v2.0 object tables + group/workload aggregates (Groups & Recovery Model tab).
+//
+// One table builder serves both sections of the tab:
+//   - "By group"      tables are fixed to one tier and one workload at a time  (tkey like "g1-mailboxes")
+//   - "By workload"   tables show one workload with tier filter chips           (tkey = the workload key, e.g. "mailboxes")
+// All search / filter / sort / show-all state is per table key (tkey).
+// Every column header is sortable. Sorting runs on the FULL filtered set BEFORE the MAX_TABLE_ROWS cap,
+// so the cap never hides the real top or bottom rows (data-driven helpers live in ReportJsUi.js).
+// Storage is always shown through fmtStorageNum()/storageHeader() (one unit for the whole report).
+// ===================================================================================
+
+var TKEY_META = {};   // tkey -> { wdKey, tier|null }
+function registerTable(tkey, wdKey, tier) { TKEY_META[tkey] = { wdKey: wdKey, tier: tier || null }; }
+function wdByKey(key) { return WORKLOAD_DEFS.filter(function (w) { return w.key === key; })[0]; }
+function tierIdOf(tierName) { return tierName === LOW_KEY ? "glow" : (tierNum(tierName) ? "g" + tierNum(tierName) : undefined); }
+function tierNameOfId(id) { if (id === "glow") { return LOW_KEY; } var m = /^g(\d+)$/.exec(id || ""); return m ? critKey(parseInt(m[1], 10)) : undefined; }
+function canEditTiers() { return !IS_PREVIEW && !IS_SUMMARY; }
+
 function goToWorkload(key) {
-  switchTab("groups");
-  setTimeout(function () {
-    var el = document.getElementById("wl-" + key);
-    if (el) { el.scrollIntoView({ behavior: "smooth" }); }
-  }, 50);
+  navigateTo("groups:wl-" + key + ":wl-" + key);
+}
+
+// ---------- aggregates (rows when present, generation-time aggregates otherwise) ----------
+// Returns { objects, items, storageBytes } for one workload in one tier, or null when that data is not in the page
+// (Preview: Groups 2-4). Unlike the recovery model's slices this NEVER drops outlier-flagged objects - a group's
+// object count is a fact about the tenant; only the headline recovery estimate leaves flagged objects out.
+function groupTotals(wlKey, tierName) {
+  var wd = wdByKey(wlKey);
+  var rec = RECOVERY_FIELDS[wlKey];
+  var rows = DATA.workloads[wlKey] || [];
+  if (IS_SUMMARY || (rows.length === 0 && DATA.tierAgg)) {
+    var a = DATA.tierAgg && DATA.tierAgg[wlKey] && DATA.tierAgg[wlKey][tierName];
+    if (!a) { return null; }
+    var sb = rec ? (wlKey === "mailboxes" ? (a.storage || 0) * 1048576 : (a.storage || 0)) : 0;
+    return { objects: a.objectCount || 0, items: rec ? (a.itemCount || 0) : 0, storageBytes: sb };
+  }
+  if (IS_PREVIEW && tierName !== "Critical Group 1") { return null; }
+  var objects = 0, items = 0, bytes = 0;
+  rows.forEach(function (r) {
+    if (r.Tier !== tierName) { return; }
+    objects++;
+    if (rec) { items += parseFloat(r.metrics[rec.item]) || 0; bytes += rowStorageBytes(wlKey, r); }
+  });
+  return { objects: objects, items: items, storageBytes: bytes };
+}
+// Sum across the four workloads (items and storage only exist for mailboxes / OneDrive / SharePoint).
+function groupTotalsAll(tierName) {
+  var out = { objects: 0, items: 0, storageBytes: 0, byWl: {}, complete: true };
+  WORKLOAD_DEFS.forEach(function (wd) {
+    var t = groupTotals(wd.key, tierName);
+    out.byWl[wd.key] = t;
+    if (!t) { out.complete = false; return; }
+    out.objects += t.objects; out.items += t.items; out.storageBytes += t.storageBytes;
+  });
+  return out;
+}
+// Preview: everything that is NOT Group 1 (whole-tenant totals minus Group 1). One lump - never split by group.
+function remainderTotals(wlKey) {
+  var t = tenantTotalsFor(wlKey);
+  var g = groupTotals(wlKey, "Critical Group 1") || { objects: 0, items: 0, storageBytes: 0 };
+  var rec = RECOVERY_FIELDS[wlKey];
+  var tenantBytes = rec ? (wlKey === "mailboxes" ? t.storage * 1048576 : t.storage) : 0;
+  return { objects: Math.max(0, t.objectCount - g.objects), items: rec ? Math.max(0, t.itemCount - g.items) : 0, storageBytes: rec ? Math.max(0, tenantBytes - g.storageBytes) : 0 };
+}
+function remainderTotalsAll() {
+  var out = { objects: 0, items: 0, storageBytes: 0 };
+  WORKLOAD_DEFS.forEach(function (wd) { var r = remainderTotals(wd.key); out.objects += r.objects; out.items += r.items; out.storageBytes += r.storageBytes; });
+  return out;
+}
+function teamsObjectCount() {
+  var t = DATA.tenantTotals && DATA.tenantTotals.teams;
+  return t ? (t.objectCount || 0) : (DATA.workloads.teams || []).length;
 }
 
 function distinctValues(rows, field) {
@@ -4186,8 +6446,11 @@ function rowSearchHaystack(row) {
   return row._searchHaystack;
 }
 
-function rowPassesFilters(row, wdKey) {
-  var f = state.activeFilters[wdKey] || {};
+// tkey identifies the table (see header). A "by group" table is fixed to its tier; a "by workload" table filters by tier chip.
+function rowPassesFilters(row, tkey) {
+  var meta = TKEY_META[tkey];
+  if (meta && meta.tier && row.Tier !== meta.tier) { return false; }
+  var f = state.activeFilters[tkey] || {};
   if (f.tier && f.tier !== "all" && row.Tier !== f.tier) { return false; }
   if (f.department && row.Department !== f.department) { return false; }
   if (f.employeeType && row.EmployeeType !== f.employeeType) { return false; }
@@ -4207,228 +6470,223 @@ function rowPassesFilters(row, wdKey) {
   return true;
 }
 
+function storageCellForTotals(wdKey, v) {
+  // getTierTotals() returns storage in the workload's own field unit (MB for mailboxes, GB for OneDrive/SharePoint).
+  return wdKey === "mailboxes" ? fmtStorageMB(v) : fmtStorageGBVal(v);
+}
+
+// Totals for a pre-filtered row subset (the "Filtered View" strip). Preview shows only the Group 1 cell (nothing else exists).
 function buildWorkloadTotalsRow(wdKey, rowsOverride, headingLabel) {
-  // rowsOverride/headingLabel (optional): render totals for a pre-filtered
-  // row subset instead of the whole workload, with a heading identifying
-  // it as such - used for the "Filtered View" breakdown in
-  // buildWorkloadSection so a filter like Department=Sales shows how many
-  // of THOSE rows fall in each tier, not just the whole workload's totals.
   var totals = getTierTotals(wdKey, rowsOverride);
-  var wd = WORKLOAD_DEFS.filter(function (w) { return w.key === wdKey; })[0];
+  var wd = wdByKey(wdKey);
   var heading = headingLabel ? ('<div class="totals-heading">' + esc(headingLabel) + "</div>") : "";
   var html = heading + '<div class="totals-grid">';
-  TIER_ORDER.forEach(function (t) {
+  (IS_PREVIEW ? ["Critical Group 1"] : TIER_ORDER).forEach(function (t) {
     var tt = totals[t];
-    var storageBit = wd.storageField ? (", " + tt.storageTotal.toFixed(1) + " " + wd.storageLabel.replace("Storage (", "").replace(")", "")) : "";
-    html += '<div class="totals-cell"><div class="label">' + TIER_META[t].short + '</div><div class="value">' + fmtNum(tt.objectCount) + " objs</div><div style=\"font-size:.72rem;color:var(--dark-gray);\">" + fmtNum(tt.itemTotal) + " " + wd.itemLabel.toLowerCase() + storageBit + "</div></div>";
+    var storageBit = wd.storageField ? (", " + storageCellForTotals(wdKey, tt.storageTotal)) : "";
+    var itemBit = wdKey === "teams" ? "" : (fmtNum(tt.itemTotal) + " " + wd.itemLabel.toLowerCase());
+    html += '<div class="totals-cell"><div class="label">' + TIER_META[t].named + '</div><div class="value">' + fmtNum(tt.objectCount) + ' objs</div><div class="totals-sub">' + itemBit + storageBit + "</div></div>";
   });
   html += "</div>";
   return html;
 }
 
-function buildWorkloadSection(wdKey) {
-  var wd = WORKLOAD_DEFS.filter(function (w) { return w.key === wdKey; })[0];
-  var rows = DATA.workloads[wdKey] || [];
-  var hasEnrichment = rows.some(function (r) { return !!r.JobTitle || !!r.Department; });
-  var hasMailboxType = wdKey === "mailboxes" && rows.some(function (r) { return !!r.MailboxTypeHeuristic; });
-  var hasGroups = rows.some(function (r) { return r.Groups && r.Groups.length; });
+// ---------- column definitions ----------
+function tierBadgeHtml(row) {
+  var tierMeta = TIER_META[row.Tier] || TIER_META[TIER_ORDER[TIER_ORDER.length - 1]];
+  var overrideBadge = row.IsOverride ? '<span class="badge override" title="' + esc(row.OverrideReason) + '">override</span>' : "";
+  return '<span class="badge" style="background:' + tierMeta.bg + ";color:" + tierMeta.fg + ';">' + tierMeta.short + "</span>" + overrideBadge;
+}
+function flagChipHtml(row) {
+  var out = "";
+  if (row._flags && row._flags.length) {
+    out += ' <span class="flag-chip" ' + navAttr("insights:insights-table") + ' title="Flagged by Recovery Insights: ' + esc(row._flags.join(", ")) + '">Flagged</span>';
+  }
+  if (isExcludedRow(row)) { out += ' <span class="flag-chip excluded" title="Left out of the headline recovery estimates (see Recovery Insights)">Excluded from estimates</span>'; }
+  return out;
+}
+function objColumns(wdKey, hasEnrichment, hasMailboxType, hasGroups) {
+  var wd = wdByKey(wdKey);
+  var edit = canEditTiers();
+  var itemsLabel = wdKey === "teams" ? "Users with recent activity" : wd.itemLabel;
+  var cols = [
+    { key: "name", label: "Object", type: "text", get: function (r) { return r.ObjectName || ""; }, cell: function (r) { return "<td>" + esc(r.ObjectName) + flagChipHtml(r) + "</td>"; } },
+    { key: "id", label: "Identifier", type: "text", get: function (r) { return r.Identifier || ""; }, cell: function (r) { return "<td>" + esc(r.Identifier) + "</td>"; } },
+    { key: "tier", label: "Tier", type: "text", get: function (r) { return r.Tier || ""; }, cell: function (r) {
+        var options = TIER_ORDER.map(function (t) { return '<option value="' + t + '"' + (r.Tier === t ? " selected" : "") + ">" + TIER_META[t].named + "</option>"; }).join("");
+        var sel = edit ? '<br><select class="tier-select" onchange="onTierDropdownChange(\'' + wdKey + "','" + String(r.Identifier).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + '\',this.value)">' + options + "</select>" : "";
+        return "<td>" + tierBadgeHtml(r) + sel + "</td>";
+      } },
+    { key: "score", label: "Score", type: "num", get: function (r) { return r._Score || 0; }, cell: function (r) {
+        var pct = Math.round((r._Score || 0) * 100);
+        return '<td data-sort="' + pct + '"><div class="score-bar-wrap"><div class="score-bar"><span style="width:' + pct + '%;"></span></div>' + pct + "%</div></td>";
+      } },
+    { key: "why", label: "Why", type: "text", cls: "col-detail", get: function (r) { return r.CriteriaTags || ""; }, cell: function (r) { return '<td class="criteria-tags col-detail">' + esc(r.CriteriaTags) + "</td>"; } },
+    { key: "last", label: "Last Activity", type: "text", get: function (r) { return r.LastActivityDate || ""; }, cell: function (r) { return "<td>" + esc(r.LastActivityDate) + "</td>"; } },
+    { key: "items", label: itemsLabel, type: "num", get: function (r) { return parseFloat(r.metrics[wd.itemField]) || 0; }, cell: function (r) { return "<td>" + fmtNum(r.metrics[wd.itemField]) + "</td>"; } }
+  ];
+  if (wd.storageField) {
+    cols.push({ key: "storage", label: storageHeader("Storage"), type: "num", get: function (r) { return rowStorageBytes(wdKey, r); }, cell: function (r) { return "<td>" + fmtStorageNum(rowStorageBytes(wdKey, r)) + "</td>"; } });
+  }
+  if (hasEnrichment) {
+    cols.push({ key: "title", label: "Job Title", type: "text", cls: "col-detail", get: function (r) { return r.JobTitle || ""; }, cell: function (r) { return '<td class="col-detail">' + esc(r.JobTitle) + "</td>"; } });
+    cols.push({ key: "dept", label: "Department", type: "text", cls: "col-detail", get: function (r) { return r.Department || ""; }, cell: function (r) { return '<td class="col-detail">' + esc(r.Department) + "</td>"; } });
+    cols.push({ key: "mgr", label: "Manager", type: "text", cls: "col-detail", get: function (r) { return r.Manager || ""; }, cell: function (r) { return '<td class="col-detail">' + esc(r.Manager) + "</td>"; } });
+  }
+  if (hasGroups) {
+    cols.push({ key: "groups", label: "Entra ID Groups", type: "text", cls: "col-detail", get: function (r) { return (r.Groups || []).join(", "); }, cell: function (r) { return '<td class="col-detail">' + esc((r.Groups || []).join(", ")) + "</td>"; } });
+  }
+  if (hasMailboxType) {
+    cols.push({ key: "mbtype", label: "Mailbox Type", type: "text", cls: "col-detail", get: function (r) { return r.MailboxTypeHeuristic || ""; }, cell: function (r) { return '<td class="col-detail">' + esc(r.MailboxTypeHeuristic) + "</td>"; } });
+  }
+  return cols;
+}
 
-  var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
+// ---------- the object table ----------
+// Builds the container for one table. Everything inside #otbl-<tkey> is re-rendered by rerenderObjTable(tkey).
+function buildObjectTable(tkey, wdKey, tierName) {
+  registerTable(tkey, wdKey, tierName);
+  SORT_RERENDER["obj-" + tkey] = function () { rerenderObjTable(tkey); };
+  if (typeof queueScrollAttach === "function") { queueScrollAttach(tkey); }
+  return '<div class="obj-table" id="otbl-' + tkey + '">' + buildObjectTableInner(tkey) + "</div>";
+}
+
+function buildObjectTableInner(tkey) {
+  var meta = TKEY_META[tkey];
+  var wdKey = meta.wdKey, fixedTier = meta.tier;
+  var wd = wdByKey(wdKey);
+  var allRows = DATA.workloads[wdKey] || [];
+  var scopeRows = fixedTier ? allRows.filter(function (r) { return r.Tier === fixedTier; }) : allRows;
+  var hasEnrichment = allRows.some(function (r) { return !!r.JobTitle || !!r.Department; });
+  var hasMailboxType = wdKey === "mailboxes" && allRows.some(function (r) { return !!r.MailboxTypeHeuristic; });
+  var hasGroups = allRows.some(function (r) { return r.Groups && r.Groups.length; });
+  var edit = canEditTiers();
+
+  var f = state.activeFilters[tkey] || (state.activeFilters[tkey] = {});
   var chips = "";
-  ["all"].concat(TIER_ORDER).forEach(function (t) {
-    var count = t === "all" ? rows.length : rows.filter(function (r) { return r.Tier === t; }).length;
-    var label = t === "all" ? "All" : TIER_META[t].short;
-    var activeClass = ((f.tier || "all") === t) ? " active" : "";
-    chips += '<button class="chip' + activeClass + '" onclick="setFilter(\'' + wdKey + '\',\'tier\',\'' + t + '\')">' + label + " (" + count + ")</button>";
-  });
+  if (!fixedTier) {
+    (IS_PREVIEW ? ["all", "Critical Group 1"] : ["all"].concat(TIER_ORDER)).forEach(function (t) {
+      var count = t === "all" ? scopeRows.length : scopeRows.filter(function (r) { return r.Tier === t; }).length;
+      var label = t === "all" ? (IS_PREVIEW ? "Group 1" : "All") : TIER_META[t].named;
+      var activeClass = ((f.tier || "all") === t) ? " active" : "";
+      chips += '<button class="chip' + activeClass + '" onclick="setFilter(\'' + tkey + '\',\'tier\',\'' + t + '\')">' + label + " (" + fmtNum(count) + ")</button>";
+    });
+  }
 
-  // Search box: free-text, matches ANY string field we have on the row (see
-  // rowSearchHaystack) - the fast way to find one specific object by name,
-  // title, department, manager, etc. without knowing which dropdown filter
-  // it'd fall under. oninput (live, as-you-type), not onchange, since this
-  // is the primary "find this one thing" control - rerenderWorkloadSection
-  // preserves focus/cursor position across the re-render so typing doesn't
-  // get interrupted.
-  var searchBox = '<input type="text" class="search-box" id="search-' + wdKey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="onSearchInput(\'' + wdKey + '\',this.value)">';
+  var searchBox = '<input type="text" class="search-box" id="search-' + tkey + '" placeholder="Search ' + esc(wd.label.toLowerCase()) + ' - name, title, department, manager, criteria..." value="' + esc(f.search || "") + '" oninput="onSearchInput(\'' + tkey + '\',this.value)" aria-label="Search ' + esc(wd.label) + '">';
 
   var attrFilters = "";
   if (hasEnrichment) {
-    attrFilters += buildSelectFilter(wdKey, "department", "Department", distinctValues(rows, "Department"));
-    attrFilters += buildSelectFilter(wdKey, "employeeType", "Employee Type", distinctValues(rows, "EmployeeType"));
-    attrFilters += buildSelectFilter(wdKey, "officeLocation", "Office Location", distinctValues(rows, "OfficeLocation"));
-    attrFilters += '<input type="text" id="titlefilter-' + wdKey + '" placeholder="Title contains..." value="' + esc(f.titleContains || "") + '" oninput="setFilter(\'' + wdKey + '\',\'titleContains\',this.value)" style="border:1px solid #D7DCE1;border-radius:6px;padding:.3rem .5rem;font-size:.78rem;">';
-    // Manager filter lives here (not in the scoring-weights panel) so
-    // "filter to this manager's org, then mass-reassign" is one motion.
-    // Same enrichment pull as JobTitle/Department, so gated the same way.
-    attrFilters += '<input type="text" id="managerfilter-' + wdKey + '" placeholder="Manager display name..." value="' + esc(f.manager || "") + '" oninput="setFilter(\'' + wdKey + '\',\'manager\',this.value)" style="border:1px solid #D7DCE1;border-radius:6px;padding:.3rem .5rem;font-size:.78rem;">';
+    attrFilters += buildSelectFilter(tkey, "department", "Department", distinctValues(scopeRows, "Department"));
+    attrFilters += buildSelectFilter(tkey, "employeeType", "Employee Type", distinctValues(scopeRows, "EmployeeType"));
+    attrFilters += buildSelectFilter(tkey, "officeLocation", "Office Location", distinctValues(scopeRows, "OfficeLocation"));
+    attrFilters += '<input type="text" class="attr-input" id="titlefilter-' + tkey + '" placeholder="Title contains..." value="' + esc(f.titleContains || "") + '" oninput="setFilter(\'' + tkey + '\',\'titleContains\',this.value)">';
+    attrFilters += '<input type="text" class="attr-input" id="managerfilter-' + tkey + '" placeholder="Manager display name..." value="' + esc(f.manager || "") + '" oninput="setFilter(\'' + tkey + '\',\'manager\',this.value)">';
   }
-  if (hasMailboxType) {
-    attrFilters += buildSelectFilter(wdKey, "mailboxType", "Mailbox Type", distinctValues(rows, "MailboxTypeHeuristic"));
-  }
-  if (wdKey === "sharepoint") {
-    attrFilters += buildSelectFilter(wdKey, "hubSite", "Hub Site", ["Yes", "No"]);
-  }
-  if (hasGroups) {
-    // Entra ID group filter, same relocation reasoning as the manager filter
-    // above - only rendered when this workload's rows actually carry group
-    // membership (i.e. -Groups was used), matching the Mailbox Type/Hub Site
-    // pattern of simply omitting filters for data that wasn't collected.
-    attrFilters += buildSelectFilter(wdKey, "group", "Entra ID Group", distinctGroupNames(rows));
-  }
+  if (hasMailboxType) { attrFilters += buildSelectFilter(tkey, "mailboxType", "Mailbox Type", distinctValues(scopeRows, "MailboxTypeHeuristic")); }
+  if (wdKey === "sharepoint") { attrFilters += buildSelectFilter(tkey, "hubSite", "Hub Site", ["Yes", "No"]); }
+  if (hasGroups) { attrFilters += buildSelectFilter(tkey, "group", "Entra ID Group", distinctGroupNames(scopeRows)); }
 
-  var visibleRows = rows.filter(function (r) { return rowPassesFilters(r, wdKey); });
-  var isFiltered = visibleRows.length !== rows.length;
-  var filteredTotalsHtml = isFiltered
-    ? buildWorkloadTotalsRow(wdKey, visibleRows, "Filtered View (" + visibleRows.length + " of " + rows.length + " shown)")
+  var visibleRows = scopeRows.filter(function (r) { return rowPassesFilters(r, tkey); });
+  var isFiltered = visibleRows.length !== scopeRows.length;
+  var filteredTotalsHtml = (isFiltered && !fixedTier && !IS_SUMMARY)
+    ? buildWorkloadTotalsRow(wdKey, visibleRows, "Filtered View (" + fmtNum(visibleRows.length) + " of " + fmtNum(scopeRows.length) + " shown)")
     : "";
 
-  var sortedVisible = visibleRows.slice().sort(function (a, b) { return (b._Score || 0) - (a._Score || 0); });
-  var showAll = !!state.showAllRows[wdKey];
+  var cols = objColumns(wdKey, hasEnrichment, hasMailboxType, hasGroups);
+  var sortedVisible = applySort(visibleRows, "obj-" + tkey, cols, "score", "desc");
+  var showAll = !!state.showAllRows[tkey];
   var renderedRows = showAll ? sortedVisible : sortedVisible.slice(0, MAX_TABLE_ROWS);
   var isCapped = !showAll && sortedVisible.length > MAX_TABLE_ROWS;
-  var bodyRows = renderedRows.map(function (row) {
-    return buildRowHtml(row, wd, wdKey, hasEnrichment, hasMailboxType, hasGroups);
-  }).join("");
-  if (!bodyRows) { bodyRows = '<tr><td colspan="12" style="text-align:center;color:var(--dark-gray);padding:2rem;white-space:normal;">No rows match the current filters.</td></tr>'; }
+  var bodyRows = renderedRows.map(function (row) { return "<tr>" + cols.map(function (c) { return c.cell(row); }).join("") + "</tr>"; }).join("");
+  if (!bodyRows) { bodyRows = '<tr class="no-sort-row"><td colspan="' + cols.length + '" class="empty-cell">No rows match the current filters.</td></tr>'; }
+  var s = getSort("obj-" + tkey, "score", "desc");
+  var sortNote = (s.col === "score" && s.dir === "desc") ? "sorted by score" : "sorted by your selected column";
   var capNoticeHtml = isCapped
-    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(sortedVisible.length) + ' rows, sorted by score - search or filter above to narrow, or <button onclick="setShowAllRows(\'' + wdKey + '\')">show all ' + fmtNum(sortedVisible.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    ? '<div class="table-cap-notice">Showing the first ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(sortedVisible.length) + ' rows (' + sortNote + ') - search or filter above to narrow, or <button onclick="setShowAllRows(\'' + tkey + '\')">show all ' + fmtNum(sortedVisible.length) + ' rows</button> (can be slow for a large tenant).</div>'
     : (showAll && sortedVisible.length > MAX_TABLE_ROWS
-      ? '<div class="table-cap-notice">Showing all ' + fmtNum(sortedVisible.length) + ' rows. <button onclick="setShowAllRows(\'' + wdKey + '\', true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
+      ? '<div class="table-cap-notice">Showing all ' + fmtNum(sortedVisible.length) + ' rows. <button onclick="setShowAllRows(\'' + tkey + '\', true)">Back to the first ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
       : "");
 
-  var extraHeaders = "";
-  if (hasEnrichment) { extraHeaders += '<th class="col-detail">Job Title</th><th class="col-detail">Department</th><th class="col-detail">Manager</th>'; }
-  if (hasGroups) { extraHeaders += '<th class="col-detail">Entra ID Groups</th>'; }
-  if (hasMailboxType) { extraHeaders += '<th class="col-detail">Mailbox Type</th>'; }
-
-  // NEW: presenter pass - per-workload "essentials only" column toggle, plus
-  // a scroll-for-more hint + fade affordance wired up by attachScrollAffordance()
-  // after this markup lands in the DOM (see renderGroupsTab/rerenderWorkloadSection).
-  var showDetail = state.columnPrefs[wdKey] !== false;
+  var showDetail = state.columnPrefs[tkey] !== false;
   var detailColLabels = ["Why / criteria tags"];
   if (hasEnrichment) { detailColLabels.push("Job Title", "Department", "Manager"); }
   if (hasGroups) { detailColLabels.push("Entra ID Groups"); }
   if (hasMailboxType) { detailColLabels.push("Mailbox Type"); }
   var toolbar = '<div class="table-toolbar">' +
-    '<label class="col-toggle"><input type="checkbox" id="coltoggle-' + wdKey + '"' + (showDetail ? " checked" : "") + ' onchange="onColumnToggleChange(\'' + wdKey + '\',this.checked)"> Show detail columns <span class="col-toggle-hint">(' + detailColLabels.join(", ") + ')</span></label>' +
-    '<span class="scroll-hint" id="scrollhint-' + wdKey + '">&#9664; scroll for more &#9654;</span>' +
+    '<label class="col-toggle"><input type="checkbox" id="coltoggle-' + tkey + '"' + (showDetail ? " checked" : "") + ' onchange="onColumnToggleChange(\'' + tkey + '\',this.checked)"> Show detail columns <span class="col-toggle-hint">(' + detailColLabels.join(", ") + ')</span></label>' +
+    '<span class="scroll-hint" id="scrollhint-' + tkey + '">&#9664; scroll for more &#9654;</span>' +
     "</div>";
 
-  var headerCount = isFiltered ? (fmtNum(visibleRows.length) + " of " + fmtNum(rows.length) + " shown") : String(rows.length);
+  var massBar = edit
+    ? '<div class="mass-edit-bar" id="mass-edit-bar-' + tkey + '">' +
+        '<span class="mass-edit-label">Mass-reassign all <b>' + fmtNum(visibleRows.length) + '</b> currently-filtered rows to:</span>' +
+        '<select id="mass-tier-' + tkey + '">' + TIER_ORDER.map(function (t) { return '<option value="' + t + '">' + TIER_META[t].named + '</option>'; }).join("") + '</select>' +
+        '<button onclick="massReassign(\'' + tkey + '\')">Apply</button></div>'
+    : "";
 
-  return '<section class="workload" id="wl-' + wdKey + '">' +
-    "<h3>" + esc(wd.label) + ' <span style="font-weight:400;font-size:.9rem;color:var(--dark-gray);">(' + headerCount + ")</span></h3>" +
-    buildWorkloadTotalsRow(wdKey, null, "All Objects") +
+  var headCount = isFiltered ? (fmtNum(visibleRows.length) + " of " + fmtNum(scopeRows.length) + " shown") : (fmtNum(scopeRows.length) + " objects");
+  var theadHtml = "<tr>" + cols.map(function (c) { return sortThHtml("obj-" + tkey, c, "score", "desc"); }).join("") + "</tr>";
+
+  return '<div class="obj-count">' + esc(wd.label) + (fixedTier ? " in " + TIER_META[fixedTier].named : "") + ' <span class="obj-count-n">(' + headCount + ")</span></div>" +
     '<div class="search-box-row">' + searchBox + "</div>" +
-    '<div class="filter-chips">' + chips + "</div>" +
-    '<div class="filter-chips" id="attr-filters-' + wdKey + '">' + attrFilters + "</div>" +
-    filteredTotalsHtml +
-    '<div class="mass-edit-bar" id="mass-edit-bar-' + wdKey + '">' +
-      '<span style="font-size:.78rem;color:var(--dark-gray);">Mass-reassign all <b>' + visibleRows.length + '</b> currently-filtered rows to:</span>' +
-      '<select id="mass-tier-' + wdKey + '">' + TIER_ORDER.map(function (t) { return '<option value="' + t + '">' + TIER_META[t].short + '</option>'; }).join("") + '</select>' +
-      '<button onclick="massReassign(\'' + wdKey + '\')">Apply</button>' +
-    "</div>" +
-    toolbar +
-    '<div class="table-scroll-shell" id="shell-' + wdKey + '">' +
-      '<div class="table-wrap' + (showDetail ? "" : " essentials-only") + '" id="tbl-wrap-' + wdKey + '"><table id="tbl-' + wdKey + '"><thead><tr>' +
-      '<th>Object</th><th>Identifier</th><th>Tier</th><th>Score</th><th class="col-detail">Why</th><th>Last Activity</th><th>' + wd.itemLabel + "</th>" + (wd.storageField ? "<th>" + wd.storageLabel + "</th>" : "") + extraHeaders +
-      "</tr></thead><tbody>" + bodyRows + "</tbody></table></div>" +
+    (chips ? '<div class="filter-chips">' + chips + "</div>" : "") +
+    (attrFilters ? '<div class="filter-chips" id="attr-filters-' + tkey + '">' + attrFilters + "</div>" : "") +
+    filteredTotalsHtml + massBar + toolbar +
+    '<div class="table-scroll-shell" id="shell-' + tkey + '">' +
+      '<div class="table-wrap' + (showDetail ? "" : " essentials-only") + '" id="tbl-wrap-' + tkey + '"><table id="tbl-' + tkey + '" data-datasort="1"><thead>' + theadHtml + "</thead><tbody>" + bodyRows + "</tbody></table></div>" +
       '<div class="scroll-fade-right" aria-hidden="true"></div>' +
-    "</div>" +
-    capNoticeHtml +
-    "</section>";
+    "</div>" + capNoticeHtml;
 }
 
-function buildSelectFilter(wdKey, field, label, values) {
-  // Reads the currently active value for this field so the dropdown shows
-  // the right selection after a re-render, instead of visually resetting to
-  // "All" every time (it was still filtering correctly before this fix -
-  // just looked like it had forgotten your selection).
-  var current = (state.activeFilters[wdKey] || {})[field] || "";
+function buildSelectFilter(tkey, field, label, values) {
+  // Reads the currently active value for this field so the dropdown shows the right selection after a re-render.
+  var current = (state.activeFilters[tkey] || {})[field] || "";
   var opts = '<option value=""' + (current === "" ? " selected" : "") + '>' + label + ": All</option>";
   values.forEach(function (v) { opts += '<option value="' + esc(v) + '"' + (current === v ? " selected" : "") + ">" + esc(v) + "</option>"; });
-  return '<select onchange="setFilter(\'' + wdKey + "','" + field + '\',this.value)">' + opts + "</select>";
+  return '<select aria-label="' + esc(label) + '" onchange="setFilter(\'' + tkey + "','" + field + '\',this.value)">' + opts + "</select>";
 }
 
-function buildRowHtml(row, wd, wdKey, hasEnrichment, hasMailboxType, hasGroups) {
-  var tierMeta = TIER_META[row.Tier] || TIER_META[TIER_ORDER[TIER_ORDER.length - 1]];
-  var overrideBadge = row.IsOverride ? '<span class="badge override" title="' + esc(row.OverrideReason) + '">override</span>' : "";
-  var pct = Math.round((row._Score || 0) * 100);
-  var options = TIER_ORDER.map(function (t) {
-    return '<option value="' + t + '"' + (row.Tier === t ? " selected" : "") + ">" + TIER_META[t].short + "</option>";
-  }).join("");
-  var extra = "";
-  if (hasEnrichment) {
-    extra += '<td class="col-detail">' + esc(row.JobTitle) + '</td><td class="col-detail">' + esc(row.Department) + '</td><td class="col-detail">' + esc(row.Manager) + "</td>";
-  }
-  if (hasGroups) { extra += '<td class="col-detail">' + esc((row.Groups || []).join(", ")) + "</td>"; }
-  if (hasMailboxType) { extra += '<td class="col-detail">' + esc(row.MailboxTypeHeuristic) + "</td>"; }
-  return "<tr>" +
-    "<td>" + esc(row.ObjectName) + "</td>" +
-    "<td>" + esc(row.Identifier) + "</td>" +
-    '<td><span class="badge" style="background:' + tierMeta.bg + ";color:" + tierMeta.fg + ';">' + tierMeta.short + "</span>" + overrideBadge +
-      '<br><select class="tier-select" onchange="onTierDropdownChange(\'' + wdKey + "','" + row.Identifier.replace(/'/g, "\\'") + '\',this.value)">' + options + "</select></td>" +
-    '<td><div class="score-bar-wrap"><div class="score-bar"><span style="width:' + pct + '%;"></span></div>' + pct + "%</div></td>" +
-    '<td class="criteria-tags col-detail">' + esc(row.CriteriaTags) + "</td>" +
-    "<td>" + esc(row.LastActivityDate) + "</td>" +
-    "<td>" + fmtNum(row.metrics[wd.itemField]) + "</td>" +
-    (wd.storageField ? "<td>" + (parseFloat(row.metrics[wd.storageField]) || 0).toFixed(2) + "</td>" : "") +
-    extra + "</tr>";
-}
-
-function setFilter(wdKey, field, value) {
-  var f = state.activeFilters[wdKey] || (state.activeFilters[wdKey] = {});
+function setFilter(tkey, field, value) {
+  var f = state.activeFilters[tkey] || (state.activeFilters[tkey] = {});
   f[field] = value;
-  rerenderWorkloadSection(wdKey);
+  rerenderObjTable(tkey);
 }
 
-// NEW v3.10.3: see MAX_TABLE_ROWS above. reset=true flips back to the fast,
-// capped view; omitted/false renders every row currently passing filters.
-function setShowAllRows(wdKey, reset) {
-  state.showAllRows[wdKey] = !reset;
-  rerenderWorkloadSection(wdKey);
+// See MAX_TABLE_ROWS (Engine). reset=true flips back to the fast, capped view; omitted/false renders every row passing filters.
+function setShowAllRows(tkey, reset) {
+  state.showAllRows[tkey] = !reset;
+  rerenderObjTable(tkey);
 }
 
-// Same idea as setShowAllRows, for the standalone Group 1 cross-workload
-// overview table (buildGroup1Overview) rather than a per-workload section.
-function setGroup1ShowAll(reset) {
-  state.group1ShowAll = !reset;
-  refreshGroupsBody();
-}
-
-// NEW v3.10.3: debounces the live search box so a fast typist on a large
-// tenant doesn't trigger a full filter+sort+render on every keystroke - only
-// once input has paused for SEARCH_DEBOUNCE_MS. The <input> itself is never
-// re-created mid-type (rerenderWorkloadSection already preserves focus/cursor
-// position), this just delays how often that rebuild actually fires.
+// Debounces the live search box so a fast typist on a large tenant doesn't trigger a full filter+sort+render on every keystroke.
 var SEARCH_DEBOUNCE_MS = 250;
 var searchDebounceTimers = {};
-function onSearchInput(wdKey, value) {
-  clearTimeout(searchDebounceTimers[wdKey]);
-  searchDebounceTimers[wdKey] = setTimeout(function () { setFilter(wdKey, "search", value); }, SEARCH_DEBOUNCE_MS);
+function onSearchInput(tkey, value) {
+  clearTimeout(searchDebounceTimers[tkey]);
+  searchDebounceTimers[tkey] = setTimeout(function () { setFilter(tkey, "search", value); }, SEARCH_DEBOUNCE_MS);
 }
 
 function onTierDropdownChange(wdKey, identifier, newTier) {
+  if (!canEditTiers()) { return; }
   setOverride(wdKey, identifier, newTier, "Manual (dropdown)");
   recomputeAll();
 }
 
-function massReassign(wdKey) {
-  var sel = document.getElementById("mass-tier-" + wdKey);
+function massReassign(tkey) {
+  if (!canEditTiers()) { return; }
+  var meta = TKEY_META[tkey];
+  var sel = document.getElementById("mass-tier-" + tkey);
   var tier = sel.value;
-  var rows = (DATA.workloads[wdKey] || []).filter(function (r) { return rowPassesFilters(r, wdKey); });
-  rows.forEach(function (r) { setOverride(wdKey, r.Identifier, tier, "Mass reassignment via filter"); });
+  var rows = (DATA.workloads[meta.wdKey] || []).filter(function (r) { return rowPassesFilters(r, tkey); });
+  rows.forEach(function (r) { setOverride(meta.wdKey, r.Identifier, tier, "Mass reassignment via filter"); });
   recomputeAll();
 }
 
-function rerenderWorkloadSection(wdKey) {
-  // The search box (and title-contains box) filter live, on every keystroke
-  // (oninput), which rebuilds this whole section's HTML each time. Without
-  // this, replacing outerHTML destroys and recreates the <input> the user
-  // is typing into, so it loses focus after every character - unusable for
-  // a search box. Capture the focused element (if it's inside this section)
-  // before replacing, then restore focus + cursor position by id afterward.
-  var el = document.getElementById("wl-" + wdKey);
+function rerenderObjTable(tkey) {
+  // Search/title boxes filter live on every keystroke, which rebuilds the table's HTML each time. Capture the focused
+  // element (if inside this table) and restore focus + cursor position by id afterwards, or typing would be interrupted.
+  var el = document.getElementById("otbl-" + tkey);
   if (!el) { return; }
   var active = document.activeElement;
   var restoreId = null, restoreStart = null, restoreEnd = null;
@@ -4436,8 +6694,8 @@ function rerenderWorkloadSection(wdKey) {
     restoreId = active.id;
     if (typeof active.selectionStart === "number") { restoreStart = active.selectionStart; restoreEnd = active.selectionEnd; }
   }
-  el.outerHTML = buildWorkloadSection(wdKey);
-  attachScrollAffordance(wdKey);
+  el.innerHTML = buildObjectTableInner(tkey);
+  attachScrollAffordance(tkey);
   if (restoreId) {
     var restored = document.getElementById(restoreId);
     if (restored) {
@@ -4449,39 +6707,91 @@ function rerenderWorkloadSection(wdKey) {
   }
 }
 
-// NEW: presenter pass - column-visibility toggle + scroll affordances. Kept
-// here (once) alongside buildWorkloadSection since that is the one shared
-// per-workload table helper used by all five workload tabs, rather than
-// duplicating this per-workload.
-function onColumnToggleChange(wdKey, checked) {
-  state.columnPrefs[wdKey] = checked;
+// Column-visibility toggle + scroll affordances.
+function onColumnToggleChange(tkey, checked) {
+  state.columnPrefs[tkey] = checked;
   saveColumnPrefsToStorage();
-  var wrap = document.getElementById("tbl-wrap-" + wdKey);
+  var wrap = document.getElementById("tbl-wrap-" + tkey);
   if (wrap) { wrap.classList.toggle("essentials-only", !checked); }
-  refreshScrollAffordance(wdKey);
+  refreshScrollAffordance(tkey);
 }
 
-function refreshScrollAffordance(wdKey) {
-  var wrap = document.getElementById("tbl-wrap-" + wdKey);
-  var shell = document.getElementById("shell-" + wdKey);
-  var hint = document.getElementById("scrollhint-" + wdKey);
-  if (!wrap || !shell) { return; }
-  var hasOverflow = wrap.scrollWidth > wrap.clientWidth + 2;
-  var atRightEdge = (wrap.scrollLeft + wrap.clientWidth) >= (wrap.scrollWidth - 2);
-  shell.classList.toggle("has-more-right", hasOverflow && !atRightEdge);
-  if (hint) { hint.style.display = hasOverflow ? "" : "none"; }
+// key is a table key OR a workload key (Bootstrap's resize handler passes workload keys): refresh every table of that workload.
+function refreshScrollAffordance(key) {
+  var keys = [];
+  if (TKEY_META[key]) { keys.push(key); }
+  Object.keys(TKEY_META).forEach(function (k) { if (TKEY_META[k].wdKey === key && keys.indexOf(k) === -1) { keys.push(k); } });
+  keys.forEach(function (tkey) {
+    var wrap = document.getElementById("tbl-wrap-" + tkey);
+    var shell = document.getElementById("shell-" + tkey);
+    var hint = document.getElementById("scrollhint-" + tkey);
+    if (!wrap || !shell) { return; }
+    var hasOverflow = wrap.scrollWidth > wrap.clientWidth + 2;
+    var atRightEdge = (wrap.scrollLeft + wrap.clientWidth) >= (wrap.scrollWidth - 2);
+    shell.classList.toggle("has-more-right", hasOverflow && !atRightEdge);
+    if (hint) { hint.style.display = hasOverflow ? "" : "none"; }
+  });
 }
 
-function attachScrollAffordance(wdKey) {
-  var wrap = document.getElementById("tbl-wrap-" + wdKey);
-  var hint = document.getElementById("scrollhint-" + wdKey);
+function attachScrollAffordance(tkey) {
+  var wrap = document.getElementById("tbl-wrap-" + tkey);
+  var hint = document.getElementById("scrollhint-" + tkey);
   if (!wrap) { return; }
   wrap.addEventListener("scroll", function () {
     if (hint && wrap.scrollLeft > 4) { hint.classList.add("scrolled"); }
-    refreshScrollAffordance(wdKey);
+    refreshScrollAffordance(tkey);
   });
-  refreshScrollAffordance(wdKey);
+  refreshScrollAffordance(tkey);
 }
+
+// ---------- Group 1, every workload in one list (the "confirm your Group 1" list) ----------
+function g1AllCols() {
+  return [
+    { key: "wl", label: "Workload", type: "text", get: function (c) { return c.workload; } },
+    { key: "name", label: "Object", type: "text", get: function (c) { return c.objectName; } },
+    { key: "id", label: "Identifier", type: "text", get: function (c) { return c.identifier; } },
+    { key: "score", label: "Score", type: "num", get: function (c) { return c.score; } },
+    { key: "why", label: "Why", type: "text", get: function (c) { return c.tags; } },
+    { key: "last", label: "Last Activity", type: "text", get: function (c) { return c.lastActivity; } },
+    { key: "items", label: "Items / files", type: "num", get: function (c) { return c.items; } },
+    { key: "storage", label: storageHeader("Storage"), type: "num", get: function (c) { return c.storageBytes; } }
+  ];
+}
+function buildGroup1AllInner() {
+  var combined = [];
+  WORKLOAD_DEFS.forEach(function (wd) {
+    (DATA.workloads[wd.key] || []).filter(function (r) { return r.Tier === "Critical Group 1"; }).forEach(function (r) {
+      combined.push({ workload: wd.label, objectName: r.ObjectName, identifier: r.Identifier, score: r._Score || 0, lastActivity: r.LastActivityDate || "", tags: r.CriteriaTags || "", flagged: !!(r._flags && r._flags.length), items: wd.storageField ? (parseFloat(r.metrics[wd.itemField]) || 0) : null, storageBytes: wd.storageField ? rowStorageBytes(wd.key, r) : null });
+    });
+  });
+  var cols = g1AllCols();
+  var sorted = applySort(combined, "g1all", cols, "score", "desc");
+  var showAll = !!state.group1ShowAll;
+  var rendered = showAll ? sorted : sorted.slice(0, MAX_TABLE_ROWS);
+  var capped = !showAll && sorted.length > MAX_TABLE_ROWS;
+  var rows = rendered.map(function (c) {
+    return "<tr><td>" + esc(c.workload) + "</td><td>" + esc(c.objectName) + (c.flagged ? ' <span class="flag-chip" ' + navAttr("insights:insights-table") + '>Flagged</span>' : "") + "</td><td>" + esc(c.identifier) + '</td><td data-sort="' + Math.round(c.score * 100) + '">' + Math.round(c.score * 100) + '%</td><td class="criteria-tags">' + esc(c.tags) + "</td><td>" + esc(c.lastActivity) + "</td><td>" + (c.items === null ? "&mdash;" : fmtNum(c.items)) + "</td><td>" + (c.storageBytes === null ? "&mdash;" : fmtStorageNum(c.storageBytes)) + "</td></tr>";
+  }).join("") || '<tr class="no-sort-row"><td colspan="8" class="empty-cell">No Critical Group 1 objects.</td></tr>';
+  var cap = capped
+    ? '<div class="table-cap-notice">Showing the first ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(sorted.length) + ' rows - <button onclick="setGroup1ShowAll()">show all ' + fmtNum(sorted.length) + ' rows</button> (can be slow for a large tenant).</div>'
+    : (showAll && sorted.length > MAX_TABLE_ROWS ? '<div class="table-cap-notice">Showing all ' + fmtNum(sorted.length) + ' rows. <button onclick="setGroup1ShowAll(true)">Back to the first ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>' : "");
+  return '<h4 class="g1all-title">Every Critical Group 1 object, all workloads <span class="obj-count-n">(' + fmtNum(combined.length) + ')</span></h4>' +
+    '<p class="pill-note">The full recover-first list in one place' + (IS_PREVIEW ? "." : ". Recomputes live with the scoring controls.") + '</p>' +
+    '<div class="table-wrap"><table data-datasort="1"><thead><tr>' + cols.map(function (c) { return sortThHtml("g1all", c, "score", "desc"); }).join("") + "</tr></thead><tbody>" + rows + "</tbody></table></div>" + cap;
+}
+function buildGroup1All() {
+  SORT_RERENDER["g1all"] = rerenderGroup1All;
+  return '<section class="g1all" id="group1-overview"><div id="g1all-inner">' + buildGroup1AllInner() + "</div></section>";
+}
+function rerenderGroup1All() {
+  var el = document.getElementById("g1all-inner");
+  if (el) { el.innerHTML = buildGroup1AllInner(); }
+}
+function setGroup1ShowAll(reset) {
+  state.group1ShowAll = !reset;
+  rerenderGroup1All();
+}
+
 '@
 
 #endregion
@@ -4540,7 +6850,7 @@ function toggleTitleWeightTable() {
 }
 
 function buildControlsSliders() {
-  var html = '<div class="controls-panel"><h4 class="panel-title">Live scoring controls</h4>' +
+  var html = '<div class="controls-panel" id="scoring-panel"><h4 class="panel-title">' + (canEditTiers() ? "Live scoring controls" : "Scoring controls") + '</h4>' +
     '<p class="panel-sub">Each workload\'s metrics are weighted as a share of <b>100%</b> - adjust one and everything below recomputes instantly. Title-weight and hub-site bonus further down are separate <b>bonus points added on top</b>, capped so no single factor can dominate a score.</p>';
   WORKLOAD_DEFS.filter(function (w) { return w.spExOd !== null || w.key === "teams"; }).forEach(function (wd) {
     var weights = state.weights[wd.key] || {};
@@ -4553,7 +6863,7 @@ function buildControlsSliders() {
     });
     html += '<div class="remaining-hint" id="wremain-' + wd.key + '"></div></div>';
   });
-  html += '<div class="bonus-section"><div class="bonus-label-row"><b style="font-size:.8rem;color:var(--navy);">Bonus modifiers</b><span class="bonus-tag">Additive, not part of the 100%</span></div>' +
+  html += '<div class="bonus-section"><div class="bonus-label-row"><b class="bonus-title">Bonus modifiers</b><span class="bonus-tag">Additive, not part of the 100%</span></div>' +
     '<p class="bonus-hint">Layered on top of a workload\'s score above. Capped so an object can\'t exceed a perfect score from bonuses alone.</p>';
   var twPct = Math.round(state.titleWeightContribution * 100);
   var hsPct = Math.round(state.hubSiteBonus * 100);
@@ -4603,7 +6913,7 @@ function onWeightSlide(el) {
   // CHANGED: used to call recomputeTiersLive() here, on every single oninput
   // tick - dragging a slider fires this dozens of times a second, and
   // recomputeTiersLive() rebuilds full HTML tables across all four workloads
-  // (thousands of rows on a real tenant), which is what made dragging feel
+  // (thousands of rows on a live tenant), which is what made dragging feel
   // slow. Now a drag only ever touches this slider's own value/label/total -
   // genuinely cheap - and marks the output areas (Live Impact Preview + the
   // group tables below) as stale. The actual recompute happens once, on
@@ -4713,7 +7023,7 @@ function buildLiveImpactPreview(computed) {
     var groupTotal = 0;
     WORKLOAD_DEFS.forEach(function (wd) { groupTotal += wdData[wd.key].counts[tier]; });
     html += '<div class="group-section"><div class="group-head"><span class="tier-dot" style="background:' + TIER_META[tier].bg + ';"></span>' +
-      '<span class="group-name">' + TIER_META[tier].short + '</span><span class="group-total">' + fmtNum(groupTotal) + ' objects</span></div>';
+      '<span class="group-name">' + TIER_META[tier].named + '</span><span class="group-total">' + fmtNum(groupTotal) + ' objects</span></div>';
     WORKLOAD_DEFS.forEach(function (wd) {
       var d = wdData[wd.key];
       var count = d.counts[tier];
@@ -4734,12 +7044,6 @@ function buildLiveImpactPreview(computed) {
   });
   html += '<span class="reset-link" onclick="resetImpactBaseline()">Reset comparison baseline</span></div></div>';
   return html;
-}
-
-function refreshImpactPreview() {
-  var el = document.getElementById("impact-preview-wrap");
-  if (!el) { return; }
-  el.innerHTML = buildLiveImpactPreview(computeImpactData());
 }
 
 function resetImpactBaseline() {
@@ -4776,71 +7080,297 @@ function onTitleWeightWeightChange(idx, value) {
 function removeTitleWeightRow(idx) { state.titleWeightRows.splice(idx, 1); syncTitleWeights(); recomputeAll(); }
 function addTitleWeightRow() { state.titleWeightRows.push({ keyword: "", weight: 0.5 }); syncTitleWeights(); recomputeAll(); }
 
-function buildGroup1Overview() {
-  var combined = [];
-  WORKLOAD_DEFS.forEach(function (wd) {
-    (DATA.workloads[wd.key] || []).filter(function (r) { return r.Tier === "Critical Group 1"; }).forEach(function (r) {
-      combined.push({ workload: wd.label, objectName: r.ObjectName, identifier: r.Identifier, score: r._Score || 0, lastActivity: r.LastActivityDate, tags: r.CriteriaTags });
-    });
-  });
-  combined.sort(function (a, b) { return b.score - a.score; });
-  var g1ShowAll = !!state.group1ShowAll;
-  var g1Rendered = g1ShowAll ? combined : combined.slice(0, MAX_TABLE_ROWS);
-  var g1Capped = !g1ShowAll && combined.length > MAX_TABLE_ROWS;
-  var rows = g1Rendered.map(function (c) {
-    return "<tr><td>" + esc(c.workload) + "</td><td>" + esc(c.objectName) + "</td><td>" + esc(c.identifier) + "</td><td>" + Math.round(c.score * 100) + '%</td><td class="criteria-tags">' + esc(c.tags) + "</td><td>" + esc(c.lastActivity) + "</td></tr>";
-  }).join("") || '<tr><td colspan="6" style="text-align:center;color:var(--dark-gray);padding:2rem;">No Critical Group 1 objects.</td></tr>';
-  var g1CapNoticeHtml = g1Capped
-    ? '<div class="table-cap-notice">Showing the top ' + fmtNum(MAX_TABLE_ROWS) + ' of ' + fmtNum(combined.length) + ' rows, sorted by score - <button onclick="setGroup1ShowAll()">show all ' + fmtNum(combined.length) + ' rows</button> (can be slow for a large tenant).</div>'
-    : (g1ShowAll && combined.length > MAX_TABLE_ROWS
-      ? '<div class="table-cap-notice">Showing all ' + fmtNum(combined.length) + ' rows. <button onclick="setGroup1ShowAll(true)">Back to top ' + fmtNum(MAX_TABLE_ROWS) + '</button></div>'
-      : "");
-  return '<section class="workload" id="group1-overview"><h3>Critical Group 1 - All Workloads <span style="font-weight:400;font-size:.9rem;color:var(--dark-gray);">(' + combined.length + ')</span></h3>' +
-    '<p class="pill-note">Every object tiered Critical Group 1, across all five workloads, in one place - the full recover-first picture. Recomputes live with the controls above.</p>' +
-    '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Score</th><th>Why</th><th>Last Activity</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
-    g1CapNoticeHtml + "</section>";
+// ===================================================================================
+// v2.0 "Groups & Recovery Model" tab
+//   [Scoring & recovery inputs]  collapsed panel (sliders, keywords, RTO targets, window, tier, $/hr)
+//   [Group 1 headline]           hours saved (big), Group 1 online time, per-workload table, cost avoided
+//   [By group]                   Group 1-4 accordions, all collapsed (Preview: Group 1 + one "Remaining groups" card)
+//   ---- Or slice by workload ----
+//   [By workload]                Exchange / OneDrive / SharePoint / Teams accordions, all collapsed
+// ===================================================================================
+var IMPACT_CACHE = null;
+var PENDING_ATTACH = [];
+var pendingAttachTimer = null;
+function queueScrollAttach(tkey) {
+  PENDING_ATTACH.push(tkey);
+  if (pendingAttachTimer) { return; }
+  // Accordion bodies are inserted AFTER their html builder returns, so wire up the scroll hints one tick later.
+  pendingAttachTimer = setTimeout(function () {
+    pendingAttachTimer = null;
+    var keys = PENDING_ATTACH; PENDING_ATTACH = [];
+    keys.forEach(function (k) { attachScrollAffordance(k); });
+  }, 0);
 }
 
-// Split into a controls-grid (sliders + Live Impact Preview) that's built
-// ONCE per full render, and a groups-body-wrap (Group 1 overview + the five
-// workload sections) that's rebuilt separately by refreshGroupsBody(). Slider
-// drags call recomputeTiersLive() -> refreshGroupsBody() only, so the sliders
-// and their surrounding markup are never touched/re-created mid-drag.
+if (!INFO["cost-avoided"]) {
+  registerInfo("cost-avoided", "How we estimate cost avoided",
+    "<p><b>Baseline:</b> restoring the whole tenant as one undifferentiated job (Mass Recovery). Nothing is usable until that job finishes.</p>" +
+    "<p><b>With ABR:</b> Autonomous Business Recovery brings Group 1 back first, then Groups 2 and 3, so the people and sites you depend on are working while the rest restores.</p>" +
+    "<p><b>Hours saved</b> = whole-tenant Mass Recovery time minus the time until that group is online. It is never shown as negative. <b>Cost avoided</b> = hours saved &times; the downtime cost per hour you enter. No rate is assumed.</p>" +
+    "<p>Groups 2 and 3 save less because by then ABR and Mass Recovery are close to moving the same total data through the same throughput.</p>");
+}
+registerInfo("abr-vs-mass", "ABR vs Mass Recovery",
+  "<p><b>ABR</b> (Autonomous Business Recovery) restores each object's recent data first, one group at a time. <b>Mass Recovery</b> restores everything as one undifferentiated batch.</p>" +
+  "<p>For a given group, the Mass Recovery figure restores that same cumulative set (Groups 1 through this one) as one batch. The two converge for the whole tenant: prioritizing does not shrink the total time, it changes <b>when</b> each group comes back.</p>");
+
+function tierLabelHtml(tierName) {
+  var meta = TIER_META[tierName];
+  var sub = tierName === "Group 4" ? "recovered last" : (tierName === "Critical Group 1" ? "recover first" : "");
+  return '<span class="tier-dot" style="background:' + meta.bg + ';"></span>' + meta.named + (sub ? ' <span class="acc-sub">' + sub + "</span>" : "");
+}
+
+// ---------- scoring & recovery inputs ----------
+function buildControlsPanelBody() {
+  var inner = '<div class="controls-panel-grid"><div id="controls-sliders-wrap">' + buildControlsSliders() + "</div>" +
+    (canEditTiers() ? '<div id="impact-preview-wrap">' + buildLiveImpactPreview(IMPACT_CACHE || computeImpactData()) + "</div>" : "") +
+    "</div>" + buildRecoveryControls();
+  if (canEditTiers()) { return inner; }
+  return '<div class="locked-note">Locked in the ' + (IS_PREVIEW ? "Preview" : "Summary") + ' - adjust in the full assessment. These are the settings that produced Group 1 below. ' +
+    '<a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">Contact your Rubrik representative</a>.</div>' +
+    '<fieldset class="locked-controls" disabled>' + inner + "</fieldset>";
+}
+function controlsSummaryHtml() {
+  return "<span><b>" + groupN() + "</b> criticality groups</span><span>Group 1 Recovery Window (RTO) <b>" + state.recovery.group1Hours + " hr</b></span><span>Recent-data window <b>" + state.recovery.windowDays + " days</b></span>" +
+    (canEditTiers() ? "" : '<span class="lock-tag">Locked</span>');
+}
+
+// ---------- Group 1 headline ----------
+function buildExclusionNote() {
+  if (IS_PREVIEW || IS_SUMMARY || typeof getInsightsSummary !== "function") { return ""; }
+  var s = getInsightsSummary();
+  if (!s || !(s.excludedCount > 0)) { return ""; }
+  var h = s.headline;
+  var cmp = (h && isFinite(h.excludedG1Min) && isFinite(h.includedG1Min))
+    ? " Group 1: " + fmtMin(h.excludedG1Min) + " with them left out, " + fmtMin(h.includedG1Min) + " if included." : "";
+  var excl = state.insights.exclude;
+  return '<div class="grp-exclusion-note"><span>' + (excl
+    ? fmtNum(s.excludedCount) + " flagged object" + (s.excludedCount === 1 ? " is" : "s are") + " left out of these estimates." + cmp
+    : fmtNum(s.excludedCount) + " flagged object" + (s.excludedCount === 1 ? " is" : "s are") + " included in these estimates." + cmp) +
+    ' <span class="linkout" ' + navAttr("insights:insights-summary") + '>See Recovery Insights</span></span>' +
+    '<button type="button" onclick="setExcludeOutliers(' + (excl ? "false" : "true") + ')">' + (excl ? "Include them" : "Leave them out") + "</button></div>";
+}
+
+function buildGroup1Headline(model) {
+  var ca = computeCostAvoided(model);
+  var g1 = ca.rows[0];
+  var m1 = model.milestones["Critical Group 1"];
+  var tot = groupTotalsAll("Critical Group 1");
+  var teamsG1 = groupTotals("teams", "Critical Group 1");
+
+  var big, bigSub;
+  if (g1.locked) { big = pvLocked("0.0 hr"); bigSub = ""; }
+  else {
+    big = fmtMin(g1.savedMin);
+    bigSub = "Group 1 is online in <b>" + fmtMin(g1.abrMin) + "</b> instead of waiting <b>" + fmtMin(g1.baselineMin) + "</b> for the whole-tenant Mass Recovery to finish." +
+      (m1.exceedsTarget ? ' <span class="badge exceeds-target">Exceeds target</span>' : "");
+  }
+  var moneyBig = ca.hasRate && !g1.locked ? fmtMoney(g1.cost) : "&mdash;";
+  var smallRows = ca.rows.slice(1).map(function (r) {
+    var val = r.locked ? pvLocked("0.0 hr") : (r.savedHours.toFixed(1) + " hr sooner" + (ca.hasRate ? " &middot; " + fmtMoney(r.cost) : ""));
+    return '<div class="hl-small"><span class="hl-small-label">' + r.label + "</span><span>" + val + "</span></div>";
+  }).join("");
+
+  var wlRows = WORKLOAD_DEFS.map(function (wd) {
+    var t = groupTotals(wd.key, "Critical Group 1") || { objects: 0, items: 0, storageBytes: 0 };
+    var has = wd.key !== "teams";
+    return "<tr " + navAttr("groups:wl-" + wd.key + ":wl-" + wd.key) + "><td>" + esc(wd.label) + "</td><td>" + fmtNum(t.objects) + "</td><td>" + (has ? fmtNum(t.items) : "&ndash;") + "</td><td>" + (has ? fmtStorageNum(t.storageBytes) : "&ndash;") + "</td></tr>";
+  }).join("");
+  var totalRow = '<tr class="no-sort-row total-row" ' + navAttr("groups:grp-by-group:grp-g1") + "><td><b>Total</b></td><td><b>" + fmtNum(tot.objects) + "</b></td><td><b>" + fmtNum(tot.items) + "</b></td><td><b>" + fmtStorageNum(tot.storageBytes) + "</b></td></tr>";
+
+  var html = '<section class="grp-headline" id="grp-headline"><h3 class="grp-section-title">Group 1 headline</h3>' +
+    '<div class="hl-grid">' +
+      '<div class="hl-card hl-time" ' + navAttr("groups:grp-by-group:grp-g1") + '><div class="hl-label">Hours saved for Group 1 ' + infoBtn("cost-avoided") + '</div><div class="hl-big">' + big + '</div><div class="hl-sub">' + bigSub + "</div></div>" +
+      '<div class="hl-card hl-money"><div class="hl-label">Potential cost avoided, Group 1 ' + infoBtn("cost-avoided") + '</div><div class="hl-big">' + moneyBig + "</div>" +
+        (ca.hasRate ? "" : '<div class="hl-sub">' + costPromptHtml() + "</div>") +
+        '<div class="hl-smalls">' + smallRows + "</div></div>" +
+    "</div>" +
+    buildExclusionNote() +
+    '<div class="table-wrap"><table class="hl-wl-table"><thead><tr><th>Group 1 by workload</th><th>Objects</th><th>Items</th><th>' + storageHeader("Storage") + "</th></tr></thead><tbody>" + wlRows + totalRow + "</tbody></table></div>" +
+    (teamsG1 ? '<div class="pill-note">Teams have no item or storage figures; they are counted as objects and tiered by activity.</div>' : "") +
+    "</section>";
+  return html;
+}
+
+// ---------- By group ----------
+function groupSummaryHtml(tierName, model) {
+  var tot = groupTotalsAll(tierName);
+  var m = model.milestones[tierName];
+  var abr = tierName === "Group 4" ? "recovered last" : (m && !m.locked ? "ABR online in " + fmtMin(m.wallClockCumMin) : "");
+  var exceeds = (m && !m.locked && m.exceedsTarget) ? '<span class="badge exceeds-target">Exceeds target</span>' : "";
+  return "<span><b>" + fmtNum(tot.objects) + "</b> objects</span><span><b>" + fmtNum(tot.items) + "</b> items</span><span><b>" + fmtStorage(tot.storageBytes) + "</b></span>" +
+    (abr ? "<span><b>" + abr + "</b></span>" : "") + exceeds;
+}
+
+function setGroupWl(tierName, wlKey) {
+  uiState.groupWl = uiState.groupWl || {};
+  uiState.groupWl[tierName] = wlKey;
+  var el = document.getElementById("gwl-" + tierIdOf(tierName));
+  if (el) { el.innerHTML = buildGroupWorkloadPicker(tierName); enhanceTables(el); }
+}
+function buildGroupWorkloadPicker(tierName) {
+  var id = tierIdOf(tierName);
+  uiState.groupWl = uiState.groupWl || {};
+  var sel = uiState.groupWl[tierName];
+  if (!sel) {
+    var firstWith = WORKLOAD_DEFS.filter(function (wd) { var t = groupTotals(wd.key, tierName); return t && t.objects > 0; })[0];
+    sel = (firstWith || WORKLOAD_DEFS[0]).key;
+  }
+  var chips = WORKLOAD_DEFS.map(function (wd) {
+    var t = groupTotals(wd.key, tierName) || { objects: 0 };
+    return '<button type="button" class="chip' + (sel === wd.key ? " active" : "") + '" onclick="setGroupWl(\'' + tierName + '\',\'' + wd.key + '\')">' + esc(wd.label) + " (" + fmtNum(t.objects) + ")</button>";
+  }).join("");
+  return '<div class="filter-chips grp-wl-chips" role="group" aria-label="Workload">' + chips + "</div>" + buildObjectTable(id + "-" + sel, sel, tierName);
+}
+
+function buildGroupBody(tierName) {
+  var model = computeRecoveryModel();
+  var idx = TIER_ORDER.indexOf(tierName);
+  var isG4 = tierName === "Group 4";
+  var html = "";
+  if (isG4) {
+    html += '<p class="g4-note">' + esc(group4Disclaimer()) + " ABR does not sequence these objects; they come back through Mass Recovery after " + scopeName(groupN()) + ".</p>";
+  } else {
+    html += buildGroupCompareCards(model, tierName, idx);
+  }
+  html += buildWorkloadBreakdownTable(model, tierName);
+  if (isG4) { html += buildWholeTenantCompare(model); }
+  if (IS_SUMMARY) { return html + '<p class="pill-note">Per-object detail is not part of the summary report.</p>'; }
+  if (tierName === "Critical Group 1") { html += buildGroup1All(); }
+  html += '<div class="grp-wl-wrap" id="gwl-' + tierIdOf(tierName) + '">' + buildGroupWorkloadPicker(tierName) + "</div>";
+  return html;
+}
+
+function buildRemainingCard() {
+  var rem = remainderTotalsAll();
+  var teamsRem = Math.max(0, teamsObjectCount() - (groupTotals("teams", "Critical Group 1") || { objects: 0 }).objects);
+  var rows = WORKLOAD_DEFS.map(function (wd) {
+    var r = remainderTotals(wd.key);
+    var has = wd.key !== "teams";
+    var objs = wd.key === "teams" ? teamsRem : r.objects;
+    return "<tr><td>" + esc(wd.label) + "</td><td>" + fmtNum(objs) + "</td><td>" + (has ? fmtNum(r.items) : "&ndash;") + "</td><td>" + (has ? fmtStorageNum(r.storageBytes) : "&ndash;") + "</td></tr>";
+  }).join("");
+  return '<div class="remaining-card" id="grp-remaining"><h4>Remaining groups <span class="lock-tag">Full assessment</span></h4>' +
+    '<p class="pill-note">Everything outside Group 1, as one total. Group 2, 3 and 4 sizes, recovery sequencing and cost avoidance by group are in the full assessment.</p>' +
+    '<div class="table-wrap"><table class="grp-breakdown"><thead><tr><th>Workload</th><th>Objects</th><th>Items</th><th>' + storageHeader("Storage") + "</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+    pvLockedPanel("Groups 2-4 are locked in the Preview", "Re-run the full assessment to see how the rest of your tenant breaks down and how fast each group comes back.") + "</div>";
+}
+
+function buildByGroupSection(model) {
+  var html = '<section class="grp-section" id="grp-by-group"><h3 class="grp-section-title">By group</h3>' +
+    '<p class="pill-note">Each group is collapsed - open one to see its recovery comparison, per-workload breakdown, and every object in it. ' + infoBtn("abr-vs-mass") + "</p>";
+  var tiers = IS_PREVIEW ? ["Critical Group 1"] : TIER_ORDER;
+  tiers.forEach(function (t) {
+    html += accHtml({ id: "grp-" + tierIdOf(t), title: tierLabelHtml(t), summary: groupSummaryHtml(t, model), body: function () { return buildGroupBody(t); } });
+  });
+  if (IS_PREVIEW) { html += buildRemainingCard(); }
+  return html + "</section>";
+}
+
+// ---------- By workload ----------
+function workloadTotalsRaw(wlKey) {
+  var objects = 0, items = 0, bytes = 0;
+  if (IS_PREVIEW) {
+    var g = groupTotals(wlKey, "Critical Group 1") || { objects: 0, items: 0, storageBytes: 0 };
+    var r = remainderTotals(wlKey);
+    if (wlKey === "teams") { return { objects: teamsObjectCount(), items: 0, storageBytes: 0 }; }
+    return { objects: g.objects + r.objects, items: g.items + r.items, storageBytes: g.storageBytes + r.storageBytes };
+  }
+  TIER_ORDER.forEach(function (t) {
+    var x = groupTotals(wlKey, t);
+    if (x) { objects += x.objects; items += x.items; bytes += x.storageBytes; }
+  });
+  return { objects: objects, items: items, storageBytes: bytes };
+}
+
+function buildWorkloadGroupTable(wlKey, model) {
+  var field = { mailboxes: "ex", onedrive: "od", sharepoint: "sp" }[wlKey];
+  var hasStorage = wlKey !== "teams";
+  function rowHtml(tierName) {
+    var t = groupTotals(wlKey, tierName) || { objects: 0, items: 0, storageBytes: 0 };
+    var m = model.milestones[tierName];
+    var w = (m && !m.locked && field) ? m[field] : null;
+    var isLast = tierName === TIER_ORDER[TIER_ORDER.length - 1];
+    return "<tr " + navAttr("groups:grp-by-group:grp-" + tierIdOf(tierName)) + '><td data-sort="' + TIER_ORDER.indexOf(tierName) + '">' + tierLabelHtml(tierName) + "</td><td>" + fmtNum(t.objects) + "</td><td>" + (hasStorage ? fmtNum(t.items) : "&ndash;") + "</td><td>" + (hasStorage ? fmtStorageNum(t.storageBytes) : "&ndash;") + "</td>" +
+      "<td" + (w ? ' data-sort="' + w.timeMin + '"' : "") + ">" + (w && !isLast ? fmtMin(w.timeMin) : "&ndash;") + "</td><td" + (w ? ' data-sort="' + w.massTimeMin + '"' : "") + ">" + (w ? "~" + fmtMin(w.massTimeMin) : "&ndash;") + "</td></tr>";
+  }
+  var body = "";
+  if (IS_PREVIEW) {
+    var r = remainderTotals(wlKey);
+    var objs = wlKey === "teams" ? Math.max(0, teamsObjectCount() - (groupTotals("teams", "Critical Group 1") || { objects: 0 }).objects) : r.objects;
+    body = rowHtml("Critical Group 1") + '<tr class="no-sort-row"><td>Remaining groups ' + '<span class="lock-tag">Full assessment</span></td><td>' + fmtNum(objs) + "</td><td>" + (hasStorage ? fmtNum(r.items) : "&ndash;") + "</td><td>" + (hasStorage ? fmtStorageNum(r.storageBytes) : "&ndash;") + "</td><td>&ndash;</td><td>&ndash;</td></tr>";
+  } else {
+    body = TIER_ORDER.map(rowHtml).join("");
+  }
+  return '<div class="table-wrap"><table class="grp-breakdown"><thead><tr><th>Group</th><th>Objects</th><th>' + (wlKey === "teams" ? "Users with recent activity" : "Items") + "</th><th>" + storageHeader("Storage") + "</th><th>ABR time (this group)</th><th>Mass Recovery (cumulative scope)</th></tr></thead><tbody>" + body + "</tbody></table></div>";
+}
+
+function buildWorkloadBody(wlKey) {
+  var model = computeRecoveryModel();
+  var html = buildWorkloadGroupTable(wlKey, model);
+  if (IS_SUMMARY) { return html + '<p class="pill-note">Per-object detail is not part of the summary report.</p>'; }
+  return html + buildObjectTable(wlKey, wlKey, null);
+}
+
+function buildByWorkloadSection() {
+  var html = '<div class="grp-divider" role="separator"><span>Or slice by workload</span></div>' +
+    '<section class="grp-section" id="grp-by-workload"><h3 class="grp-section-title">By workload</h3>' +
+    '<p class="pill-note">The same objects, grouped by Exchange, OneDrive, SharePoint and Teams. Open a workload to see how it splits across groups and to search, filter and sort its objects.</p>';
+  WORKLOAD_DEFS.forEach(function (wd) {
+    var t = workloadTotalsRaw(wd.key);
+    var has = wd.key !== "teams";
+    html += accHtml({
+      id: "wl-" + wd.key,
+      title: esc(wd.label),
+      summary: "<span><b>" + fmtNum(t.objects) + "</b> objects</span>" + (has ? "<span><b>" + fmtNum(t.items) + "</b> items</span><span><b>" + fmtStorage(t.storageBytes) + "</b></span>" : ""),
+      body: function () { return buildWorkloadBody(wd.key); }
+    });
+  });
+  return html + "</section>";
+}
+
+function buildGroupsBody() {
+  var model = computeRecoveryModel();
+  return buildGroup1Headline(model) + buildByGroupSection(model) + buildByWorkloadSection();
+}
+
 function renderGroupsTab() {
-  var html = '<div class="controls-panel-grid">' +
-    '<div id="controls-sliders-wrap">' + buildControlsSliders() + '</div>' +
-    '<div id="impact-preview-wrap">' + buildLiveImpactPreview(computeImpactData()) + '</div>' +
-    '</div>' +
-    '<div id="groups-body-wrap">' + buildGroup1Overview() + WORKLOAD_DEFS.map(function (wd) { return buildWorkloadSection(wd.key); }).join("") + '</div>';
-  document.getElementById("panel-groups").innerHTML = html;
+  var panel = document.getElementById("panel-groups");
+  if (!panel) { return; }
+  IMPACT_CACHE = canEditTiers() ? computeImpactData() : null;
+  panel.innerHTML = '<h2>Groups &amp; Recovery Model</h2>' +
+    '<p class="tab-lead">How every mailbox, OneDrive, SharePoint site and Team is scored into a recovery group, how fast ABR brings each group back, and the objects in every group. Everything below is collapsed - open what you need.</p>' +
+    '<div id="grp-controls">' + accHtml({ id: "grp-controls-acc", title: "Scoring &amp; Recovery inputs", summary: controlsSummaryHtml(), body: buildControlsPanelBody }) + "</div>" +
+    '<div id="groups-body-wrap">' + buildGroupsBody() + "</div>";
   refreshAllWeightTotals();
-  WORKLOAD_DEFS.forEach(function (wd) { attachScrollAffordance(wd.key); });
 }
 
 function refreshGroupsBody() {
   var el = document.getElementById("groups-body-wrap");
   if (!el) { renderGroupsTab(); return; }
-  // Only innerHTML is replaced below - the wrapper element itself (and any
-  // class markWeightsDirty() added to it) survives, so "is-stale" has to be
-  // cleared explicitly here rather than relying on the rebuild to reset it.
+  // Only innerHTML is replaced - the wrapper (and any "is-stale" class markWeightsDirty() added) survives, so clear it explicitly.
   el.classList.remove("is-stale");
-  el.innerHTML = buildGroup1Overview() + WORKLOAD_DEFS.map(function (wd) { return buildWorkloadSection(wd.key); }).join("");
-  WORKLOAD_DEFS.forEach(function (wd) { attachScrollAffordance(wd.key); });
+  el.innerHTML = buildGroupsBody();
+  enhanceTables(el);
 }
 
-// Lightweight recompute path for slider drags: never rebuilds
-// #controls-sliders-wrap (so the slider the user is actively dragging is
-// never re-created), only refreshes the groups body, the impact preview,
-// and the other tabs that depend on scores/tiers.
+function refreshImpactPreview() {
+  var el = document.getElementById("impact-preview-wrap");
+  var computed = computeImpactData();
+  IMPACT_CACHE = computed;
+  if (!el) { return; }
+  el.innerHTML = buildLiveImpactPreview(computed);
+}
+
+// Lightweight recompute path for slider drags: never rebuilds #controls-sliders-wrap (so the slider being dragged is never
+// re-created), only refreshes the groups body, the impact preview, and the other tabs that depend on scores/tiers.
 function recomputeTiersLive() {
   WORKLOAD_DEFS.forEach(function (wd) { computeScoresAndTiers(wd.key); });
-  renderExecLean();
-  renderExecSummary();
+  if (typeof computeInsights === "function") { computeInsights(); }
+  ["renderExecLean", "renderExecSummary"].forEach(function (name) { if (typeof window[name] === "function") { window[name](); } });
   refreshGroupsBody();
   refreshImpactPreview();
-  renderRecoveryTab();
-  renderMethodologyTab();
-  renderCompareTab();
+  ["renderInsightsTab", "renderMethodologyTab", "renderCompareTab"].forEach(function (name) { if (typeof window[name] === "function") { window[name](); } });
+  enhanceTables(document);
   saveOverridesToStorage();
 }
 
@@ -4850,57 +7380,74 @@ function recomputeTiersLive() {
 
 #region ---------- HTML report JS: recovery tab, methodology tab, compare tab ----------
 
-$script:ReportJsRenderC = @'
+$script:ReportJsRenderRecovery = @'
+// ===================================================================================
+// v2.0: recovery inputs + per-group recovery comparison, now living INSIDE the merged
+// "Groups & Recovery Model" tab (the old standalone Recovery tab is gone).
+//   - buildRecoveryControls()        the recovery inputs / RTO targets (goes in the "Scoring & recovery inputs" panel)
+//   - buildGroupCompareCards()       ABR vs Mass Recovery cards for one group (goes in that group's accordion body)
+//   - buildWorkloadBreakdownTable()  per-workload breakdown for one group
+//   - buildWholeTenantCompare()      the whole-tenant total (ABR and Mass converge) - shown in the Group 4 body
+// Handlers (onRtoTargetChange, onRecoveryInputChange, applyRtoPreset, ...) are unchanged in behavior.
+// ===================================================================================
 function buildRecoveryControls() {
   var opts = ["Auto"].concat(SPOD_TIER_TABLE.map(function (t) { return t.Bucket; })).map(function (b) {
     return '<option value="' + b + '"' + (state.recovery.licenseTier === b ? " selected" : "") + ">" + b + "</option>";
   }).join("");
+  var noRate = !(parseFloat(state.recovery.costPerHour) > 0);
   var html = '<div class="controls-panel" id="recovery-inputs-panel"><h4>Recovery modeling inputs</h4>';
-  html += '<div class="control-row"><label>Recovery window (days)</label><input type="number" id="recovery-window-input" min="0" max="7" step="0.5" value="' + state.recovery.windowDays + '" onchange="onRecoveryInputChange(\'windowDays\',this.value)" style="width:80px;"></div>';
-  html += '<div class="pill-note" style="margin-top:-.4rem;">ABR can recover up to the last 7 days of activity - drag this down to model a shorter window (linearly scales the real 7-day activity signal; not a separately measured figure).</div>';
-  html += '<div class="control-row"><label>SP/OD throughput tier</label><select onchange="onRecoveryInputChange(\'licenseTier\',this.value)">' + opts + "</select></div>";
-  html += '<div class="control-row"><label>Downtime cost ($/hour)</label><input type="number" min="0" step="100" value="' + state.recovery.costPerHour + '" onchange="onRecoveryInputChange(\'costPerHour\',this.value)" style="width:120px;"></div>';
+  html += '<div class="control-row"><label for="recovery-window-input">Recent-data window (days)</label><input type="number" id="recovery-window-input" min="0" max="7" step="0.5" value="' + state.recovery.windowDays + '" onchange="onRecoveryInputChange(\'windowDays\',this.value)" style="width:80px;"></div>';
+  html += '<div class="pill-note" style="margin-top:-.4rem;">ABR can recover up to the last 7 days of recent activity - drag this down to model a shorter window (linearly scales the real 7-day activity signal; not a separately measured figure).</div>';
+  html += '<div class="control-row"><label for="downtime-cost-input">Downtime cost ($/hour)</label><input type="number" id="downtime-cost-input" min="0" step="100" value="' + state.recovery.costPerHour + '" onchange="onRecoveryInputChange(\'costPerHour\',this.value)" style="width:120px;"></div>';
+  html += '<div class="pill-note cost-note" style="margin-top:-.4rem;">' + (noRate ? "Enter your estimated downtime cost per hour to see potential cost avoidance. Hours saved are shown either way." : "Used only to turn hours saved into potential cost avoided.") + "</div>";
+  // Number of criticality groups (Full report only). The low-activity group is always one more than this.
+  if (canEditTiers()) {
+    html += '<div class="control-row"><label for="group-count-input">Criticality groups</label><input type="number" id="group-count-input" min="' + MIN_GROUPS + '" max="' + MAX_GROUPS + '" step="1" value="' + groupN() + '" onchange="setGroupCount(this.value)" style="width:80px;"> <span class="rt-current">+ Group ' + (groupN() + 1) + ' (low activity)</span></div>';
+    html += '<div class="pill-note" style="margin-top:-.4rem;">' + MIN_GROUPS + '-' + MAX_GROUPS + ' groups, split by recovery-time budget (below). ABR sequences every criticality group in order; Group ' + (groupN() + 1) + ' holds the objects with no activity and is recovered by Mass Recovery only. Above 3 groups the targets default to <b>Enterprise Plus</b>, sized to this tenant.</div>';
+  }
   html += "</div>";
 
-  html += '<div class="controls-panel"><h4>RTO targets - Mailboxes / OneDrive / SharePoint tiering (Teams unaffected)</h4>';
+  html += '<div class="controls-panel" id="rto-panel"><h4>Recovery Window (RTO) - Mailboxes / OneDrive / SharePoint tiering (Teams unaffected)</h4>';
   html += '<div class="rt-preset-row">';
-  ["Standard", "Enterprise"].forEach(function (p) {
+  var presets = groupN() === 3 ? ["Standard", "Enterprise", "Enterprise Plus"] : ["Enterprise Plus"];
+  presets.forEach(function (p) {
     var activeClass = state.recovery.rtoPreset === p ? " active" : "";
-    var hrs = p === "Standard" ? "4h / 24h / 72h" : "24h / 120h / 240h";
-    html += '<button class="rt-preset-btn' + activeClass + '" onclick="applyRtoPreset(\'' + p + '\')">' + p + " (" + hrs + ")</button>";
+    var hrs = p === "Standard" ? "4h / 24h / 72h" : (p === "Enterprise" ? "24h / 120h / 240h" : "sized to tenant");
+    html += '<button type="button" class="rt-preset-btn' + activeClass + '" onclick="applyRtoPreset(\'' + p + '\')">' + p + " (" + hrs + ")</button>";
   });
-  html += '<span style="font-size:.78rem;color:var(--dark-gray);">Current: <b>' + esc(state.recovery.rtoPreset) + '</b></span>';
+  html += '<span class="rt-current">Current: <b>' + esc(state.recovery.rtoPreset) + '</b></span>';
   html += "</div>";
-  html += '<div class="control-row"><label>Group 1 target (hr)</label><input type="number" id="group1-target-input" min="0.1" step="0.5" value="' + state.recovery.group1Hours + '" onchange="onRtoTargetChange(\'group1Hours\',this.value)" style="width:90px;"></div>';
-  html += '<div class="control-row"><label>Group 2 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group2Hours + '" onchange="onRtoTargetChange(\'group2Hours\',this.value)" style="width:90px;"></div>';
-  html += '<div class="control-row"><label>Group 3 target (hr, cumulative)</label><input type="number" min="0.1" step="0.5" value="' + state.recovery.group3Hours + '" onchange="onRtoTargetChange(\'group3Hours\',this.value)" style="width:90px;"></div>';
+  html += '<div class="rto-grid">';
+  for (var gk = 1; gk <= groupN(); gk++) {
+    html += '<div class="control-row"><label for="group' + gk + '-target-input">Group ' + gk + ' Recovery Window (RTO), hr' + (gk > 1 ? " cumulative" : "") + '</label><input type="number" id="group' + gk + '-target-input" min="0.1" step="0.5" value="' + groupHoursOf(gk) + '" onchange="onRtoTargetChange(' + gk + ',this.value)" style="width:90px;"></div>';
+  }
+  html += '</div>';
   html += buildAutoSuggestBanner();
   html += "</div>";
   return html;
 }
 
 function computeAutoSuggestedPreset() {
-  // Mirrors -RTOPreset Auto's server-side threshold: >= 5 days (7200 min)
-  // of estimated full-tenant recovery time suggests Enterprise (24/120/240h),
-  // else Standard (4/24/72h). Recomputed reactively (called from
-  // buildAutoSuggestBanner every render) so it stays current as data/targets
-  // change, not just once at page load.
+  // Mirrors -RTOPreset Auto's server-side threshold: >= 5 days (7200 min) of estimated full-tenant recovery time suggests
+  // Enterprise (24/120/240h), else Standard (4/24/72h). Recomputed reactively so it stays current as data/targets change.
   var model = computeRecoveryModel();
   return model.fullRestoreMin >= 7200 ? "Enterprise" : "Standard";
 }
 
 function buildAutoSuggestBanner() {
-  if (state.recovery.autoBannerDismissed) { return ""; }
+  if (state.recovery.autoBannerDismissed || state.recovery.rtoPreset === "Enterprise Plus" || groupN() !== 3) { return ""; }
   var suggested = computeAutoSuggestedPreset();
   if (suggested === state.recovery.rtoPreset) { return ""; }
   var hrs = suggested === "Enterprise" ? "24h / 120h / 240h" : "4h / 24h / 72h";
   return '<div class="rt-auto-banner"><span>Based on this tenant\'s current data scale, <b>Auto</b> would suggest the <b>' + suggested + '</b> preset (' + hrs + ') - you are currently on <b>' + esc(state.recovery.rtoPreset) + '</b>.</span>' +
-    '<span><button onclick="applyRtoPreset(\'' + suggested + '\')">Switch to ' + suggested + '</button> <button onclick="dismissAutoBanner()">Dismiss</button></span></div>';
+    '<span><button type="button" onclick="applyRtoPreset(\'' + suggested + '\')">Switch to ' + suggested + '</button> <button type="button" onclick="dismissAutoBanner()">Dismiss</button></span></div>';
 }
 
 function applyRtoPreset(preset) {
-  if (preset === "Standard") { state.recovery.group1Hours = 4; state.recovery.group2Hours = 24; state.recovery.group3Hours = 72; }
-  else if (preset === "Enterprise") { state.recovery.group1Hours = 24; state.recovery.group2Hours = 120; state.recovery.group3Hours = 240; }
+  if (!canEditTiers()) { return; }
+  if (preset === "Standard" && groupN() === 3) { state.recovery.groupHours = [4, 24, 72]; }
+  else if (preset === "Enterprise" && groupN() === 3) { state.recovery.groupHours = [24, 120, 240]; }
+  else if (preset === "Enterprise Plus") { state.recovery.groupHours = enterprisePlusHours(groupN()); }
   state.recovery.rtoPreset = preset;
   state.recovery.autoBannerDismissed = false;
   recomputeAll();
@@ -4908,170 +7455,132 @@ function applyRtoPreset(preset) {
 
 function dismissAutoBanner() {
   state.recovery.autoBannerDismissed = true;
-  renderRecoveryTab();
+  renderGroupsTab();
 }
 
-function onRtoTargetChange(field, value) {
+function onRtoTargetChange(k, value) {
+  if (!canEditTiers()) { return; }
   // Any manual edit of an RTO input flips the state to Custom, per spec.
-  state.recovery[field] = parseFloat(value);
+  var v = parseFloat(value);
+  if (!(v > 0)) { renderGroupsTab(); return; }
+  state.recovery.groupHours[k - 1] = v;
   state.recovery.rtoPreset = "Custom";
   state.recovery.autoBannerDismissed = false;
-  // RTO targets now drive the TIERING itself (not just recovery-time
-  // display) for Mailboxes/OneDrive/SharePoint - use the existing
-  // recompute-all trigger so a full retiering recompute runs, not a
-  // parallel/inconsistent path.
+  // RTO targets drive the TIERING itself (not just recovery-time display) for Mailboxes/OneDrive/SharePoint - full recompute.
   recomputeAll();
 }
 
 function onRecoveryInputChange(field, value) {
+  if (!canEditTiers()) { return; }
   state.recovery[field] = (field === "licenseTier") ? value : parseFloat(value);
-  // licenseTier also feeds the time-budget walk (via getWorkloadRecoveryContext),
-  // so this also needs a full retiering recompute, not just a recovery-tab rerender.
+  // licenseTier also feeds the budget walk, so this needs a full retiering recompute, not just a re-render.
   recomputeAll();
 }
 
-function buildWorkloadBreakdownTable(model, tierName, sectionId) {
-  var sp = DATA.workloads.sharepoint || [], od = DATA.workloads.onedrive || [], ex = DATA.workloads.mailboxes || [];
+// Per-workload breakdown for one group. Object/item/storage numbers are the true group totals; the times come from the model
+// (which leaves Recovery-Insights-excluded objects out of the headline estimate, see the note under the table when that applies).
+function buildWorkloadBreakdownTable(model, tierName) {
   var m = model.milestones[tierName];
-  // Mass column uses THIS tier's own cumulative-scope mass time per
-  // workload (massTimeMin), not a flat full-dataset constant - consistent
-  // with the group-level cards above.
-  var rows = [
-    { label: "SharePoint", objs: m.sp.objectCount, abr: m.sp.timeMin, mass: m.sp.massTimeMin },
-    { label: "OneDrive", objs: m.od.objectCount, abr: m.od.timeMin, mass: m.od.massTimeMin },
-    { label: "Exchange", objs: m.ex.objectCount, abr: m.ex.timeMin, mass: m.ex.massTimeMin }
+  if (!m || m.locked) { return ""; }
+  var defs = [
+    { key: "mailboxes", label: "Exchange", t: m.ex },
+    { key: "onedrive", label: "OneDrive", t: m.od },
+    { key: "sharepoint", label: "SharePoint", t: m.sp },
+    { key: "teams", label: "Teams", t: null }
   ];
-  var body = rows.map(function (r) {
-    return "<tr><td>" + r.label + "</td><td>" + fmtNum(r.objs) + "</td><td>" + fmtMin(r.abr) + "</td><td>~" + fmtMin(r.mass) + "</td></tr>";
+  var isLast = tierName === TIER_ORDER[TIER_ORDER.length - 1];
+  var body = defs.map(function (d) {
+    var g = groupTotals(d.key, tierName) || { objects: 0, items: 0, storageBytes: 0 };
+    var hasStorage = d.key !== "teams";
+    return "<tr><td>" + d.label + "</td><td>" + fmtNum(g.objects) + "</td><td>" + (hasStorage ? fmtNum(g.items) : "&ndash;") + "</td><td>" + (hasStorage ? fmtStorageNum(g.storageBytes) : "&ndash;") + "</td>" +
+      "<td" + (d.t ? ' data-sort="' + d.t.timeMin + '"' : "") + ">" + (d.t && !isLast ? fmtMin(d.t.timeMin) : "&ndash;") + "</td>" +
+      "<td" + (d.t ? ' data-sort="' + d.t.massTimeMin + '"' : "") + ">" + (d.t ? "~" + fmtMin(d.t.massTimeMin) : "&ndash;") + "</td></tr>";
   }).join("");
-  return '<div class="rt-toggle" onclick="document.getElementById(\'' + sectionId + '\').classList.toggle(\'open\')">+ Workload breakdown (SharePoint / OneDrive / Exchange)</div>' +
-    '<div class="rt-detail" id="' + sectionId + '"><table><thead><tr><th>Workload</th><th>Objects (this tier)</th><th>ABR time (this tier)</th><th>Mass Recovery (that workload, this cumulative scope)</th></tr></thead><tbody>' + body + "</tbody></table></div>";
+  return '<div class="table-wrap"><table class="grp-breakdown"><thead><tr><th>Workload</th><th>Objects</th><th>Items</th><th>' + storageHeader("Storage") + '</th><th>ABR time (this group)</th><th>Mass Recovery (that workload, this cumulative scope)</th></tr></thead><tbody>' + body + "</tbody></table></div>";
 }
 
-function renderRecoveryTab() {
-  var model = computeRecoveryModel();
-  var html = buildRecoveryControls();
-  html += '<p class="pill-note">ABR (Autonomous Business Recovery, sequenced by group) vs. Mass Recovery (undifferentiated, no prioritization) - time and downtime cost, per group. SP/OD throughput tier: <b>' + model.spodTierBucket + '</b> (auto-selected from object counts unless overridden above). Mass Recovery has no targeting - for a given group, it means restoring that SAME cumulative set of objects (Groups 1 through this one, combined) as a single undifferentiated batch instead of in priority order, so it scales with each group\'s own size just like ABR does - it only converges with ABR\'s total once you reach the full tenant (the Total section below), because at that point there is no "batch vs. sequence" difference left: the same total data has to move through the same total throughput either way. ABR is the only approach where group size and RTO targets actually determine WHEN priority data comes back. See the Methodology tab for the full derivation.</p>';
+// ABR vs Mass Recovery cards for one criticality group. hoursSaved is measured against the whole-tenant Mass Recovery
+// (computeCostAvoided) - the same baseline as the headline - and the same-scope Mass figure is shown for reference.
+function buildGroupCompareCards(model, tierName, idx) {
+  var m = model.milestones[tierName];
+  if (!m || m.locked) { return ""; }
+  var label = TIER_META[tierName].short;
+  var targetHoursArr = state.recovery.groupHours;
+  var ca = computeCostAvoided(model);
+  var row = ca.rows[idx];
+  var g = groupTotalsAll(tierName);
+  var isEmpty = g.objects === 0;
+  var html = "";
+  if (isEmpty) {
+    html += idx === 0
+      ? '<div class="rt-empty-note">No objects fall in Group 1 at the current target (' + state.recovery.group1Hours + " hr) - either everything qualifies for a later group, or see " + lowName() + " below.</div>"
+      : '<div class="rt-empty-note">No objects fall in ' + label + " - the figures below are carried over unchanged from the previous group (nothing new to add at this step).</div>";
+  }
+  if (m.exceedsTarget) {
+    html += '<div class="rt-empty-note exceeds">Exceeds the ' + label + " target (" + targetHoursArr[idx] + " hr) by " + fmtMin(m.targetGapMin) + " - this group's own recent data takes longer than the stated window to recover via ABR.</div>";
+  }
+  var scopeText = scopeName(idx + 1);
+  html += '<div class="rt-compare-grid">' +
+    '<div class="rt-compare-card abr"><div class="rt-label">ABR - ' + scopeText + ' online in</div><div class="rt-time">' + fmtMin(m.wallClockCumMin) + '</div></div>' +
+    '<div class="rt-compare-card mass"><div class="rt-label">Mass Recovery - whole tenant, no prioritization</div><div class="rt-time">~' + fmtMin(model.fullRestoreMin) + '</div>' +
+      '<div class="rt-cost">Same scope as one batch (' + scopeText + "): ~" + fmtMin(m.massRecoveryCumMin) + "</div></div>" +
+    "</div>";
+  var money = ca.hasRate ? (" &middot; " + fmtMoney(row.cost) + " potential cost avoided") : "";
+  html += '<div class="rt-savings-bar"><span>' + scopeText + ' online sooner than the whole-tenant restore ' + infoBtn("cost-avoided") + '</span><span>' + row.savedHours.toFixed(1) + " hr" + money + "</span></div>";
+  if (!ca.hasRate) { html += '<div class="pill-note">' + costPromptHtml() + "</div>"; }
+  return html;
+}
 
-  var targetHoursArr = [state.recovery.group1Hours, state.recovery.group2Hours, state.recovery.group3Hours];
-  var groupTiers = [
-    { tier: "Critical Group 1", label: "Group 1", subtitle: "Recover-first tier (target: " + state.recovery.group1Hours + " hr)" },
-    { tier: "Critical Group 2", label: "Group 2", subtitle: "Cumulative through Group 2 (target: " + state.recovery.group2Hours + " hr)" },
-    { tier: "Critical Group 3", label: "Group 3", subtitle: "Cumulative through Group 3 (target: " + state.recovery.group3Hours + " hr)" }
-  ];
-
-  groupTiers.forEach(function (g, idx) {
-    var m = model.milestones[g.tier];
-    var objCount = m.sp.objectCount + m.od.objectCount + m.ex.objectCount;
-    var abrMin = m.wallClockCumMin;
-    // Mass Recovery for THIS group's own cumulative scope (Groups 1..this,
-    // combined into one undifferentiated batch) - scales with group size,
-    // not the flat whole-tenant figure.
-    var massMin = m.massRecoveryCumMin;
-    var abrCost = fmtHours(abrMin) * state.recovery.costPerHour;
-    var massCost = fmtHours(massMin) * state.recovery.costPerHour;
-    var savingsHrs = Math.max(0, (massMin - abrMin) / 60);
-    var savingsMoney = savingsHrs * state.recovery.costPerHour;
-
-    // Empty-tier callout. Two legitimate causes as of v3.8.0: a very small
-    // active population (same as before), or - new and increasingly common
-    // now that Mailboxes/OneDrive/SharePoint are tiered by the budget walk
-    // (assignBudgetTiers) - Group 1/2's own budgets were generous enough to
-    // already absorb the entire active population, leaving a later group
-    // with nothing left to place. Both read the same to the viewer: nothing
-    // new at this step, figures carried forward. Badge + inline note
-    // instead of an unexplained duplicate number.
-    var isEmpty = objCount === 0;
-    var emptyBadge = isEmpty ? ' <span class="badge empty-tier">Empty</span>' : "";
-    var emptyNote = "";
-    if (isEmpty) {
-      emptyNote = idx === 0
-        ? '<div class="rt-empty-note">No active objects fall in Group 1 at the current target (' + state.recovery.group1Hours + " hr) - either everything qualifies for a later group, or see Group 4 in the Criticality Groups tab.</div>"
-        : ('<div class="rt-empty-note">No objects fall in ' + g.label + " - the figures below are carried over unchanged from the previous group (nothing new to add at this step).</div>");
-    }
-
-    // NEW v3.1.0: per-group RTO compliance flag, replacing the old "Beyond
-    // Target" tier - this group's OWN ABR (hot-scope) cumulative time can
-    // still run over ITS OWN target (e.g. its active/recent data is itself
-    // large), flagged here in place rather than exiling the object(s)
-    // responsible to a separate bucket.
-    var exceedsBadge = m.exceedsTarget ? ' <span class="badge exceeds-target">Exceeds target</span>' : "";
-    var exceedsNote = m.exceedsTarget
-      ? ('<div class="rt-empty-note" style="background:#FDEDEE;color:#A5222B;">Exceeds the ' + g.label + " target (" + targetHoursArr[idx] + " hr) by " + fmtMin(m.targetGapMin) + " - this group's own recent/active data takes longer than the stated window to recover via ABR.</div>")
-      : "";
-
-    html += '<div class="rt-group-section' + (isEmpty ? " empty-tier" : "") + (m.exceedsTarget ? " exceeds-target" : "") + '"' + (idx === 0 ? ' id="rt-group-1-section"' : "") + '>' +
-      "<h3>" + g.label + emptyBadge + exceedsBadge + ' <span style="font-weight:400;color:var(--dark-gray);font-size:.85rem;">- ' + fmtNum(objCount) + " objects</span></h3>" +
-      '<div class="rt-subtitle">' + g.subtitle + "</div>" +
-      emptyNote + exceedsNote +
-      '<div class="rt-compare-grid">' +
-        '<div class="rt-compare-card abr"><div class="rt-label">ABR - ' + g.label + ' online in</div><div class="rt-time">' + fmtMin(abrMin) + '</div><div class="rt-cost">Downtime cost: ' + fmtMoney(abrCost) + "</div></div>" +
-        '<div class="rt-compare-card mass"><div class="rt-label">Mass Recovery - expected wait</div><div class="rt-time">~' + fmtMin(massMin) + '</div><div class="rt-cost">Downtime cost: ' + fmtMoney(massCost) + "</div></div>" +
-      "</div>" +
-      '<div class="rt-savings-bar"><span>Downtime cost avoided with ABR</span><span>' + fmtMoney(savingsMoney) + " (" + savingsHrs.toFixed(1) + " hr sooner)</span></div>" +
-      // Group 1 is the first tier - there's nothing earlier to sequence
-      // against, so its own ABR time and its own cumulative-batch Mass
-      // Recovery time are mathematically the same computation, and this
-      // savings bar will always read $0 (0.0 hr) here. Expected, not a bug -
-      // explain it inline instead of leaving it looking broken. The real
-      // "what does prioritization buy you" number is on the Report tab
-      // (Group 1 vs. the full undifferentiated restore) - moved there from
-      // the Executive Summary in v3.5.0, see the panel-report split above.
-      (idx === 0 ? '<div class="rt-total-note">Group 1 is the first tier, so there\'s nothing earlier to sequence against - its ABR time and Mass Recovery time are the same computation here by definition. See the <span class="exec-hero-linkout" onclick="switchTab(\'report\')">Report tab</span> for the comparison that shows ABR\'s actual value (Group 1 vs. a fully undifferentiated restore).</div>' : "") +
-      buildWorkloadBreakdownTable(model, g.tier, "rt-detail-" + idx) +
-      "</div>";
-  });
-
-  // Total section - every object, all groups plus Group 4. ABR and Mass
-  // Recovery converge here by design (same total data, same total throughput
-  // capacity, regardless of ordering). Group 4 itself gets no ABR timing at
-  // all (per feedback 2026-07-30) - it's recovered entirely by Mass Recovery,
-  // which is why it only shows up here in the whole-tenant total, never as
-  // its own ABR milestone above.
+// Whole-tenant total (Group 4 body). ABR and Mass Recovery converge here on purpose.
+function buildWholeTenantCompare(model) {
   var lastTier = TIER_ORDER[TIER_ORDER.length - 1];
   var totalM = model.milestones[lastTier];
-  var totalObjCount = totalM.sp.objectCount + totalM.od.objectCount + totalM.ex.objectCount;
-  var totalAbrMin = totalM.wallClockCumMin;
-  // Cumulative scope through the last tier (Group 4) IS the whole tenant,
-  // so this should equal model.massRecoveryMin/fullRestoreMin - using the
-  // same milestone field as every other group keeps this one source of truth
-  // instead of a separately-tracked constant.
-  var totalMassMin = totalM.massRecoveryCumMin;
-  html += '<div class="rt-group-section total">' +
-    '<h3>Total (whole tenant, incl. Group 4) <span style="font-weight:400;color:var(--dark-gray);font-size:.85rem;">- ' + fmtNum(totalObjCount) + " objects</span></h3>" +
-    '<div class="rt-subtitle">Every object, all groups plus Group 4 (no ABR priority - Mass Recovery only) - full tenant recovery</div>' +
+  if (!totalM || totalM.locked) { return ""; }
+  var all = TIER_ORDER.map(function (t) { return groupTotalsAll(t); });
+  var totalObjs = all.reduce(function (s, a) { return s + a.objects; }, 0);
+  return '<div class="rt-group-section total"><h4>Whole tenant <span class="obj-count-n">(' + fmtNum(totalObjs) + ' objects, including ' + lowName() + ')</span></h4>' +
+    '<div class="rt-subtitle">Every object, Groups 1-' + (groupN() + 1) + ' (' + lowName() + ' has no ABR priority - Mass Recovery only)</div>' +
     '<div class="rt-compare-grid">' +
-      '<div class="rt-compare-card abr"><div class="rt-label">ABR - everything online in</div><div class="rt-time">~' + fmtMin(totalAbrMin) + '</div><div class="rt-cost">Downtime cost: ' + fmtMoney(fmtHours(totalAbrMin) * state.recovery.costPerHour) + "</div></div>" +
-      '<div class="rt-compare-card mass"><div class="rt-label">Mass Recovery - everything online in</div><div class="rt-time">~' + fmtMin(totalMassMin) + '</div><div class="rt-cost">Downtime cost: ' + fmtMoney(fmtHours(totalMassMin) * state.recovery.costPerHour) + "</div></div>" +
+      '<div class="rt-compare-card abr"><div class="rt-label">ABR - everything online in</div><div class="rt-time">~' + fmtMin(totalM.wallClockCumMin) + '</div></div>' +
+      '<div class="rt-compare-card mass"><div class="rt-label">Mass Recovery - everything online in</div><div class="rt-time">~' + fmtMin(totalM.massRecoveryCumMin) + '</div></div>' +
     "</div>" +
-    '<div class="rt-total-note">These two numbers converge here on purpose: recovering everything takes about the same total time either way - the SAME throughput capacity has to move the SAME total data no matter what order you do it in. The entire value of ABR is in the group sections above: it determines <b>when</b> each group comes back, not how long the full job takes.</div>' +
-    "</div>";
-
-  document.getElementById("panel-recovery").innerHTML = html;
+    '<div class="rt-total-note">These two numbers converge here on purpose: recovering everything takes about the same total time either way, because the same throughput has to move the same total data in any order. The value of ABR is in <b>when</b> each group comes back, not how long the full job takes.</div></div>';
 }
 
-// NEW v3.6.0: extracted out of renderMethodologyTab() so the Full Report PDF
-// (buildPrintFullHtml) can reuse the EXACT same glossary/weights text instead
-// of a hand-copied duplicate that could quietly drift out of sync with the
-// live Methodology tab.
+'@
+
+$script:ReportJsRenderC = @'
+// ===================================================================================
+// v2.0 RenderC: Methodology & Glossary, Sizing, PDF/print export, Changes-since-last-run.
+// (The Recovery tab was merged into "Groups & Recovery Model"; see ReportJsRenderB/Recovery.)
+// Rules: storage through the fmtStorage family only; never the words active/inactive/dormant
+// about objects; dollars only as Group 1 cost avoided (plus smaller Groups 2-3 lines when a rate is set).
+// ===================================================================================
+
 function buildGlossaryHtml() {
+  var g4 = group4Disclaimer();
   var html = '<dl class="glossary">';
-  html += "<dt>Composite score</dt><dd>Each metric below is percentile-ranked (0-1) within its workload's dataset, then combined using the weights shown, so metrics on very different scales (item counts vs. storage bytes) don't dominate each other. Adjust any weight in the Criticality Groups tab and every score, tier, total, and recovery figure recomputes instantly.</dd>";
-  html += "<dt>Tiers - all four workloads (criticality-ranked)</dt><dd>Every workload's ACTIVE population is ranked by composite score and split into thirds by the tier-split fractions (-TierSplit) - Group 1 = top third = recover first. This guarantees every group gets a population as long as there's enough active data. Through v3.0.0, Mailboxes/OneDrive/SharePoint instead used an efficiency-ranked time-budget walk (rank by score-per-minute-of-full-object-recovery-time, fill groups until an RTO budget was exceeded) - real tenant data showed this let one large object's FULL size jump the walk straight past an entire group in one step, leaving it empty. Reverted to the same criticality-ranked approach Teams always used; see RECOVERY-MODEL-METHODOLOGY.md.</dd>";
-  html += "<dt>ABR recovery time (recent/active data)</dt><dd>Recovery TIME is now a separate calculation layered on top of tiering, not the thing that decides tiering. ABR recovers each object's RECENT/ACTIVE data first - estimated from real telemetry already collected (SharePoint's Active File Count, OneDrive's Viewed/Edited File Count, Mailboxes' Send+Receive volume), applied proportionally to storage - and Mass Recovery continues afterward to fully restore the remaining (older) data. This is why a large object isn't automatically slow to bring back online: its ACTIVE working set is usually a small fraction of its total size.</dd>";
-  html += "<dt>Exceeds target</dt><dd>Replaces the old \"Beyond Target\" tier. Every active object is always in Group 1, 2, or 3 - what can still happen is a group's OWN ABR (recent-data) cumulative time running over ITS OWN stated RTO target (its active/recent data is itself large). Flagged in place with a red badge and the exact shortfall, rather than exiling the object(s) responsible to a separate bucket.</dd>";
-  html += "<dt>RTO targets and presets</dt><dd>Group 1/2/3 targets (hours, cumulative) are a compliance check against each group's ABR cumulative time - NOT a tiering rule (see above). Standard = 4h / 24h / 72h. Enterprise = 24h / 120h / 240h (Day 1 / 5 days / 10 days). Auto suggests Standard or Enterprise based on this tenant's estimated full recovery time (&ge; 5 days / 7200 min picks Enterprise) and always tells you which it picked and why - it never silently overrides an explicit choice.</dd>";
-  html += "<dt>Group 4</dt><dd>Limited activity across every metric in the reporting window - carved out before any scoring/tiering runs, for every workload. Gets no ABR timing at all and is recovered entirely by Mass Recovery, alongside the rest of the tenant. Still protected; just not on the critical path to getting the business running again.</dd>";
-  html += "<dt>Manual override</dt><dd>Set via the tier dropdown on any row, or via mass-reassignment on a filtered set. Overrides always win over the computed tier and are flagged with an \"override\" badge. Use Export overrides to save them to a file and pass it back in via -OverridesFile on the next run so they persist.</dd>";
-  html += "<dt>Export Criticality Groups (CSV)</dt><dd>One CSV listing every object in every workload with its final tier - including any manual overrides or mass-reassignments made in this page, since it reads the live, on-screen state at export time, not just what the underlying PowerShell run originally computed. Meant as a hand-off file: identifier, tier, and enrichment (department/manager/Entra ID groups) per row for a downstream automation to consume.</dd>";
+  html += "<dt>Groups &amp; Recovery Model tab</dt><dd>One place for everything that decides who lands in Group 1 and how long recovery takes: the scoring weights and recovery inputs, the Group 1 headline, every group (collapsed - click to expand), and the same data sliced by workload. Change a weight or a recovery target and every score, group, total, and recovery figure in the report recomputes instantly.</dd>";
+  html += "<dt>Composite score</dt><dd>Each metric is percentile-ranked (0-1) within its workload's dataset, then combined using the weights shown, so metrics on very different scales (item counts vs. storage size) don't dominate each other.</dd>";
+  html += "<dt>Groups (criticality-ranked, budget-constrained)</dt><dd>Mailboxes, OneDrive, and SharePoint are ranked by composite score. Group 1 holds as many top-ranked objects as fit inside its own recovery time target; the rest spill into Group 2 against its remaining budget, then the next group, and so on; the last criticality group takes everything that remains. The number of criticality groups (3 to 12, default 3) is set in Recovery modeling inputs; one more group (the last number) always holds low-activity objects. Teams has no independent recovery-time model and is split evenly (or by -TierSplit when there are 3 groups). Change an Recovery Window (RTO) target and the group boundaries move with it.</dd>";
+  html += "<dt>ABR recovery time (last 7 days first)</dt><dd>Autonomous Business Recovery (ABR) restores each object's most recent data first - up to the last 7 days of changes - estimated from real telemetry already collected (SharePoint's recently used file count, OneDrive's viewed/edited file count, Mailboxes' send+receive volume), applied proportionally to storage. Mass Recovery then continues restoring the remaining, older data. A large object is therefore not automatically slow to bring back: its recently changed working set is usually a small fraction of its total size.</dd>";
+  html += "<dt>Mass Recovery</dt><dd>An undifferentiated restore with no prioritization: the whole scope restores as one job, and nothing is usable until it finishes. It is the comparison point for ABR.</dd>";
+  html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR sequences the criticality groups in order - Group 1 first, then Group 2, and so on - so a milestone is reached once every workload finishes its own Groups 1..N. Prioritizing does not shrink the TOTAL time to recover everything (same throughput, same data); it changes WHEN each group comes back online. That is what hours saved measures.</dd>";
+  html += "<dt>Hours saved and cost avoided</dt><dd>Hours saved = the time a whole-tenant Mass Recovery takes to finish minus the time until a group is back online with ABR (never below zero). Cost avoided = hours saved x the downtime cost per hour you enter (default 0, so only hours are shown until you enter a rate). Group 1 is the headline; Groups 1-2 and 1-3 are smaller figures because the gap closes as more data returns.</dd>";
+  html += "<dt>Why recovery speed is limited</dt><dd>Restores run through Microsoft's APIs, so speed is set by how many items can be restored per minute - not by bandwidth or storage size. SharePoint and OneDrive are item-throughput bound (larger files cost proportionally more through the size factor). Exchange is bound by whichever is slower, items or data volume. That is why the ORDER of recovery matters: the same throughput, spent on the most important objects first.</dd>";
+  html += "<dt>Exceeds target</dt><dd>What can still happen is a group's own ABR cumulative time running over its own stated Recovery Window (RTO) target. It is flagged in place with the exact shortfall rather than moving objects into a separate bucket.</dd>";
+  html += "<dt>Recovery Window (RTO) targets and presets</dt><dd>Group targets (hours, cumulative) are the recovery time budgets that drive the group boundaries and the compliance check. Standard = 4h / 24h / 72h. Enterprise = 24h / 120h / 240h. Enterprise Plus is used above 3 groups: Group 1 at 24 hr and the last group at this tenant's whole-tenant ABR time (never under 240 hr), with the groups in between spaced geometrically and rounded to 12 hr. Every target stays editable. Auto suggests Standard or Enterprise from this tenant's estimated full recovery time (5 days or more picks Enterprise) and tells you which it picked and why.</dd>";
+  html += "<dt>" + esc(lowName()) + " (low activity)</dt><dd>" + esc(g4) + " " + lowName() + " is carved out before scoring, gets no ABR timing, and is recovered by Mass Recovery alongside the rest of the tenant. It is still protected; it is just not on the critical path to getting the business running again.</dd>";
+  html += "<dt>Recovery Insights</dt><dd>Some objects stand out from the rest of the tenant: far larger, far more items, or unusually busy. They are found by comparing each object with the tenant's own typical objects (no fixed size thresholds). <b>Peer outliers</b> are more than 5x the 99th percentile of their workload and at least 0.1% of its total; <b>concentration</b> objects hold 2% or more of a workload's storage or items. Both kinds are left out of the headline recovery estimates by default (ABR and Mass Recovery alike, so the comparison stays like-for-like) and called out; toggle them back in to see the impact. <b>Long-pole</b> objects are ones whose own restore time (hot data for ABR, full data for Mass Recovery) is longer than the estimate for the group they sit in; they are shown as insight only. SharePoint and OneDrive long-pole times are shown as a range because how much of one large site can restore in parallel is still being confirmed.</dd>";
+  html += "<dt>Storage units</dt><dd>Every storage figure in the report uses one unit, GB or TB, chosen once from the size of the tenant (TB above 5 TB). Use the GB / TB switch in the header to change it for the whole report.</dd>";
+  html += "<dt>Manual override</dt><dd>Set via the tier dropdown on any row, or via mass-reassignment on a filtered set. Overrides always win over the computed group and are flagged with an \"override\" badge. Use Export overrides to save them and pass the file back in via -OverridesFile on the next run so they persist.</dd>";
+  html += "<dt>Export Criticality Groups (CSV)</dt><dd>One CSV listing every object in every workload with its final group, including manual overrides made in this page. Meant as a hand-off file: identifier, group, and enrichment (department/manager/Entra ID groups) per row for a downstream automation to consume.</dd>";
   html += "<dt>Job title weight</dt><dd>Job title is matched (case-insensitive substring) against a customer-editable keyword table; the highest-weighted match contributes an extra percentile-ranked factor into the composite score.</dd>";
-  html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/active-file activity ranks in the top quartile of all SharePoint sites in this run. This is a PROXY for \"many people across the org rely on this site\" using activity data already collected - it is NOT a true unique-accessor or group-membership count, which would need additional Graph permissions not requested by default. Treat it as a nudge to double-check, not a certainty.</dd>";
-  html += "<dt>Mailbox type</dt><dd>NEW v3.17.0: classified from <b>assigned licenses</b> (the usage report no longer returns a usable Recipient Type column, so the earlier approach counted every mailbox as a user). <b>Licensed</b> = at least one license assigned (counts toward the Rubrik license quote). <b>Shared / group / other</b> = unlicensed accounts that are disabled or have the 50 GB mailbox limit Exchange gives shared/resource mailboxes, mailboxes with no matching user account, and (with -DetailedSizing in the Full script) mailboxes confirmed as Shared/Room/Equipment by Exchange Online: protected and sized, but no Rubrik license needed. <b>Enabled, unlicensed</b> users are not protected and are excluded from the report. Without Exchange Online this is an estimate: a shared mailbox that is enabled, unlicensed, and has a non-default limit would be counted as an unlicensed user.</dd>";
-  html += "<dt>Manager roll-up</dt><dd>Each user's manager chain (immediate manager up through the org to the top) is resolved offline from a single directory pull - no extra Graph calls. Use the \"Filter to org under manager\" box to isolate or mass-tier everyone reporting up through a given leader.</dd>";
-  html += "<dt>Entra ID group filter</dt><dd>On by default as of v3.14.0 (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership (Mailboxes/OneDrive) is resolved via its own separate directory pull alongside manager enrichment (Microsoft Graph only allows one property to be expanded per user query, so this is one extra bulk call, not per-user lookups). Use the \"Filter to Entra ID group\" dropdown to isolate or mass-tier everyone in a given group; combine it with the manager filter for \"everyone in this group AND under this manager.\" Mirrors how RSC Mass Recovery groups users by AD/Entra ID Group for OneDrive/Exchange.</dd>";
-  html += "<dt>Recovery time model (unchanged)</dt><dd>Reverse-engineered from the customer-provided MVC Recovery Time Estimator export. SharePoint/OneDrive throughput is capped by a size-tier lookup (auto-selected from object counts, matching the source tool's own tier boundaries); Exchange throughput uses fixed per-mailbox benchmark constants. Each tier's recovery time = MAX(items &divide; effective items/min, storage &divide; effective bytes-per-min), using a dataset-wide average item size. This formula is unchanged in v3.0.0 - what changed is which objects land in which tier (see above), not how recovery time itself is calculated.</dd>";
-  html += "<dt>ABR vs. Mass Recovery</dt><dd>ABR (Autonomous Business Recovery) sequences groups - Group 1 first, then Group 2, etc. - so a milestone is reached once every workload finishes its own Groups 1..N. Mass Recovery (undifferentiated, no prioritization) has no per-group targeting; it recovers the whole workload as a single job, so the SAME full-restore figure is shown at every group on the Recovery tab for comparison. Prioritizing does not shrink the TOTAL time to recover everything (same total throughput capacity, same total data) - it changes WHEN each group comes back online, which is exactly what the downtime-cost comparison on the Recovery tab quantifies.</dd>";
-  html += "<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour you set on the Recovery tab. The \"cost avoided\" figure compares ABR (that group online early) against Mass Recovery (the same undifferentiated full-restore wait, every time). Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>";
+  html += "<dt>Department hub site (heuristic)</dt><dd>SharePoint sites whose name/URL matches a department keyword (Payroll, HR, IT, etc.) AND whose page-view/file activity ranks in the top quartile of all SharePoint sites in this run. This is a proxy for \"many people across the org rely on this site\" using data already collected - not a true unique-accessor count. Treat it as a nudge to double-check, not a certainty.</dd>";
+  html += "<dt>Mailbox type</dt><dd>Classified from <b>assigned licenses</b> (the usage report no longer returns a usable Recipient Type column). <b>Licensed</b> = at least one license assigned (counts toward the Rubrik license quote). <b>Shared / group / other</b> = unlicensed accounts that are disabled or carry the standard mailbox limit Exchange gives shared/resource mailboxes, mailboxes with no matching user account, and (with -DetailedSizing in the Full script) mailboxes confirmed as Shared/Room/Equipment by Exchange Online: protected and sized, but no Rubrik license needed. <b>Enabled, unlicensed</b> users are not protected and are excluded from the report. Without Exchange Online this is an estimate.</dd>";
+  html += "<dt>Manager roll-up</dt><dd>Each user's manager chain is resolved from a single directory pull. Use the \"Filter to org under manager\" box to isolate or mass-reassign everyone reporting up through a given leader.</dd>";
+  html += "<dt>Entra ID group filter</dt><dd>On by default (requests Group.Read.All; pass -NoGroups to opt out). Each user's Entra ID group membership is resolved alongside manager enrichment. Use the \"Filter to Entra ID group\" dropdown to isolate or mass-reassign everyone in a group.</dd>";
+  html += "<dt>Recovery time model</dt><dd>SharePoint/OneDrive recovery is item-throughput bound by a size-tier lookup; Exchange uses per-mailbox benchmark constants and takes the slower of items and data volume. Time = items &divide; effective items per minute (SharePoint/OneDrive) or the larger of the item time and data time (Exchange). These constants come from the Rubrik M365 recovery time estimator and are the same as the previous version of this assessment (calibration " + esc((DATA.meta && DATA.meta.calibrationVersion) || "v1") + ").</dd>";
   html += "</dl>";
   return html;
 }
@@ -5087,23 +7596,66 @@ function buildWeightsTableHtml() {
   return html;
 }
 
-// NEW: Sizing tab - ports the Exchange/OneDrive/SharePoint/Discovery Summary
-// tables from the standalone Get-RubrikM365SizingInfo.ps1 sizing script,
-// added per feedback 2026-08-11 so a customer can run this assessment once
-// and send Rubrik both recovery metrics and sizing in a single report.
-// Built ENTIRELY from data already collected for the criticality scoring
-// above (StorageBytes/ItemCount/FileCount metrics, RecipientType, and the
-// new HasArchive flag - all already flowing through ConvertTo-ReportRows) -
-// no new Graph scope or module for the numbers below. Tenant-wide totals,
-// independent of criticality tiers/weights, so this is computed once at
-// bootstrap (see recomputeAll) and never re-rendered by
-// recomputeTiersLive() - none of it changes when weights/sliders change.
-// Archive Mailbox STORAGE and Recoverable Items (both size and count)
-// require a separate Exchange Online connection and a per-mailbox loop -
-// see -DetailedSizing - and show a "not collected" note until that switch
-// is available. Archive Mailbox COUNT is free (same usage report) and
-// always shown.
-function buildSizingSummary() {
+// Recovery model constants (the calibration). One builder for the screen (Methodology tab) and print.
+function buildCalibrationHtml(mode) {
+  var pr = mode === "print";
+  var T = pr ? "pr-table" : "exec-cost-table", N = pr ? ' class="num"' : "";
+  function title(t) { return pr ? '<div class="pr-section-title">' + t + "</div>" : "<h3>" + t + "</h3>"; }
+  function note(t) { return pr ? '<div class="pr-subnote">' + t + "</div>" : '<p class="sizing-footnote">' + t + "</p>"; }
+  var model = computeRecoveryModel();
+  var html = title("Recovery model constants (calibration " + esc((DATA.meta && DATA.meta.calibrationVersion) || "v1") + ")");
+  html += note("These are the throughput constants behind every recovery time in this report. They match the previous version of this assessment, so a repeat run on the same data produces the same recovery times. Source: Rubrik M365 recovery time model.");
+  html += '<table class="' + T + '"><tbody>';
+  html += "<tr><td>Recent-data window (ABR looks back up to 7 days)</td><td" + N + ">" + state.recovery.windowDays + " days</td></tr>";
+  html += "<tr><td>SharePoint/OneDrive throughput tier (automatic, from object counts)</td><td" + N + ">" + esc(model.spodTierBucket) + "</td></tr>";
+  html += "<tr><td>Downtime cost per hour</td><td" + N + ">" + (state.recovery.costPerHour > 0 ? fmtMoney(state.recovery.costPerHour) : "not set (hours saved only)") + "</td></tr>";
+  html += "<tr><td>RTO preset</td><td" + N + ">" + esc(state.recovery.rtoPreset) + "</td></tr>";
+  html += "<tr><td>Criticality groups</td><td" + N + ">" + groupN() + " (+ " + lowName() + " low activity)</td></tr>";
+  html += "<tr><td>Group 1-" + groupN() + " Recovery Window (RTO) targets (cumulative)</td><td" + N + ">" + state.recovery.groupHours.slice(0, groupN()).join(" hr / ") + " hr</td></tr>";
+  html += "<tr><td>Teams split (Group 1-" + groupN() + ")</td><td" + N + ">" + (groupN() === 3 ? state.tierSplit : state.recovery.groupHours.slice(0, groupN()).map(function () { return 1 / groupN(); })).map(function (f) { return Math.round(f * 100) + "%"; }).join(" / ") + "</td></tr>";
+  if (state.titleWeightContribution) { html += "<tr><td>Job title weight contribution</td><td" + N + ">" + state.titleWeightContribution + "</td></tr>"; }
+  if (state.hubSiteBonus) { html += "<tr><td>Hub site bonus</td><td" + N + ">" + state.hubSiteBonus + "</td></tr>"; }
+  html += "<tr><td>Usage lookback (scoring and " + lowName() + ")</td><td" + N + ">" + periodDays() + " days</td></tr>";
+  html += "</tbody></table>";
+
+  html += title("SharePoint / OneDrive throughput tiers");
+  html += note("Parallelism-based throughput, auto-selected from this tenant's object counts unless overridden. A file bigger than the " + fmtNum(SIZE_FACTOR_BASELINE_MB) + " MiB tenant-wide average costs proportionally more (size factor) rather than a separate data-rate cap.");
+  html += '<table class="' + T + '"><thead><tr><th>Bucket</th><th' + N + '>Max objects</th><th' + N + '>Parallelism</th><th' + N + '>SharePoint items/min</th><th' + N + '>OneDrive items/min</th></tr></thead><tbody>';
+  SPOD_TIER_TABLE.forEach(function (t) {
+    var maxDisplay = (t.Max === undefined || t.Max === null) ? "&infin;" : fmtNum(t.Max);
+    html += "<tr><td>" + esc(t.Bucket) + "</td><td" + N + ">" + maxDisplay + "</td><td" + N + ">" + t.Parallelism + "</td><td" + N + ">" + fmtNum(t.Parallelism * SP_ITEMS_PER_MIN_PER_UNIT) + "</td><td" + N + ">" + fmtNum(t.Parallelism * OD_ITEMS_PER_MIN_PER_UNIT) + "</td></tr>";
+  });
+  html += "</tbody></table>";
+
+  html += title("Exchange (mailbox) throughput benchmark");
+  html += '<table class="' + T + '"><tbody>';
+  html += "<tr><td>Per-mailbox items/min</td><td" + N + ">" + fmtNum(EX_BENCHMARK.PerMailboxItemsPerMin) + "</td></tr>";
+  html += "<tr><td>Per-mailbox MB/min</td><td" + N + ">" + fmtNum(EX_BENCHMARK.PerMailboxMBPerMin) + "</td></tr>";
+  html += "<tr><td>Max parallel mailboxes</td><td" + N + ">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes) + "</td></tr>";
+  html += "<tr><td>Items/min cap (tenant-wide)</td><td" + N + ">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes * EX_BENCHMARK.PerMailboxItemsPerMin) + "</td></tr>";
+  html += "<tr><td>MB/min cap (tenant-wide)</td><td" + N + ">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes * EX_BENCHMARK.PerMailboxMBPerMin) + "</td></tr>";
+  html += "<tr><td>Overhead buffer</td><td" + N + ">" + EX_BENCHMARK.OverheadBuffer + "x</td></tr>";
+  html += "</tbody></table>";
+
+  html += title("ABR scheduling overhead");
+  html += note("Applies to ABR recovery time only, not Mass Recovery - every object touched by a restore needs its own job, regardless of how much of it changed.");
+  html += '<table class="' + T + '"><tbody>';
+  html += "<tr><td>Job scheduling rate</td><td" + N + ">" + JOB_SCHEDULING_RATE_PER_MIN.toFixed(2) + "/min (~" + (60 / JOB_SCHEDULING_RATE_PER_MIN).toFixed(1) + "s/job)</td></tr>";
+  html += "<tr><td>Minimum recovery time floor</td><td" + N + ">" + MIN_RECOVERY_MINUTES + " min</td></tr>";
+  html += "</tbody></table>";
+  return html;
+}
+
+// Sizing tab/PDF: always GB (1024^3) and items in millions with six decimals, no thousands separators,
+// so the figures can be pasted straight into the sizing tool (1234567 -> 1.234567).
+function szGB(bytes) { var v = (bytes || 0) / BYTES_PER_GB; return isFinite(v) ? v.toFixed(2) : "0.00"; }
+function szHdr(label) { return (label || "Storage") + " (GB)"; }
+function szM(n) { var v = (parseFloat(n) || 0) / 1000000; return v.toFixed(6); }
+
+// ==================== Sizing ====================
+// Built from the data already collected. Full: from the object rows. Preview/Summary: from DATA.sizingAgg (whole-tenant
+// aggregates computed at generation time; no per-object rows are in those pages).
+function buildSizingSummaryFromRows() {
   var mbRows = (DATA.workloads.mailboxes || []);
   var odRows = (DATA.workloads.onedrive || []);
   var spRows = (DATA.workloads.sharepoint || []);
@@ -5111,10 +7663,6 @@ function buildSizingSummary() {
   function metric(r, f) { return (r.metrics && typeof r.metrics[f] === "number") ? r.metrics[f] : 0; }
   function sumMetric(rows, f) { return rows.reduce(function (s, r) { return s + metric(r, f); }, 0); }
 
-  // v3.17.0: classification is LICENSE-based (see Add-MailboxTypeHeuristic):
-  // the Graph usage report no longer returns a Recipient Type column, so the
-  // old RecipientType filter counted every mailbox as a user. RecipientType
-  // is kept only as the fallback for reports generated before 3.17.0.
   var ci = mailboxClassInfo();
   function isSharedLegacy(r) { return /shared/i.test(r.RecipientType || ""); }
   var userMb, sharedMb;
@@ -5145,28 +7693,24 @@ function buildSizingSummary() {
   };
   var od = { count: odRows.length, storageBytes: sumMetric(odRows, "StorageBytes"), files: sumMetric(odRows, "FileCount") };
   var sp = { count: spRows.length, storageBytes: sumMetric(spRows, "StorageBytes"), files: sumMetric(spRows, "FileCount") };
+  return { ex: ex, od: od, sp: sp };
+}
 
+function buildSizingSummary() {
+  var base;
+  if ((IS_PREVIEW || IS_SUMMARY) && DATA.sizingAgg) { base = { ex: DATA.sizingAgg.ex, od: DATA.sizingAgg.od, sp: DATA.sizingAgg.sp }; }
+  else { base = buildSizingSummaryFromRows(); }
+  var ex = base.ex, od = base.od, sp = base.sp;
+  var ci = mailboxClassInfo();
   var totalObjects = ex.totalCount + od.count + sp.count;
   var totalStorageBytes = ex.totalStorageBytes + od.storageBytes + sp.storageBytes;
   var totalItemsFiles = ex.totalItems + od.files + sp.files;
-
-  // License estimate mirrors the original sizing script's own logic exactly
-  // (max of User Mailboxes, Shared Mailboxes, OneDrive Accounts) - not
-  // "corrected" here, since the ask was to port what that script produces.
-  // v3.17.0: with license data, the license basis is LICENSED users only (shared/group mailboxes need no Rubrik license).
+  // License estimate mirrors the original sizing script (max of user mailboxes, shared mailboxes, OneDrive accounts);
+  // with license data the basis is LICENSED users only (shared/group mailboxes need no Rubrik license).
   var licenseEstimate = ci.known ? Math.max(ex.userCount, od.count) : Math.max(ex.userCount, ex.sharedCount, od.count);
-
   return { ex: ex, od: od, sp: sp, totalObjects: totalObjects, totalStorageBytes: totalStorageBytes, totalItemsFiles: totalItemsFiles, licenseEstimate: licenseEstimate };
 }
 
-// ==================== NEW v3.17.0: license-based mailbox classification + plan breakdown ====================
-// MailboxClass (Licensed / Shared / Unknown) and LicensePlan come from the
-// PowerShell side (Add-MailboxTypeHeuristic / Get-LicensePlan, from
-// assignedLicenses - User.Read.All, no new scope). Unlicensed ENABLED users'
-// mailboxes are excluded before the data is embedded (Rubrik doesn't protect
-// them); meta.mailboxClassification carries their count/size for the note
-// below. Reports generated before 3.17.0 have no such meta and keep the old
-// Recipient Type behavior.
 var PLAN_FAMILY = { "E7": "Enterprise", "E5": "Enterprise", "E3": "Enterprise", "E1": "Enterprise", "F3": "Frontline", "F1": "Frontline", "G5": "Government", "G3": "Government", "G1": "Government", "A5": "Education", "A3": "Education", "A1": "Education", "Business Premium": "Business", "Business Standard": "Business", "Business Basic": "Business", "Exchange Online (Plan 2)": "Exchange only", "Exchange Online (Plan 1)": "Exchange only", "Exchange Online Essentials": "Exchange only", "Exchange Online Kiosk": "Exchange only", "Other (unrecognized)": "Other" };
 var PLAN_ORDER = ["E7", "E5", "E3", "E1", "F3", "F1", "G5", "G3", "G1", "A5", "A3", "A1", "Business Premium", "Business Standard", "Business Basic", "Exchange Online (Plan 2)", "Exchange Online (Plan 1)", "Exchange Online Essentials", "Exchange Online Kiosk", "Other (unrecognized)"];
 
@@ -5183,23 +7727,23 @@ function buildLicenseNoteHtml(s, cssClass) {
     note = "<b>Licensed users (Rubrik license basis): " + fmtNum(s.ex.userCount) + ".</b> Shared / group / other mailboxes (" + fmtNum(s.ex.sharedCount) +
       ") are protected and sized here but need no Rubrik license. ";
     if (mc.excludedCount > 0) {
-      note += fmtNum(mc.excludedCount) + " mailboxes belonging to enabled, unlicensed users (" + fmtGB(mc.excludedStorageBytes) + " GB, " + fmtNum(mc.excludedItems) +
+      note += fmtNum(mc.excludedCount) + " mailboxes belonging to enabled, unlicensed users (" + szGB(mc.excludedStorageBytes) + " GB" + ", " + szM(mc.excludedItems) +
         " items) are not protected by Rubrik and are excluded from every figure in this report. ";
     }
     note += mc.exoConfirmedShared
       ? "Shared mailboxes were confirmed via Exchange Online (" + fmtNum(mc.exoSharedCount) + ")."
-      : "Shared mailboxes are an <b>estimate</b> from license data: unlicensed accounts that are disabled or carry the 50 GB mailbox limit Exchange gives shared/resource mailboxes, plus mailboxes with no matching user account. A shared mailbox that is enabled, unlicensed, and has a non-default limit would be counted as an unlicensed user; run with -DetailedSizing to confirm shared mailboxes via Exchange Online.";
+      : "Shared mailboxes are an <b>estimate</b> from license data: unlicensed accounts that are disabled or carry the standard mailbox limit Exchange gives shared/resource mailboxes, plus mailboxes with no matching user account. A shared mailbox that is enabled, unlicensed, and has a non-default limit would be counted as an unlicensed user; run with -DetailedSizing to confirm shared mailboxes via Exchange Online.";
   } else {
     note = "Licensed vs. shared mailboxes <b>could not be classified from license data</b> (user profile enrichment failed or returned nothing, or this report predates license-based classification). The split above relies on the Exchange Recipient Type field, which Microsoft's usage report no longer reliably returns, so Shared Mailboxes may be understated and no unlicensed mailboxes were excluded.";
   }
   return '<div class="' + cssClass + '">' + note + "</div>";
 }
 
-function buildLicensePlanTableHtml(printMode) {
-  var ci = mailboxClassInfo();
-  if (!ci.known) { return ""; }
+function licensePlanData() {
+  if ((IS_PREVIEW || IS_SUMMARY) && DATA.sizingAgg && DATA.sizingAgg.licensePlans) {
+    return { by: DATA.sizingAgg.licensePlans, total: DATA.sizingAgg.licensedUsers || 0, archiveAddon: DATA.sizingAgg.archiveAddon || 0 };
+  }
   var rows = (DATA.workloads.mailboxes || []).filter(function (r) { return r.MailboxClass === "Licensed"; });
-  if (rows.length === 0) { return ""; }
   var by = {}, archiveAddon = 0;
   rows.forEach(function (r) {
     var k = r.LicensePlan || "Other (unrecognized)";
@@ -5208,161 +7752,225 @@ function buildLicensePlanTableHtml(printMode) {
     by[k].bytes += (r.metrics && typeof r.metrics.StorageBytes === "number") ? r.metrics.StorageBytes : 0;
     if (r.HasArchiveAddon) { archiveAddon++; }
   });
+  return { by: by, total: rows.length, archiveAddon: archiveAddon };
+}
+
+function buildLicensePlanTableHtml(printMode) {
+  var ci = mailboxClassInfo();
+  if (!ci.known) { return ""; }
+  var d = licensePlanData();
+  if (d.total === 0) { return ""; }
+  var by = d.by;
   var keys = PLAN_ORDER.filter(function (k) { return by[k]; });
   Object.keys(by).forEach(function (k) { if (keys.indexOf(k) < 0) { keys.push(k); } });
   var tcls = printMode ? "pr-table" : "exec-cost-table";
   var nc = printMode ? ' class="num"' : "";
+  var totalBytes = 0;
   var body = keys.map(function (k) {
-    return "<tr><td>" + esc(PLAN_FAMILY[k] || "Other") + "</td><td>" + esc(k) + "</td><td" + nc + ">" + fmtNum(by[k].users) + "</td><td" + nc + ">" + fmtGB(by[k].bytes) + "</td><td" + nc + ">" +
-      (100 * by[k].users / rows.length).toFixed(1) + "%</td></tr>";
+    totalBytes += by[k].bytes;
+    return "<tr><td>" + esc(PLAN_FAMILY[k] || "Other") + "</td><td>" + esc(k) + "</td><td" + nc + ">" + fmtNum(by[k].users) + "</td><td" + nc + ">" + szGB(by[k].bytes) + "</td><td" + nc + ">" +
+      (100 * by[k].users / d.total).toFixed(1) + "%</td></tr>";
   }).join("");
-  body += '<tr class="total-row"><td colspan="2">Total licensed users</td><td' + nc + ">" + fmtNum(rows.length) + "</td><td" + nc + ">" + fmtGB(rows.reduce(function (a, r) { return a + ((r.metrics && r.metrics.StorageBytes) || 0); }, 0)) + "</td><td" + nc + ">100%</td></tr>";
+  body += '<tr class="total-row no-sort-row"><td colspan="2">Total licensed users</td><td' + nc + ">" + fmtNum(d.total) + "</td><td" + nc + ">" + szGB(totalBytes) + "</td><td" + nc + ">100%</td></tr>";
   var h = (printMode ? '<div class="pr-section-title" style="font-size:1rem">' : "<h3>") + "Licensed users by plan" + (printMode ? "</div>" : "</h3>");
-  h += '<table class="' + tcls + '"><thead><tr><th>Family</th><th>Plan</th><th' + nc + '>Users</th><th' + nc + '>Mailbox storage (GB)</th><th' + nc + '>% of licensed</th></tr></thead><tbody>' + body + "</tbody></table>";
+  h += '<table class="' + tcls + '"><thead><tr><th>Family</th><th>Plan</th><th' + nc + '>Users</th><th' + nc + '>' + szHdr("Mailbox storage") + '</th><th' + nc + '>% of licensed</th></tr></thead><tbody>' + body + "</tbody></table>";
   var um = (ci.mc && ci.mc.unmappedSkus) || [];
   if (um.length > 0 && by["Other (unrecognized)"]) {
     h += '<div class="' + (printMode ? "pr-note" : "sizing-footnote") + '">Unrecognized license SKU ids (users holding them): ' +
       um.map(function (u) { return esc(u.skuId) + " (" + fmtNum(u.users) + ")"; }).join(", ") + ".</div>";
   }
   h += '<div class="' + (printMode ? "pr-note" : "sizing-footnote") + '">Each licensed user is counted once, under their highest plan (E5 over E3, etc.). Counts cover users with a mailbox. Plan names come from a built-in table of Microsoft license SKU ids; anything not in that table is listed as "Other (unrecognized)". ' +
-    "Exchange Online Archiving add-on (standalone SKU): " + fmtNum(archiveAddon) + " user(s). E3/E5/F3/A-series plans already include the In-Place Archive, so this add-on count is separate from the Archive Mailboxes count above.</div>";
+    "Exchange Online Archiving add-on (standalone SKU): " + fmtNum(d.archiveAddon) + " user(s). E3/E5/F3/A-series plans already include the In-Place Archive, so this add-on count is separate from the Archive Mailboxes count above.</div>";
   return h;
 }
 
-function buildSizingExchangeTableHtml(s) {
+// One builder for the sizing tables, screen and print.
+function buildSizingTablesHtml(s, mode) {
+  var pr = mode === "print";
   var detailed = !!(DATA.meta && DATA.meta.detailedSizingRequested);
+  var T = pr ? "pr-table" : "exec-cost-table", N = pr ? ' class="num"' : "";
+  var avgDash = "0";
   var archiveStorageCell, archiveItemsCell, archiveAvgCell, rifRow;
-
+  var totalStorageForAvg = s.ex.totalStorageBytes;
   if (detailed && DATA.meta.sizing) {
     var archStorage = DATA.meta.sizing.archiveStorageBytes || 0;
-    var archItems = DATA.meta.sizing.archiveItems || 0;
-    archiveStorageCell = fmtGB(archStorage);
-    archiveItemsCell = fmtNum(archItems);
-    archiveAvgCell = s.ex.archiveCount > 0 ? fmtGB(archStorage / s.ex.archiveCount) : "0.00";
     var rifStorage = DATA.meta.sizing.recoverableItemsStorageBytes || 0;
     var rifItems = DATA.meta.sizing.recoverableItemsItems || 0;
     var rifCount = DATA.meta.sizing.recoverableItemsCount || 0;
-    rifRow = "<tr><td>Recoverable Items</td><td>" + fmtNum(rifCount) + "</td><td>" + fmtGB(rifStorage) + "</td><td>" + fmtNum(rifItems) + "</td><td>" + (rifCount > 0 ? fmtGB(rifStorage / rifCount) : "0.00") + "</td></tr>";
+    archiveStorageCell = szGB(archStorage);
+    archiveItemsCell = szM(DATA.meta.sizing.archiveItems || 0);
+    archiveAvgCell = s.ex.archiveCount > 0 ? szGB(archStorage / s.ex.archiveCount) : avgDash;
+    rifRow = "<tr><td>Recoverable Items</td><td" + N + ">" + fmtNum(rifCount) + "</td><td" + N + ">" + szGB(rifStorage) + "</td><td" + N + ">" + szM(rifItems) + "</td><td" + N + ">" + (rifCount > 0 ? szGB(rifStorage / rifCount) : avgDash) + "</td></tr>";
+    totalStorageForAvg += archStorage + rifStorage;
   } else {
-    // NEW: simplified to a bare "*" per skipped cell, per feedback
-    // 2026-08-11 - a single footnote below the table (see renderSizingTab)
-    // explains what the asterisk means, rather than repeating an inline
-    // explanation in every cell/row label.
-    archiveStorageCell = "*";
-    archiveItemsCell = "*";
-    archiveAvgCell = "*";
-    rifRow = "<tr><td>Recoverable Items</td><td>*</td><td>*</td><td>*</td><td>*</td></tr>";
+    archiveStorageCell = "*"; archiveItemsCell = "*"; archiveAvgCell = "*";
+    rifRow = "<tr><td>Recoverable Items</td><td" + N + ">*</td><td" + N + ">*</td><td" + N + ">*</td><td" + N + ">*</td></tr>";
   }
-
-  var totalStorageForAvg = s.ex.totalStorageBytes;
-  if (detailed && DATA.meta.sizing) { totalStorageForAvg += (DATA.meta.sizing.archiveStorageBytes || 0) + (DATA.meta.sizing.recoverableItemsStorageBytes || 0); }
-
-  var tableHtml = '<table class="exec-cost-table"><thead><tr><th>Mailbox Type</th><th>Count</th><th>Storage (GB)</th><th>Items</th><th>Avg per Mailbox (GB)</th></tr></thead><tbody>' +
-    "<tr><td>" + s.ex.userLabel + "</td><td>" + fmtNum(s.ex.userCount) + "</td><td>" + fmtGB(s.ex.userStorageBytes) + "</td><td>" + fmtNum(s.ex.userItems) + "</td><td>" + (s.ex.userCount > 0 ? fmtGB(s.ex.userStorageBytes / s.ex.userCount) : "0.00") + "</td></tr>" +
-    "<tr><td>" + s.ex.sharedLabel + "</td><td>" + fmtNum(s.ex.sharedCount) + "</td><td>" + fmtGB(s.ex.sharedStorageBytes) + "</td><td>" + fmtNum(s.ex.sharedItems) + "</td><td>" + (s.ex.sharedCount > 0 ? fmtGB(s.ex.sharedStorageBytes / s.ex.sharedCount) : "0.00") + "</td></tr>" +
-    "<tr><td>Archive Mailboxes</td><td>" + fmtNum(s.ex.archiveCount) + "</td><td>" + archiveStorageCell + "</td><td>" + archiveItemsCell + "</td><td>" + archiveAvgCell + "</td></tr>" +
+  var h = '<table class="' + T + '"><thead><tr><th>Mailbox Type</th><th' + N + '>Count</th><th' + N + '>' + szHdr("Storage") + '</th><th' + N + '>Items (millions)</th><th' + N + '>' + szHdr("Avg per mailbox") + '</th></tr></thead><tbody>' +
+    "<tr><td>" + s.ex.userLabel + "</td><td" + N + ">" + fmtNum(s.ex.userCount) + "</td><td" + N + ">" + szGB(s.ex.userStorageBytes) + "</td><td" + N + ">" + szM(s.ex.userItems) + "</td><td" + N + ">" + (s.ex.userCount > 0 ? szGB(s.ex.userStorageBytes / s.ex.userCount) : avgDash) + "</td></tr>" +
+    "<tr><td>" + s.ex.sharedLabel + "</td><td" + N + ">" + fmtNum(s.ex.sharedCount) + "</td><td" + N + ">" + szGB(s.ex.sharedStorageBytes) + "</td><td" + N + ">" + szM(s.ex.sharedItems) + "</td><td" + N + ">" + (s.ex.sharedCount > 0 ? szGB(s.ex.sharedStorageBytes / s.ex.sharedCount) : avgDash) + "</td></tr>" +
+    "<tr><td>Archive Mailboxes</td><td" + N + ">" + fmtNum(s.ex.archiveCount) + "</td><td" + N + ">" + archiveStorageCell + "</td><td" + N + ">" + archiveItemsCell + "</td><td" + N + ">" + archiveAvgCell + "</td></tr>" +
     rifRow +
-    '<tr class="total-row"><td>' + s.ex.totalLabel + '</td><td>' + fmtNum(s.ex.totalCount) + "</td><td>" + fmtGB(totalStorageForAvg) + "</td><td>" + fmtNum(s.ex.totalItems) + "</td><td>" + (s.ex.totalCount > 0 ? fmtGB(totalStorageForAvg / s.ex.totalCount) : "0.00") + "</td></tr>" +
+    '<tr class="total-row no-sort-row"><td>' + s.ex.totalLabel + "</td><td" + N + ">" + fmtNum(s.ex.totalCount) + "</td><td" + N + ">" + szGB(totalStorageForAvg) + "</td><td" + N + ">" + szM(s.ex.totalItems) + "</td><td" + N + ">" + (s.ex.totalCount > 0 ? szGB(totalStorageForAvg / s.ex.totalCount) : avgDash) + "</td></tr>" +
     "</tbody></table>";
-
-  tableHtml += buildLicenseNoteHtml(s, "sizing-footnote");
+  h += buildLicenseNoteHtml(s, pr ? "pr-note" : "sizing-footnote");
   if (!detailed) {
-    tableHtml += '<div class="sizing-footnote">*Note: Not collected - run script with the -DetailedSizing switch to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>';
+    h += '<div class="' + (pr ? "pr-note" : "sizing-footnote") + '">*Note: Not collected - run script with the -DetailedSizing switch to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>';
   }
-  return tableHtml;
+  return h;
 }
 
 function renderSizingTab() {
   var s = buildSizingSummary();
-  var detailed = !!(DATA.meta && DATA.meta.detailedSizingRequested);
-
   var html = "<h2>M365 Sizing</h2>" +
-    '<p style="color:var(--dark-gray);font-size:.9rem;max-width:70ch;margin:-1rem 0 1.5rem;">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups elsewhere in this report. Pulled from the same Graph usage reports already used for this assessment; no extra permissions required for the totals below. Send this tab along with your recovery metrics for Rubrik sizing.</p>';
+    '<p class="lede">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups elsewhere in this report. Pulled from the same Graph usage reports already used for this assessment; no extra permissions required for the totals below. Send this tab along with your recovery metrics for Rubrik sizing.</p>';
 
-  html += '<div class="sizing-section"><h3>Exchange Online</h3>' + buildSizingExchangeTableHtml(s) + "</div>";
-
+  html += '<div class="sizing-section"><h3>Exchange Online</h3>' + buildSizingTablesHtml(s, "screen") + "</div>";
   var planHtml = buildLicensePlanTableHtml(false);
   if (planHtml) { html += '<div class="sizing-section">' + planHtml + "</div>"; }
 
-  html += '<div class="sizing-section"><h3>OneDrive</h3><table class="exec-cost-table"><thead><tr><th>Accounts</th><th>Storage (GB)</th><th>Files</th><th>Avg per Account (GB)</th></tr></thead><tbody>' +
-    "<tr><td>" + fmtNum(s.od.count) + "</td><td>" + fmtGB(s.od.storageBytes) + "</td><td>" + fmtNum(s.od.files) + "</td><td>" + (s.od.count > 0 ? fmtGB(s.od.storageBytes / s.od.count) : "0.00") + "</td></tr>" +
+  html += '<div class="sizing-section"><h3>OneDrive</h3><table class="exec-cost-table"><thead><tr><th>Accounts</th><th>' + szHdr("Storage") + '</th><th>Files (millions)</th><th>' + szHdr("Avg per account") + '</th></tr></thead><tbody>' +
+    "<tr><td>" + fmtNum(s.od.count) + "</td><td>" + szGB(s.od.storageBytes) + "</td><td>" + szM(s.od.files) + "</td><td>" + (s.od.count > 0 ? szGB(s.od.storageBytes / s.od.count) : "0") + "</td></tr>" +
+    "</tbody></table></div>";
+  html += '<div class="sizing-section"><h3>SharePoint</h3><table class="exec-cost-table"><thead><tr><th>Sites</th><th>' + szHdr("Storage") + '</th><th>Files (millions)</th><th>' + szHdr("Avg per site") + '</th></tr></thead><tbody>' +
+    "<tr><td>" + fmtNum(s.sp.count) + "</td><td>" + szGB(s.sp.storageBytes) + "</td><td>" + szM(s.sp.files) + "</td><td>" + (s.sp.count > 0 ? szGB(s.sp.storageBytes / s.sp.count) : "0") + "</td></tr>" +
     "</tbody></table></div>";
 
-  html += '<div class="sizing-section"><h3>SharePoint</h3><table class="exec-cost-table"><thead><tr><th>Sites</th><th>Storage (GB)</th><th>Files</th><th>Avg per Site (GB)</th></tr></thead><tbody>' +
-    "<tr><td>" + fmtNum(s.sp.count) + "</td><td>" + fmtGB(s.sp.storageBytes) + "</td><td>" + fmtNum(s.sp.files) + "</td><td>" + (s.sp.count > 0 ? fmtGB(s.sp.storageBytes / s.sp.count) : "0.00") + "</td></tr>" +
-    "</tbody></table></div>";
-
-  var perUserAvg = s.licenseEstimate > 0 ? fmtGB(s.totalStorageBytes / s.licenseEstimate) : "0.00";
+  var perUserAvg = s.licenseEstimate > 0 ? szGB(s.totalStorageBytes / s.licenseEstimate) : "0";
   html += '<div class="sizing-section"><h3>Discovery Summary</h3><div class="sizing-discovery-grid">' +
     '<div class="sizing-discovery-cell"><div class="label">Total Users / Accounts</div><div class="value">' + fmtNum(s.licenseEstimate) + "</div></div>" +
-    '<div class="sizing-discovery-cell"><div class="label">Total Storage (GB)</div><div class="value">' + fmtGB(s.totalStorageBytes) + "</div></div>" +
-    '<div class="sizing-discovery-cell"><div class="label">Total Items &amp; Files</div><div class="value">' + fmtNum(s.totalItemsFiles) + "</div></div>" +
-    '<div class="sizing-discovery-cell"><div class="label">Avg per User/Account (GB)</div><div class="value">' + perUserAvg + "</div></div>" +
+    '<div class="sizing-discovery-cell"><div class="label">' + szHdr("Total storage") + '</div><div class="value">' + szGB(s.totalStorageBytes) + "</div></div>" +
+    '<div class="sizing-discovery-cell"><div class="label">Total Items &amp; Files (millions)</div><div class="value">' + szM(s.totalItemsFiles) + "</div></div>" +
+    '<div class="sizing-discovery-cell"><div class="label">' + szHdr("Avg per user/account") + '</div><div class="value">' + perUserAvg + "</div></div>" +
   "</div></div>";
-
   document.getElementById("panel-sizing").innerHTML = html;
+}
+
+// ==================== Recovery Playbook ====================
+// How to USE the groups in a real recovery. Sequence from field guidance plus Rubrik's
+// "M365 Recovery Best Practices" white paper (RWP-0673). Numbers come from the live recovery model.
+function pbStep(n, title, tag, bodyHtml, metaHtml) {
+  return '<div class="pb-step"><div class="pb-n">' + n + '</div><div class="pb-body"><div class="pb-title">' + title + (tag ? ' <span class="pb-tag">' + tag + '</span>' : '') + '</div>' + bodyHtml + (metaHtml ? '<div class="pb-meta">' + metaHtml + '</div>' : '') + '</div></div>';
+}
+function pbScope(m, label) {
+  if (!m) { return '<span class="pb-lock">' + exLocked() + ' <span class="pb-locknote">Part of the full assessment</span></span>'; }
+  return '<span><b>' + fmtNum(reportMsObjs(m)) + '</b> objects (' + fmtNum(reportMsItems(m)) + ' items, ' + fmtStorage(reportMsBytes(m)) + ')</span>';
+}
+
+function buildPlaybookHtml() {
+  var model = computeRecoveryModel();
+  var G = groupN(), gm = critKeys().map(function (k) { return reportMsOf(model, k); }), g1 = gm[0], gLast = gm[G - 1], lowN = lowName(), lastScope = scopeName(G);
+  var win = state.recovery.windowDays;
+  var full = model.fullRestoreMin;
+  var lowObjs = 0, lowBytes = 0;
+  if (!IS_PREVIEW) { var s4 = execTierSum("Group 4"); if (s4) { lowObjs = s4.objects; lowBytes = s4.bytes; } }
+  // per-group slice (this group only) for scope lines
+  function slice(tier) { var s = execTierSum(tier); return s; }
+  var h = '<h2>Recovery Playbook</h2>';
+  h += '<p class="lede">How to use the groups when you actually have to recover. The groups tell you <b>what</b> comes back first; this is the <b>order of operations</b> that goes with them. It follows Rubrik\'s M365 Recovery Best Practices (RWP-0673) and field guidance, with your own numbers filled in.</p>';
+  h += '<div class="pb-note"><b>Use this for a mass deletion event or tenant-wide compromise</b>: accidental, insider, external attacker or a rogue AI agent. For a few items, use granular or self-service restore.</div>';
+
+  // at a glance
+  var rows = [];
+  rows.push(["0", "Recover identity", "AD, sync server, Entra ID", "Before any M365 data", "Not modeled (depends on your AD)"]);
+  gm.forEach(function (m, i) {
+    var k = i + 1;
+    rows.push([String(k), tierTitle(k) + ", prioritized recovery", m ? fmtNum(reportMsObjs(m) - (i > 0 && gm[i - 1] ? reportMsObjs(gm[i - 1]) : 0)) + " objects" : (i === 0 ? "&mdash;" : exLocked()), "Last " + win + " days", m ? fmtMin(m.wallClockCumMin) + " &middot; " + recWhen(m.wallClockCumMin) : (i === 0 ? "&mdash;" : exLocked())]);
+  });
+  rows.push([String(G + 1), "Mass recovery, " + lastScope, gLast ? fmtNum(reportMsObjs(gLast)) + " objects, older data" : exLocked(), "Historical data", gLast ? "~" + fmtMin(gLast.massRecoveryCumMin) + " for this scope" : exLocked()]);
+  rows.push([String(G + 2), "Mass recovery, " + lowN, IS_PREVIEW ? exLocked() : fmtNum(lowObjs) + " low-activity objects", "Everything remaining", "Whole tenant baseline " + fmtMin(full)]);
+  h += '<h3>Your sequence at a glance</h3><div class="table-wrap"><table class="ex2-table"><thead><tr><th>Step</th><th>What</th><th>Scope</th><th>Data restored</th><th>Online by (if started ' + recWhen(0) + ')</th></tr></thead><tbody>' +
+    rows.map(function (r) { return "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td><td>" + r[2] + "</td><td>" + r[3] + "</td><td>" + r[4] + "</td></tr>"; }).join("") + '</tbody></table></div>';
+  h += '<div class="ex2-note">Times are ABR estimates from this assessment and are cumulative (each step includes the ones before it). Prioritizing does not shorten the total time to restore everything; it changes <b>when</b> each group comes back.</div>';
+
+  // steps
+  h += '<h3>The steps</h3><div class="pb-steps">';
+  h += pbStep(0, "Recover identity first", "Always", 
+    '<p>Nothing in M365 works without identity. Restore in this order:</p><ol class="pb-sub"><li><b>On-premises Active Directory</b>, usually the source of truth for users and groups.</li><li><b>The Entra ID (Azure AD) Connect / sync server</b>, which translates AD and uploads it to Entra ID.</li><li><b>Microsoft Entra ID</b>, most importantly users and the <b>Microsoft 365 (modern) groups</b>. Teams, SharePoint and access to other services depend on them, and Mass Recovery selects Exchange and OneDrive users through Entra ID groups, so those groups must exist first.</li></ol>' +
+    '<p>Why order matters: Rubrik preserves the relationships between AD and Entra ID (SIDs, GUIDs, UPNs, app authorizations, Conditional Access policies). A user restored with a new SID can break Conditional Access, app integrations and MFA, and Entra ID may create a new object without the old policies.</p>',
+    'Time is not modeled here because it depends on the size of your directory. Plan it as the first block of the timeline.');
+  var fullBtn = (IS_PREVIEW || IS_SUMMARY) ? "" : ' <button type="button" class="ex2-btn" onclick="exportGroup1Csv()">Export the Group 1 list (CSV)</button>';
+  h += pbStep(1, "Critical users (Group 1): prioritized recovery, last " + win + " days", "Recover first",
+    '<p>Run <b>Prioritized Data Recovery</b> on Group 1 for the last ' + win + ' days of data, and <b>hold off on full mass recovery</b>. This gets people working again fastest. Group 1 is ' + pbScope(g1) + '.</p>' +
+    '<p>Build the recovery groups in Rubrik Security Cloud: <b>Entra ID groups</b> for Exchange and OneDrive, and <b>wildcard groups</b> (simple name patterns) for SharePoint sites and Teams.' + fullBtn + '</p>',
+    g1 ? ('Online in <b>' + fmtMin(g1.wallClockCumMin) + '</b> (' + recWhen(g1.wallClockCumMin) + '). Recovery Window (RTO) target ' + state.recovery.group1Hours + ' hr: ' + (g1.exceedsTarget ? '<b>over by ' + fmtMin(g1.targetGapMin) + '</b>' : 'met') + '.') : 'Group 1 timing is shown in the full assessment.');
+  gm.forEach(function (m, i) {
+    var k = i + 1;
+    if (k === 1) { return; }
+    h += pbStep(k, tierTitle(k) + ": prioritized recovery, last " + win + " days", "",
+      '<p>' + (k === 2 ? 'Same approach for Group 2, once Group 1 has finished its prioritized data.' : 'Same again for Group ' + k + '.') + ' Group ' + k + ' adds ' + (m && gm[i - 1] ? '<b>' + fmtNum(reportMsObjs(m) - reportMsObjs(gm[i - 1])) + '</b> objects' : exLocked()) + '.</p>',
+      m ? (scopeName(k) + ' online in <b>' + fmtMin(m.wallClockCumMin) + '</b> (' + recWhen(m.wallClockCumMin) + '). Target ' + groupHoursOf(k) + ' hr: ' + (m.exceedsTarget ? '<b>over by ' + fmtMin(m.targetGapMin) + '</b>' : 'met') + '.') : scopeName(k) + ' timing is part of the full assessment.');
+  });
+  h += pbStep(G + 1, "Mass recovery of " + lastScope, "",
+    '<p>With the recent data back and people working, start <b>mass recovery for ' + lastScope + '</b> to bring back the older, historical data. Mass recovery restores objects in parallel and runs in the background.</p>',
+    gLast ? ('Mass recovery of this scope: about <b>' + fmtMin(gLast.massRecoveryCumMin) + '</b> on its own.') : '');
+  h += pbStep(G + 2, "Mass recovery of " + lowN, "Last",
+    '<p>Finish with ' + lowN + ', the low-activity objects (part of mass recovery, never prioritized): ' + (IS_PREVIEW ? exLocked() : 'about <b>' + fmtNum(lowObjs) + '</b> objects, ' + fmtStorage(lowBytes)) + '. These may be orphaned, rarely used or held for compliance. They are still protected; they are just not needed to get the business running.</p>' +
+    '<p>' + esc(group4Disclaimer()) + '</p>',
+    'Whole-tenant mass recovery baseline: <b>' + fmtMin(full) + '</b>. Finishing everything takes about the same total time either way; the sequence changes when each group is usable.');
+  h += '</div>';
+
+  // decisions
+  h += '<h3>Choices that depend on the situation</h3><div class="pb-cards">';
+  h += '<div class="pb-card"><div class="pb-card-t">Prioritized recovery, with or without waterfall</div>' +
+    '<p>Prioritized recovery restores the latest data first (1 to 30 days), then <b>pauses</b>. <b>Waterfall</b> carries straight on into historical data.</p>' +
+    '<p><b>Rule of thumb:</b> no waterfall while working through the prioritized groups, so history does not compete with the next group\'s recent data. Waterfall for the last group, or when no one is watching.</p></div>';
+  h += '<div class="pb-card"><div class="pb-card-t">VIP group outside Groups 1 to 4</div>' +
+    '<p>Executives and other critical users who need <b>everything</b>, not just ' + win + ' days: put them in their own Entra ID group and run <b>mass recovery</b> for it alongside identity or Group 1. It is small, so it adds little time.</p></div>';
+  h += '<div class="pb-card"><div class="pb-card-t">Tenant-wide compromise</div>' +
+    '<p>Find a clean recovery point first (Anomaly Detection, Threat Hunting) so you do not reinfect. If the tenant itself is suspect, restore into a new, clean tenant with cross-subscription restoration.</p></div>';
+  h += '</div>';
+  h += '<div class="ex2-note">Sources: Rubrik, <i>M365 Recovery Best Practices</i> (RWP-0673, Aug 2025), plus field guidance. Times are modeled estimates; validate in a recovery test. Teams support for prioritized recovery was "coming soon" in Aug 2025, so confirm current availability.</div>';
+  return h;
+}
+function renderPlaybookTab() {
+  var el = document.getElementById("panel-playbook");
+  if (!el) { return; }
+  var model = computeRecoveryModel();
+  if (!(model.fullRestoreMin > 0)) { el.innerHTML = '<h2>Recovery Playbook</h2><div class="exec-hero-note">No objects with recent activity were found, so there is nothing to sequence yet.</div>'; return; }
+  el.innerHTML = buildPlaybookHtml();
 }
 
 function renderMethodologyTab() {
   var html = "<h2>Methodology &amp; Glossary</h2>" + buildGlossaryHtml();
-  html += '<h3 style="margin-top:2rem;font-size:1rem;color:var(--navy);">Current live weights</h3>' + buildWeightsTableHtml();
+  html += '<div class="sizing-section">' + buildCalibrationHtml("screen") + "</div>";
+  html += "<h3>Current scoring weights</h3>" + buildWeightsTableHtml();
   document.getElementById("panel-methodology").innerHTML = html;
 }
 
-// ==================== NEW v3.6.0: PDF export ====================
-// Per feedback 2026-07-23: two export options, both via the browser's
-// native print-to-PDF (window.print(), user picks "Save as PDF" in the
-// print dialog) - no new external dependency, consistent with this report's
-// existing single-file/offline-first design. Both builders recompute
-// straight from DATA/state/computeRecoveryModel() rather than scraping the
-// live tab DOM, so the numbers can never drift from what the report shows,
-// and the output is plain static markup (no buttons/dropdowns/onclick
-// handlers to strip).
-
+// ==================== PDF export (Full build only) ====================
+// Browser print-to-PDF of a static document recomputed from DATA/state/computeRecoveryModel() (never scraped from the DOM).
 function buildPrintHeaderHtml(subtitle) {
   return '<div class="pr-header">' +
-    '<div class="pr-eyebrow">Recovery Sequencing Assessment &ndash; ' + esc(subtitle) + '</div>' +
+    '<div class="pr-eyebrow">Recovery Assessment &ndash; ' + esc(subtitle) + '</div>' +
     '<div class="pr-title">Recovery Assessment - M365 - ' + esc(DATA.meta.customerLabel) + '</div>' +
     '<div class="pr-meta">' +
       '<span>Usage window: <b>' + esc(DATA.meta.period) + '</b></span>' +
-      '<span>Sign-in lookback: <b>' + esc(DATA.meta.signInLookbackDays) + ' days</b></span>' +
+      '<span>Storage unit: <b>' + storageUnit() + '</b></span>' +
       '<span>Generated: <b>' + esc(DATA.meta.generatedAt) + '</b></span>' +
     "</div>" +
   "</div>";
 }
 
-// Cross-workload Dormant Data numbers - same calculation used by
-// renderExecLean()/renderExecFinancialAndRecoveryTop()'s dormantHtml, kept
-// in sync by construction since all three call sites compute it the same
-// way (filter every workload's rows down to the last TIER_ORDER entry).
-// NEW v3.10.1: takes the already-computed recovery `model` (callers all
-// have one on hand) so byWorkload can carry each workload's Mass Recovery
-// time alongside its Group 4 count/pct - see
-// renderExecFinancialAndRecoveryTop's matching dormantByWorkload block for
-// why that whole-workload total, not an isolated "just Group 4" figure, is
-// the honest number here (Group 4 has no ABR priority or separate job).
-function computeDormantSummary(model) {
-  var MASS_RECOVERY_KEY_BY_WORKLOAD = { mailboxes: "ex", onedrive: "od", sharepoint: "sp" };
-  var inactiveTierName = TIER_ORDER[TIER_ORDER.length - 1];
+// Group 4 numbers: count and share per workload (same calculation as the Report tab).
+function computeLowActivitySummary(model) {
+  var MASS_KEY = { mailboxes: "ex", onedrive: "od", sharepoint: "sp" };
+  var g4 = TIER_ORDER[TIER_ORDER.length - 1];
   var byWorkload = WORKLOAD_DEFS.map(function (wd) {
     var rows = DATA.workloads[wd.key] || [];
-    var inactiveCount = rows.filter(function (r) { return r.Tier === inactiveTierName; }).length;
-    var pct = rows.length > 0 ? Math.round((inactiveCount / rows.length) * 100) : 0;
-    var massKey = MASS_RECOVERY_KEY_BY_WORKLOAD[wd.key];
-    var massRecoveryMin = (model && massKey) ? model.perWorkloadMassRecoveryMin[massKey] : null;
-    return { label: wd.label, inactiveCount: inactiveCount, total: rows.length, pct: pct, massRecoveryMin: massRecoveryMin };
+    var cnt = rows.filter(function (r) { return r.Tier === g4; }).length;
+    var pct = rows.length > 0 ? Math.round((cnt / rows.length) * 100) : 0;
+    var massKey = MASS_KEY[wd.key];
+    return { label: wd.label, count: cnt, total: rows.length, pct: pct, massRecoveryMin: (model && massKey) ? model.perWorkloadMassRecoveryMin[massKey] : null };
   }).filter(function (d) { return d.total > 0; });
-  var totalObjectsAll = byWorkload.reduce(function (s, d) { return s + d.total; }, 0);
-  var totalInactiveAll = byWorkload.reduce(function (s, d) { return s + d.inactiveCount; }, 0);
-  var overallPct = totalObjectsAll > 0 ? Math.round((totalInactiveAll / totalObjectsAll) * 100) : 0;
-  return { byWorkload: byWorkload, totalObjectsAll: totalObjectsAll, totalInactiveAll: totalInactiveAll, overallPct: overallPct };
+  var totalAll = byWorkload.reduce(function (s, d) { return s + d.total; }, 0);
+  var cntAll = byWorkload.reduce(function (s, d) { return s + d.count; }, 0);
+  return { byWorkload: byWorkload, totalObjectsAll: totalAll, totalGroup4: cntAll, overallPct: totalAll > 0 ? Math.round((cntAll / totalAll) * 100) : 0 };
 }
 
-// Per-workload tier counts, one row per workload plus a grand-total row -
-// backs the "Group Overview by Workload" table in both PDF modes.
 function buildGroupOverviewTableHtml() {
   var html = '<table class="pr-table"><thead><tr><th>Workload</th>' +
-    TIER_ORDER.map(function (t) { return '<th class="num">' + TIER_META[t].short + "</th>"; }).join("") +
+    TIER_ORDER.map(function (t) { return '<th class="num">' + TIER_META[t].named + "</th>"; }).join("") +
     '<th class="num">Total</th></tr></thead><tbody>';
   var grandTotals = {}; TIER_ORDER.forEach(function (t) { grandTotals[t] = 0; });
   var grandTotal = 0;
@@ -5378,16 +7986,13 @@ function buildGroupOverviewTableHtml() {
     rowHtml += '<td class="num">' + fmtNum(rows.length) + "</td></tr>";
     html += rowHtml;
   });
-  html += '<tr class="total-row"><td>Total</td>' +
+  html += '<tr class="total-row no-sort-row"><td>Total</td>' +
     TIER_ORDER.map(function (t) { return '<td class="num">' + fmtNum(grandTotals[t]) + "</td>"; }).join("") +
     '<td class="num">' + fmtNum(grandTotal) + "</td></tr>";
   html += "</tbody></table>";
   return html;
 }
 
-// Static (non-toggling) version of buildWorkloadBreakdownTable() for print -
-// the live report's "+" expand/collapse makes no sense on paper, so this
-// always renders the table body directly.
 function buildStaticBreakdownTableHtml(model, tierName) {
   var m = model.milestones[tierName];
   var rows = [
@@ -5398,324 +8003,170 @@ function buildStaticBreakdownTableHtml(model, tierName) {
   var body = rows.map(function (r) {
     return "<tr><td>" + r.label + "</td><td class=\"num\">" + fmtNum(r.objs) + "</td><td class=\"num\">" + fmtMin(r.abr) + '</td><td class="num">~' + fmtMin(r.mass) + "</td></tr>";
   }).join("");
-  return '<table class="pr-table"><thead><tr><th>Workload</th><th class="num">Objects (this tier)</th><th class="num">ABR Time</th><th class="num">Mass Recovery Time</th></tr></thead><tbody>' + body + "</tbody></table>";
+  return '<table class="pr-table"><thead><tr><th>Workload</th><th class="num">Objects (this group)</th><th class="num">ABR Time</th><th class="num">Mass Recovery Time</th></tr></thead><tbody>' + body + "</tbody></table>";
 }
 
-// Every assumption/input that feeds the recovery-time and cost numbers -
-// Full Report only, per feedback 2026-07-23 ("including all the assumptions
-// used to put together the estimates"). Reuses buildGlossaryHtml()/
-// buildWeightsTableHtml() (shared with the live Methodology tab) so this
-// can't drift out of sync with what that tab shows.
-function buildAssumptionsHtml() {
-  var model = computeRecoveryModel();
-  var html = '<div class="pr-section-title">Assumptions &amp; Recovery Modeling Inputs</div>';
-  html += '<div class="pr-subnote">Snapshot as of this export - every input below is live-adjustable in the HTML report itself (Recovery tab / Criticality Groups tab controls), so re-export after any change to keep this in sync.</div>';
-  html += '<table class="pr-table"><tbody>';
-  html += "<tr><td>Recovery window</td><td class=\"num\">" + state.recovery.windowDays + " days</td></tr>";
-  html += "<tr><td>SP/OD throughput tier (auto-selected unless overridden)</td><td class=\"num\">" + esc(model.spodTierBucket) + " (requested: " + esc(state.recovery.licenseTier) + ")</td></tr>";
-  html += "<tr><td>Downtime cost</td><td class=\"num\">" + (state.recovery.costPerHour > 0 ? fmtMoney(state.recovery.costPerHour) + "/hour" : "not set") + "</td></tr>";
-  html += "<tr><td>RTO preset</td><td class=\"num\">" + esc(state.recovery.rtoPreset) + "</td></tr>";
-  html += "<tr><td>Group 1 / 2 / 3 RTO targets (cumulative)</td><td class=\"num\">" + state.recovery.group1Hours + " hr / " + state.recovery.group2Hours + " hr / " + state.recovery.group3Hours + " hr</td></tr>";
-  html += "<tr><td>Tier split (Group 1 / 2 / 3 thirds of active data)</td><td class=\"num\">" + state.tierSplit.map(function (f) { return Math.round(f * 100) + "%"; }).join(" / ") + "</td></tr>";
-  if (state.titleWeightContribution) {
-    html += "<tr><td>Job title weight contribution</td><td class=\"num\">" + state.titleWeightContribution + "</td></tr>";
+function printCostBlockHtml(model) {
+  var ca = computeCostAvoided(model);
+  var g1 = ca.rows[0];
+  var html = '<div class="pr-tiles">' +
+    '<div class="pr-tile"><div class="pr-tile-label">Time to Critical Data</div><div class="pr-tile-value">' + fmtMin(g1.abrMin) + '</div><div class="pr-tile-sub">instead of ' + fmtMin(model.fullRestoreMin) + " waiting for a full, undifferentiated restore</div></div>" +
+    '<div class="pr-tile"><div class="pr-tile-label">Hours Saved (Group 1)</div><div class="pr-tile-value">' + g1.savedHours.toFixed(1) + ' hr</div><div class="pr-tile-sub">' + (ca.hasRate ? ("Cost avoided: " + fmtMoney(g1.cost)) : "Enter your downtime cost per hour in the report to see potential cost avoidance") + "</div></div>" +
+  "</div>";
+  var rN = ca.rows[groupN() - 1];
+  var lockedRows = ca.rows[1].locked || rN.locked;
+  if (lockedRows) {
+    html += '<div class="pr-subnote">Groups 1-2 and 1-' + groupN() + ' figures are part of the full assessment.</div>';
+  } else if (ca.hasRate) {
+    html += '<div class="pr-subnote">Smaller figures: ' + ca.rows.slice(1).map(function (r) { return r.label + " &ndash; " + r.savedHours.toFixed(1) + " hr, " + fmtMoney(r.cost); }).join("; ") + ".</div>";
+  } else {
+    html += '<div class="pr-subnote">Hours saved, Groups 1-2 online: ' + ca.rows[1].savedHours.toFixed(1) + " hr; " + scopeName(groupN()) + " online: " + rN.savedHours.toFixed(1) + " hr.</div>";
   }
-  if (state.hubSiteBonus) {
-    html += "<tr><td>Hub site bonus</td><td class=\"num\">" + state.hubSiteBonus + "</td></tr>";
-  }
-  html += "</tbody></table>";
-
-  html += '<div class="pr-section-title">SharePoint / OneDrive Throughput Tiers</div>';
-  html += '<div class="pr-subnote">Parallelism-based throughput used to estimate SharePoint/OneDrive recovery time - auto-selected from this tenant\'s object counts unless overridden above. SharePoint and OneDrive each have their own per-object item rate (below); a file bigger than the ' + fmtNum(SIZE_FACTOR_BASELINE_MB) + ' MiB tenant-wide average costs proportionally more (Size Factor), rather than a separate bytes/min cap. Source: M365 MVC Recovery Time Estimator (RSC M365 Restoration Benchmark, Mar 2025 / M365 Sizing Guidance, Jan 2026).</div>';
-  html += '<table class="pr-table"><thead><tr><th>Bucket</th><th class="num">Max Objects</th><th class="num">Parallelism</th><th class="num">SharePoint Items/Min</th><th class="num">OneDrive Items/Min</th></tr></thead><tbody>';
-  SPOD_TIER_TABLE.forEach(function (t) {
-    var maxDisplay = (t.Max === undefined || t.Max === null) ? "&infin;" : fmtNum(t.Max);
-    var spIpm = t.Parallelism * SP_ITEMS_PER_MIN_PER_UNIT;
-    var odIpm = t.Parallelism * OD_ITEMS_PER_MIN_PER_UNIT;
-    html += "<tr><td>" + esc(t.Bucket) + "</td><td class=\"num\">" + maxDisplay + "</td><td class=\"num\">" + t.Parallelism + "</td><td class=\"num\">" + fmtNum(spIpm) + "</td><td class=\"num\">" + fmtNum(odIpm) + "</td></tr>";
-  });
-  html += "</tbody></table>";
-
-  html += '<div class="pr-section-title">Exchange (Mailbox) Throughput Benchmark</div>';
-  html += '<table class="pr-table"><tbody>';
-  html += "<tr><td>Per-mailbox items/min</td><td class=\"num\">" + fmtNum(EX_BENCHMARK.PerMailboxItemsPerMin) + "</td></tr>";
-  html += "<tr><td>Per-mailbox MB/min</td><td class=\"num\">" + fmtNum(EX_BENCHMARK.PerMailboxMBPerMin) + "</td></tr>";
-  html += "<tr><td>Max parallel mailboxes</td><td class=\"num\">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes) + "</td></tr>";
-  html += "<tr><td>Items/min cap (tenant-wide)</td><td class=\"num\">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes * EX_BENCHMARK.PerMailboxItemsPerMin) + "</td></tr>";
-  html += "<tr><td>MB/min cap (tenant-wide)</td><td class=\"num\">" + fmtNum(EX_BENCHMARK.MaxParallelMailboxes * EX_BENCHMARK.PerMailboxMBPerMin) + "</td></tr>";
-  html += "<tr><td>Overhead buffer</td><td class=\"num\">" + EX_BENCHMARK.OverheadBuffer + "x</td></tr>";
-  html += "</tbody></table>";
-
-  html += '<div class="pr-section-title">ABR Scheduling Overhead</div>';
-  html += '<div class="pr-subnote">Applies to ABR recovery time only, not Mass Recovery - every object touched by a restore needs its own job, regardless of how much of it actually changed.</div>';
-  html += '<table class="pr-table"><tbody>';
-  html += "<tr><td>Job scheduling rate</td><td class=\"num\">" + JOB_SCHEDULING_RATE_PER_MIN.toFixed(2) + "/min (~" + (60 / JOB_SCHEDULING_RATE_PER_MIN).toFixed(1) + "s/job)</td></tr>";
-  html += "<tr><td>Minimum recovery time floor</td><td class=\"num\">" + MIN_RECOVERY_MINUTES + " min</td></tr>";
-  html += "</tbody></table>";
-
-  html += '<div class="pr-section-title">Composite Score Weights</div>';
-  html += '<div class="pr-subnote">Current live weights used to rank objects within each workload - see the glossary below for how these combine into a composite score.</div>';
-  html += buildWeightsTableHtml();
-
-  html += '<div class="pr-section-title">Methodology &amp; Glossary</div>';
-  html += '<div class="pr-glossary">' + buildGlossaryHtml() + "</div>";
-
   return html;
 }
 
-// One Page Summary: the headline numbers plus enough supporting detail to
-// defend them, deliberately excluding the Recovery Timeline graphic/puzzle
-// narrative and the full Group 4 per-workload breakdown so it fits a
-// single printed page in the common case - see Full Report for everything.
-// NEW v3.7.0: dropped the "Dormant Data" hero tile here too, per feedback
-// 2026-07-30 - matches renderExecLean(); Group 4 is no longer a headline
-// number anywhere, just detail further down (Full Report only).
+function buildAssumptionsHtml() {
+  var html = buildCalibrationHtml("print");
+  html += '<div class="pr-section-title">Composite Score Weights</div>';
+  html += '<div class="pr-subnote">Current live weights used to rank objects within each workload.</div>';
+  html += buildWeightsTableHtml();
+  html += '<div class="pr-section-title">Methodology &amp; Glossary</div>';
+  html += '<div class="pr-glossary">' + buildGlossaryHtml() + "</div>";
+  return html;
+}
+
+// Report-tab content that also belongs on the one-pager: confidence, sensitivity, decisions (same builders as the screen).
+function printReportExtrasHtml(model) {
+  var conf = reportConfidence();
+  var h = '<div class="pr-subnote"><b>Confidence: ' + conf.level + '.</b> ' + conf.notes.join("; ") + '.</div>';
+  var sc = reportScenarioResult();
+  if (sc) {
+    h += '<div class="pr-section-title">Group 1 Sensitivity</div><table class="pr-table"><thead><tr><th>Scenario</th><th class="num">Group 1 objects</th><th class="num">Group 1 online in</th></tr></thead><tbody>' +
+      sc.rows.map(function (r) { return "<tr><td>" + esc(r.label) + (r.current ? " (current)" : "") + '</td><td class="num">' + fmtNum(r.g1Objects) + '</td><td class="num">' + fmtMin(r.g1Min) + "</td></tr>"; }).join("") + "</tbody></table>";
+  }
+  var g1 = model.milestones["Critical Group 1"];
+  if (g1 && !g1.locked) {
+    h += '<div class="pr-section-title">Decisions and Next Steps</div><ul class="pr-list">' +
+      reportDecisionItems(model, g1).map(function (d) { return "<li>" + d.text + "</li>"; }).join("") + "</ul>";
+  }
+  return h;
+}
+
 function buildPrintSummaryHtml() {
   var model = computeRecoveryModel();
-  var g1 = model.milestones["Critical Group 1"];
-  var g2 = model.milestones["Critical Group 2"];
-  var g3 = model.milestones["Critical Group 3"];
-  var fullExposureMoney = fmtHours(model.fullRestoreMin) * state.recovery.costPerHour;
-  var abrCostG1 = fmtHours(g1.wallClockCumMin) * state.recovery.costPerHour;
-  var savingsMoney = Math.max(0, fullExposureMoney - abrCostG1);
-  var pctReduction = fullExposureMoney > 0 ? Math.round((savingsMoney / fullExposureMoney) * 100) : 0;
-
   var html = buildPrintHeaderHtml("One Page Summary");
-
-  html += '<div class="pr-tiles">' +
-    '<div class="pr-tile"><div class="pr-tile-label">Time to Critical Data</div><div class="pr-tile-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="pr-tile-sub">instead of ' + fmtMin(model.fullRestoreMin) + " with a traditional, random-order restore</div></div>" +
-    '<div class="pr-tile"><div class="pr-tile-label">Downtime Cost Avoided</div><div class="pr-tile-value">' + (state.recovery.costPerHour > 0 ? fmtMoney(savingsMoney) : "n/a") + '</div><div class="pr-tile-sub">' + (state.recovery.costPerHour > 0 ? (pctReduction + "% reduction vs. a fully random-order restore") : "set $/hour on the Recovery tab for a dollar figure") + "</div></div>" +
-  "</div>";
-
-  html += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first &ndash; the data people were actually working on &ndash; so the business is operational in hours, not weeks, while Mass Recovery continues restoring everything else in the background, in whatever order it happens to land.</div>';
-
+  html += printCostBlockHtml(model);
+  html += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first &ndash; the data people were actually working on &ndash; so the business is operational in hours, while Mass Recovery continues restoring everything else in the background.</div>';
   html += '<div class="pr-section-title">Recovery Times by Group</div>';
   html += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">ABR Time</th><th class="num">Target</th><th>Status</th></tr></thead><tbody>';
-  [
-    { label: "Group 1 online", m: g1, target: state.recovery.group1Hours },
-    { label: "Groups 1-2 online", m: g2, target: state.recovery.group2Hours },
-    { label: "Groups 1-3 online", m: g3, target: state.recovery.group3Hours }
-  ].forEach(function (row) {
+  critKeys().map(function (key, i) { return { label: scopeName(i + 1) + " online", m: model.milestones[key], target: groupHoursOf(i + 1) }; }).forEach(function (row) {
     var status = row.m.exceedsTarget ? '<span class="pr-badge exceeds">Exceeds target</span>' : "Within target";
     html += "<tr><td>" + row.label + "</td><td class=\"num\">" + fmtMin(row.m.wallClockCumMin) + "</td><td class=\"num\">" + row.target + " hr</td><td>" + status + "</td></tr>";
   });
-  html += '<tr class="total-row"><td>Full tenant (Mass Recovery baseline)</td><td class="num">' + fmtMin(model.fullRestoreMin) + '</td><td class="num">&mdash;</td><td>&mdash;</td></tr>';
+  html += '<tr class="total-row no-sort-row"><td>Full tenant (Mass Recovery baseline)</td><td class="num">' + fmtMin(model.fullRestoreMin) + '</td><td class="num">&mdash;</td><td>&mdash;</td></tr>';
   html += "</tbody></table>";
-
-  if (state.recovery.costPerHour > 0 && model.fullRestoreMin > 0) {
-    html += '<div class="pr-section-title">Downtime Cost Avoided by Group</div>';
-    html += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">Time</th><th class="num">Downtime Cost</th><th class="num">Cost Avoided</th><th class="num">Reduction</th></tr></thead><tbody>';
-    [
-      { label: "Group 1 online", m: g1 },
-      { label: "Groups 1-2 online", m: g2 },
-      { label: "Groups 1-3 online", m: g3 }
-    ].forEach(function (row) {
-      var cost = fmtHours(row.m.wallClockCumMin) * state.recovery.costPerHour;
-      var avoided = Math.max(0, fullExposureMoney - cost);
-      var pct = fullExposureMoney > 0 ? Math.round((avoided / fullExposureMoney) * 100) : 0;
-      html += "<tr><td>" + row.label + "</td><td class=\"num\">" + fmtMin(row.m.wallClockCumMin) + "</td><td class=\"num\">" + fmtMoney(cost) + "</td><td class=\"num\">" + fmtMoney(avoided) + "</td><td class=\"num\">" + pct + "%</td></tr>";
-    });
-    html += '<tr class="total-row"><td>Full tenant (Mass Recovery baseline)</td><td class="num">' + fmtMin(model.fullRestoreMin) + '</td><td class="num">' + fmtMoney(fullExposureMoney) + '</td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>';
-    html += "</tbody></table>";
-  }
-
+  html += printReportExtrasHtml(model);
   html += '<div class="pr-section-title">Group Overview by Workload</div>';
   html += buildGroupOverviewTableHtml();
-
-  html += '<div class="pr-footer">Recovery window: ' + state.recovery.windowDays + " days &middot; SP/OD throughput tier: " + model.spodTierBucket + " &middot; Downtime cost: " + (state.recovery.costPerHour > 0 ? fmtMoney(state.recovery.costPerHour) + "/hour" : "not set") + ". Full per-group breakdown, Group 4 detail, and every assumption behind these numbers: see the Full Report PDF export.</div>";
-
+  html += '<div class="pr-subnote">' + esc(group4Disclaimer()) + "</div>";
+  html += '<div class="pr-footer">Recent-data window: ' + state.recovery.windowDays + " days &middot; SP/OD throughput tier: " + model.spodTierBucket + " &middot; Calibration " + esc((DATA.meta && DATA.meta.calibrationVersion) || "v1") + " &middot; Downtime cost: " + (state.recovery.costPerHour > 0 ? fmtMoney(state.recovery.costPerHour) + "/hour" : "not set") + ". Full per-group breakdown, flagged objects, and every assumption behind these numbers: see the Full Report PDF export.</div>";
   return html;
 }
 
-// Full Report: everything from the Report/Recovery/Methodology tabs
-// unabridged (full Recovery Timeline narrative, per-group workload
-// breakdown, full Group 4 detail), plus the Assumptions section above -
-// group-level detail only, per feedback 2026-07-23 (no full per-object
-// tables - the live HTML report stays the source of truth for row-level
-// detail).
-// NEW: Sizing section for the Full Report PDF export, added per feedback
-// 2026-08-11. Reuses buildSizingSummary() - the exact same numbers as the
-// live Sizing tab - rendered with the print-friendly .pr-table classes
-// instead of .exec-cost-table. NOT added to the One Page Summary export -
-// that export is deliberately terse (see buildPrintSummaryHtml's own
-// header comment) and sizing is a distinct data domain from the recovery-
-// time/cost story it tells.
 function buildSizingPdfHtml() {
   var s = buildSizingSummary();
-  var detailed = !!(DATA.meta && DATA.meta.detailedSizingRequested);
-
   var html = '<div class="pr-section-title">M365 Sizing</div>';
   html += '<div class="pr-subnote">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups above.</div>';
-
-  var archiveStorageCell, archiveItemsCell, rifRow, totalStorageForAvg = s.ex.totalStorageBytes;
-  if (detailed && DATA.meta.sizing) {
-    var archStorage = DATA.meta.sizing.archiveStorageBytes || 0;
-    var archItems = DATA.meta.sizing.archiveItems || 0;
-    archiveStorageCell = fmtGB(archStorage);
-    archiveItemsCell = fmtNum(archItems);
-    var rifStorage = DATA.meta.sizing.recoverableItemsStorageBytes || 0;
-    var rifItems = DATA.meta.sizing.recoverableItemsItems || 0;
-    var rifCount = DATA.meta.sizing.recoverableItemsCount || 0;
-    rifRow = "<tr><td>Recoverable Items</td><td class=\"num\">" + fmtNum(rifCount) + "</td><td class=\"num\">" + fmtGB(rifStorage) + "</td><td class=\"num\">" + fmtNum(rifItems) + "</td></tr>";
-    totalStorageForAvg += archStorage + rifStorage;
-  } else {
-    // NEW: simplified to a bare "*" per skipped cell, per feedback
-    // 2026-08-11 - a single footnote below the table explains the asterisk,
-    // rather than repeating an inline explanation in every cell.
-    archiveStorageCell = "*";
-    archiveItemsCell = "*";
-    rifRow = "<tr><td>Recoverable Items</td><td class=\"num\">*</td><td class=\"num\">*</td><td class=\"num\">*</td></tr>";
-  }
-
-  html += '<table class="pr-table"><thead><tr><th>Mailbox Type</th><th class="num">Count</th><th class="num">Storage (GB)</th><th class="num">Items</th></tr></thead><tbody>' +
-    "<tr><td>" + s.ex.userLabel + "</td><td class=\"num\">" + fmtNum(s.ex.userCount) + "</td><td class=\"num\">" + fmtGB(s.ex.userStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.userItems) + "</td></tr>" +
-    "<tr><td>" + s.ex.sharedLabel + "</td><td class=\"num\">" + fmtNum(s.ex.sharedCount) + "</td><td class=\"num\">" + fmtGB(s.ex.sharedStorageBytes) + "</td><td class=\"num\">" + fmtNum(s.ex.sharedItems) + "</td></tr>" +
-    "<tr><td>Archive Mailboxes</td><td class=\"num\">" + fmtNum(s.ex.archiveCount) + "</td><td class=\"num\">" + archiveStorageCell + "</td><td class=\"num\">" + archiveItemsCell + "</td></tr>" +
-    rifRow +
-    '<tr class="total-row"><td>' + s.ex.totalLabel + '</td><td class="num">' + fmtNum(s.ex.totalCount) + "</td><td class=\"num\">" + fmtGB(totalStorageForAvg) + "</td><td class=\"num\">" + fmtNum(s.ex.totalItems) + "</td></tr>" +
-    "</tbody></table>";
-
-  if (!detailed) {
-    html += '<div class="pr-note">*Note: Not collected - run script with the -DetailedSizing switch to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>';
-  }
-
-  html += buildLicenseNoteHtml(s, "pr-note");
+  html += buildSizingTablesHtml(s, "print");
   html += buildLicensePlanTableHtml(true);
-
   html += '<table class="pr-table"><tbody>' +
     "<tr><td>OneDrive accounts</td><td class=\"num\">" + fmtNum(s.od.count) + "</td></tr>" +
-    "<tr><td>OneDrive storage (GB)</td><td class=\"num\">" + fmtGB(s.od.storageBytes) + "</td></tr>" +
-    "<tr><td>OneDrive files</td><td class=\"num\">" + fmtNum(s.od.files) + "</td></tr>" +
+    "<tr><td>" + szHdr("OneDrive storage") + "</td><td class=\"num\">" + szGB(s.od.storageBytes) + "</td></tr>" +
+    "<tr><td>OneDrive files (millions)</td><td class=\"num\">" + szM(s.od.files) + "</td></tr>" +
     "<tr><td>SharePoint sites</td><td class=\"num\">" + fmtNum(s.sp.count) + "</td></tr>" +
-    "<tr><td>SharePoint storage (GB)</td><td class=\"num\">" + fmtGB(s.sp.storageBytes) + "</td></tr>" +
-    "<tr><td>SharePoint files</td><td class=\"num\">" + fmtNum(s.sp.files) + "</td></tr>" +
+    "<tr><td>" + szHdr("SharePoint storage") + "</td><td class=\"num\">" + szGB(s.sp.storageBytes) + "</td></tr>" +
+    "<tr><td>SharePoint files (millions)</td><td class=\"num\">" + szM(s.sp.files) + "</td></tr>" +
     "</tbody></table>";
-
-  html += '<div class="pr-note">Discovery Summary &ndash; Total Users/Accounts: ' + fmtNum(s.licenseEstimate) + ', Total Storage: ' + fmtGB(s.totalStorageBytes) + ' GB, Total Items &amp; Files: ' + fmtNum(s.totalItemsFiles) + '.</div>';
-
+  html += '<div class="pr-note">Discovery Summary &ndash; Total Users/Accounts: ' + fmtNum(s.licenseEstimate) + ', Total Storage: ' + szGB(s.totalStorageBytes) + " GB" + ', Total Items &amp; Files (millions): ' + szM(s.totalItemsFiles) + '.</div>';
   return html;
 }
 
 function buildPrintFullHtml() {
   var model = computeRecoveryModel();
-  var g1 = model.milestones["Critical Group 1"];
-  var g2 = model.milestones["Critical Group 2"];
-  var g3 = model.milestones["Critical Group 3"];
-  var lastTier = TIER_ORDER[TIER_ORDER.length - 1];
-  var totalM = model.milestones[lastTier];
-  var fullExposureMoney = fmtHours(model.fullRestoreMin) * state.recovery.costPerHour;
-  var abrCostG1 = fmtHours(g1.wallClockCumMin) * state.recovery.costPerHour;
-  var savingsMoney = Math.max(0, fullExposureMoney - abrCostG1);
-  var pctReduction = fullExposureMoney > 0 ? Math.round((savingsMoney / fullExposureMoney) * 100) : 0;
-  var dormant = computeDormantSummary(model);
-
+  var totalM = model.milestones[TIER_ORDER[TIER_ORDER.length - 1]];
+  var low = computeLowActivitySummary(model);
   var html = buildPrintHeaderHtml("Full Report");
-
-  // ---- Executive headline ----
-  // NEW v3.7.0: dropped the "Dormant Data" hero tile here too, per feedback
-  // 2026-07-30 - Group 4 is no longer a headline number; it's covered as
-  // detail further down in this same report (see the Group 4 section).
-  html += '<div class="pr-tiles">' +
-    '<div class="pr-tile"><div class="pr-tile-label">Time to Critical Data</div><div class="pr-tile-value">' + fmtMin(g1.wallClockCumMin) + '</div><div class="pr-tile-sub">instead of ' + fmtMin(model.fullRestoreMin) + " with a traditional, random-order restore</div></div>" +
-    '<div class="pr-tile"><div class="pr-tile-label">Downtime Cost Avoided</div><div class="pr-tile-value">' + (state.recovery.costPerHour > 0 ? fmtMoney(savingsMoney) : "n/a") + '</div><div class="pr-tile-sub">' + (state.recovery.costPerHour > 0 ? (pctReduction + "% reduction vs. a fully random-order restore") : "set $/hour on the Recovery tab for a dollar figure") + "</div></div>" +
-  "</div>";
-  html += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first &ndash; the data people were actually working on &ndash; so the business is operational in hours, not weeks, while Mass Recovery continues restoring everything else in the background, in whatever order it happens to land.</div>';
-
+  html += printCostBlockHtml(model);
+  html += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first &ndash; the data people were actually working on &ndash; so the business is operational in hours, while Mass Recovery continues restoring everything else in the background.</div>';
   html += '<div class="pr-section-title">Mass Recovery vs. ABR: Same Timescale, Different Order</div>';
-  html += '<div class="pr-subnote">Mass Recovery &ndash; the industry standard, Rubrik included &ndash; restores pieces in random order: like dumping out a puzzle and gluing down whatever you grab first, nothing forms a complete, usable picture until the whole box is done, ' + fmtMin(model.fullRestoreMin) + ' here. ABR does what any puzzle solver does first &ndash; corners and edges, the pieces that actually give you something to work with &ndash; prioritizing recently accessed, modified, and created data so the business is operational in ' + fmtMin(g1.wallClockCumMin) + ".</div>";
-  if (state.recovery.costPerHour > 0) {
-    html += '<table class="pr-table"><thead><tr><th></th><th class="num">Time</th><th class="num">Downtime Cost</th></tr></thead><tbody>' +
-      '<tr><td>Mass Recovery (no prioritization)</td><td class="num">' + fmtMin(model.fullRestoreMin) + '</td><td class="num">' + fmtMoney(fullExposureMoney) + "</td></tr>" +
-      '<tr><td>ABR (Group 1 online)</td><td class="num">' + fmtMin(g1.wallClockCumMin) + '</td><td class="num">' + fmtMoney(abrCostG1) + "</td></tr>" +
-      "</tbody></table>";
+  html += '<div class="pr-subnote">A Mass Recovery restores everything as one undifferentiated job: nothing forms a complete, usable picture until the whole job is done, ' + fmtMin(model.fullRestoreMin) + ' here. ABR restores the most recently changed data first, so the business is operational in ' + fmtMin(g1.wallClockCumMin) + ".</div>";
+
+  var ins = getInsightsSummary();
+  if (ins && ins.excludedCount > 0 && ins.headline) {
+    html += '<div class="pr-note"><b>' + fmtNum(ins.excludedCount) + " object(s) are left out of the recovery estimates</b> because they are far larger or heavier than the rest of the tenant. Group 1 recovers in " + fmtMin(ins.headline.excludedG1Min) + " without them and " + fmtMin(ins.headline.includedG1Min) + " with them. See the Recovery Insights tab.</div>";
   }
 
-  // ---- Recovery Times, per-group detail ----
   html += '<div class="pr-page-break"></div>';
   html += '<div class="pr-section-title">Recovery Times - Per-Group Detail</div>';
-  html += '<div class="pr-subnote">ABR (sequenced by group) vs. Mass Recovery (undifferentiated, no prioritization). Mass Recovery for a given group means restoring that SAME cumulative set of objects (Groups 1 through this one) as a single undifferentiated batch - it converges with ABR only once you reach the full tenant, because at that point there is no batch-vs-sequence difference left.</div>';
-
-  [
-    { label: "Group 1", tier: "Critical Group 1", subtitle: "Recover-first tier (target: " + state.recovery.group1Hours + " hr)", m: g1 },
-    { label: "Group 2", tier: "Critical Group 2", subtitle: "Cumulative through Group 2 (target: " + state.recovery.group2Hours + " hr)", m: g2 },
-    { label: "Group 3", tier: "Critical Group 3", subtitle: "Cumulative through Group 3 (target: " + state.recovery.group3Hours + " hr)", m: g3 }
-  ].forEach(function (g, idx) {
+  html += '<div class="pr-subnote">ABR (sequenced by group) vs. Mass Recovery (undifferentiated). Mass Recovery for a given group means restoring that same cumulative set of objects (Groups 1 through this one) as a single batch - it converges with ABR only at the full tenant.</div>';
+  critKeys().map(function (key, i) { return { label: "Group " + (i + 1), tier: key, subtitle: (i === 0 ? "Recover-first group" : "Cumulative through Group " + (i + 1)) + " (target: " + groupHoursOf(i + 1) + " hr)", m: model.milestones[key] }; }).forEach(function (g, idx) {
     var objCount = g.m.sp.objectCount + g.m.od.objectCount + g.m.ex.objectCount;
-    var abrCost = fmtHours(g.m.wallClockCumMin) * state.recovery.costPerHour;
-    var massCost = fmtHours(g.m.massRecoveryCumMin) * state.recovery.costPerHour;
-    var savingsHrs = Math.max(0, (g.m.massRecoveryCumMin - g.m.wallClockCumMin) / 60);
-    var groupSavings = savingsHrs * state.recovery.costPerHour;
+    var savingsHrs = Math.max(0, (model.fullRestoreMin - g.m.wallClockCumMin) / 60);
     var exceedsBadge = g.m.exceedsTarget ? '<span class="pr-badge exceeds">Exceeds target</span>' : "";
     var emptyBadge = objCount === 0 ? '<span class="pr-badge empty">Empty</span>' : "";
     html += '<div class="pr-avoid-break">';
-    html += "<h4 style=\"margin:.7rem 0 .1rem;font-size:.85rem;color:var(--navy);\">" + g.label + emptyBadge + exceedsBadge + " - " + fmtNum(objCount) + " objects</h4>";
+    html += '<h4 style="margin:.7rem 0 .1rem;font-size:.85rem;">' + g.label + emptyBadge + exceedsBadge + " - " + fmtNum(objCount) + " objects</h4>";
     html += '<div class="pr-subnote" style="margin-top:0;">' + g.subtitle + "</div>";
-    html += '<table class="pr-table"><thead><tr><th></th><th class="num">Time</th><th class="num">Downtime Cost</th></tr></thead><tbody>' +
-      '<tr><td>ABR - ' + g.label + ' online in</td><td class="num">' + fmtMin(g.m.wallClockCumMin) + '</td><td class="num">' + fmtMoney(abrCost) + "</td></tr>" +
-      '<tr><td>Mass Recovery - expected wait</td><td class="num">~' + fmtMin(g.m.massRecoveryCumMin) + '</td><td class="num">' + fmtMoney(massCost) + "</td></tr>" +
+    html += '<table class="pr-table"><thead><tr><th></th><th class="num">Time</th></tr></thead><tbody>' +
+      '<tr><td>ABR - ' + g.label + ' online in</td><td class="num">' + fmtMin(g.m.wallClockCumMin) + "</td></tr>" +
+      '<tr><td>Mass Recovery of the same scope</td><td class="num">~' + fmtMin(g.m.massRecoveryCumMin) + "</td></tr>" +
       "</tbody></table>";
-    html += idx === 0
-      ? '<div class="pr-note">Group 1 is the first tier - nothing earlier to sequence against, so its ABR time and Mass Recovery time are the same computation by definition. ABR\'s actual value shows in the Group 1 vs. full-tenant comparison above.</div>'
-      : ('<div class="pr-note">Downtime cost avoided with ABR: ' + fmtMoney(groupSavings) + " (" + savingsHrs.toFixed(1) + " hr sooner).</div>");
+    html += '<div class="pr-note">Hours saved vs. a whole-tenant Mass Recovery: ' + savingsHrs.toFixed(1) + " hr.</div>";
     html += buildStaticBreakdownTableHtml(model, g.tier);
     html += "</div>";
   });
-
   var totalObjCount = totalM.sp.objectCount + totalM.od.objectCount + totalM.ex.objectCount;
-  html += '<div class="pr-avoid-break">';
-  html += "<h4 style=\"margin:.7rem 0 .1rem;font-size:.85rem;color:var(--navy);\">Total (whole tenant, incl. Group 4) - " + fmtNum(totalObjCount) + " objects</h4>";
-  html += '<table class="pr-table"><thead><tr><th></th><th class="num">Time</th><th class="num">Downtime Cost</th></tr></thead><tbody>' +
-    '<tr><td>ABR - everything online in</td><td class="num">~' + fmtMin(totalM.wallClockCumMin) + '</td><td class="num">' + fmtMoney(fmtHours(totalM.wallClockCumMin) * state.recovery.costPerHour) + "</td></tr>" +
-    '<tr><td>Mass Recovery - everything online in</td><td class="num">~' + fmtMin(totalM.massRecoveryCumMin) + '</td><td class="num">' + fmtMoney(fmtHours(totalM.massRecoveryCumMin) * state.recovery.costPerHour) + "</td></tr>" +
-    "</tbody></table>";
-  html += '<div class="pr-note">These two converge here on purpose - recovering everything takes about the same total time either way (same throughput capacity, same total data). ABR\'s value is entirely in WHEN each group comes back, not the full-job duration.</div>';
-  html += "</div>";
+  html += '<div class="pr-avoid-break"><h4 style="margin:.7rem 0 .1rem;font-size:.85rem;">Total (whole tenant, including ' + lowName() + ') - ' + fmtNum(totalObjCount) + " objects</h4>" +
+    '<table class="pr-table"><thead><tr><th></th><th class="num">Time</th></tr></thead><tbody>' +
+    '<tr><td>ABR - everything online in</td><td class="num">~' + fmtMin(totalM.wallClockCumMin) + "</td></tr>" +
+    '<tr><td>Mass Recovery - everything online in</td><td class="num">~' + fmtMin(totalM.massRecoveryCumMin) + "</td></tr>" +
+    "</tbody></table>" +
+    '<div class="pr-note">These converge here on purpose: recovering everything takes about the same total time either way (same throughput, same data). ABR\'s value is in WHEN each group comes back.</div></div>';
 
-  if (state.recovery.costPerHour > 0 && model.fullRestoreMin > 0) {
-    html += '<div class="pr-section-title">Downtime Cost Avoided by Group</div>';
-    html += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">Time</th><th class="num">Downtime Cost</th><th class="num">Cost Avoided</th><th class="num">Reduction</th></tr></thead><tbody>';
-    [
-      { label: "Group 1 online", m: g1 },
-      { label: "Groups 1-2 online", m: g2 },
-      { label: "Groups 1-3 online", m: g3 }
-    ].forEach(function (row) {
-      var cost = fmtHours(row.m.wallClockCumMin) * state.recovery.costPerHour;
-      var avoided = Math.max(0, fullExposureMoney - cost);
-      var pct = fullExposureMoney > 0 ? Math.round((avoided / fullExposureMoney) * 100) : 0;
-      html += "<tr><td>" + row.label + "</td><td class=\"num\">" + fmtMin(row.m.wallClockCumMin) + "</td><td class=\"num\">" + fmtMoney(cost) + "</td><td class=\"num\">" + fmtMoney(avoided) + "</td><td class=\"num\">" + pct + "%</td></tr>";
-    });
-    html += '<tr class="total-row"><td>Full tenant (Mass Recovery baseline)</td><td class="num">' + fmtMin(model.fullRestoreMin) + '</td><td class="num">' + fmtMoney(fullExposureMoney) + '</td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>';
-    html += "</tbody></table>";
-  }
-
-  // ---- Group 4 (full detail) + Group Overview ----
   html += '<div class="pr-page-break"></div>';
-  html += '<div class="pr-section-title">Group 4 Detail</div>';
-  if (dormant.totalObjectsAll > 0) {
-    html += '<div class="pr-subnote"><b>' + dormant.overallPct + "%</b> of this tenant (" + fmtNum(dormant.totalInactiveAll) + " of " + fmtNum(dormant.totalObjectsAll) + ") falls into Group 4 - limited activity across every metric in the reporting window. Group 4 gets no ABR priority and is recovered entirely by Mass Recovery, alongside whatever else hasn't come back yet. Still protected; just not on the critical path to getting the business running again.</div>";
-    html += '<table class="pr-table"><thead><tr><th>Workload</th><th class="num">Group 4</th><th class="num">Total</th><th class="num">Group 4 %</th><th class="num">Mass Recovery (whole workload)</th></tr></thead><tbody>';
-    dormant.byWorkload.slice().sort(function (a, b) { return b.pct - a.pct; }).forEach(function (d) {
+  html += '<div class="pr-section-title">' + esc(lowName()) + ' Detail</div>';
+  if (low.totalObjectsAll > 0) {
+    html += '<div class="pr-subnote"><b>' + low.overallPct + "%</b> of this tenant (" + fmtNum(low.totalGroup4) + " of " + fmtNum(low.totalObjectsAll) + ") falls into " + lowName() + ". " + esc(group4Disclaimer()) + " " + lowName() + " gets no ABR priority and is recovered by Mass Recovery alongside whatever else has not come back yet. Still protected; just not on the critical path to getting the business running again.</div>";
+    html += '<table class="pr-table"><thead><tr><th>Workload</th><th class="num">' + esc(lowName()) + '</th><th class="num">Total</th><th class="num">' + esc(lowName()) + ' %</th><th class="num">Mass Recovery (whole workload)</th></tr></thead><tbody>';
+    low.byWorkload.slice().sort(function (a, b) { return b.pct - a.pct; }).forEach(function (d) {
       var massCell = d.massRecoveryMin !== null ? fmtMin(d.massRecoveryMin) : "N/A - no independent model";
-      html += "<tr><td>" + esc(d.label) + "</td><td class=\"num\">" + fmtNum(d.inactiveCount) + "</td><td class=\"num\">" + fmtNum(d.total) + "</td><td class=\"num\">" + d.pct + "%</td><td class=\"num\">" + massCell + "</td></tr>";
+      html += "<tr><td>" + esc(d.label) + "</td><td class=\"num\">" + fmtNum(d.count) + "</td><td class=\"num\">" + fmtNum(d.total) + "</td><td class=\"num\">" + d.pct + "%</td><td class=\"num\">" + massCell + "</td></tr>";
     });
     html += "</tbody></table>";
   }
-
   html += '<div class="pr-section-title">Group Overview by Workload</div>';
   html += buildGroupOverviewTableHtml();
 
-  // ---- Assumptions & Methodology ----
+  var flagged = (ins && ins.total > 0) ? getInsights().flagged : [];
+  if (flagged.length > 0) {
+    html += '<div class="pr-page-break"></div><div class="pr-section-title">Recovery Insights: Flagged Objects</div>';
+    html += '<div class="pr-subnote">Objects that stand out from the rest of this tenant (compared with the tenant\'s own typical objects). Top 25 shown; see the Recovery Insights tab for the full list.</div>';
+    html += '<table class="pr-table"><thead><tr><th>Workload</th><th>Object</th><th>Why flagged</th></tr></thead><tbody>';
+    flagged.slice(0, 25).forEach(function (f) {
+      html += "<tr><td>" + esc(f.wl) + "</td><td>" + esc((f.row && (f.row.ObjectName || f.row.Identifier)) || "") + "</td><td>" + esc(f.reason || "") + "</td></tr>";
+    });
+    html += "</tbody></table>";
+  }
+
   html += '<div class="pr-page-break"></div>';
   html += buildAssumptionsHtml();
-
-  // ---- Sizing (new) ----
   html += '<div class="pr-page-break"></div>';
   html += buildSizingPdfHtml();
-
   return html;
 }
 
 function exportPdf(mode) {
+  if (IS_PREVIEW || IS_SUMMARY) { window.print(); return; }
   var root = document.getElementById("print-root");
   if (!root) { return; }
   root.innerHTML = mode === "summary" ? buildPrintSummaryHtml() : buildPrintFullHtml();
@@ -5726,15 +8177,14 @@ function exportPdf(mode) {
     window.removeEventListener("afterprint", cleanup);
   }
   window.addEventListener("afterprint", cleanup);
-  // Fallback: some browsers/"Save as PDF" flows don't reliably fire
-  // afterprint - clear the print-mode class after a generous timeout
-  // regardless, so the live report can never get stuck hidden behind it.
+  // Some browsers do not reliably fire afterprint; clear the print-mode class after a generous timeout regardless.
   setTimeout(cleanup, 20000);
   window.print();
 }
 
+// ==================== Changes since last run ====================
 function renderCompareTab() {
-  if (!DATA.priorRun) { return; }
+  if (!DATA.priorRun || IS_PREVIEW || IS_SUMMARY) { return; }
   document.getElementById("compare-tab-btn").style.display = "";
   var moves = [];
   WORKLOAD_DEFS.forEach(function (wd) {
@@ -5752,10 +8202,15 @@ function renderCompareTab() {
   });
   var rows = moves.map(function (m) {
     return "<tr><td>" + esc(m.workload) + "</td><td>" + esc(m.objectName) + "</td><td>" + esc(m.identifier) + "</td><td>" + esc(m.from) + "</td><td>" + esc(m.to) + "</td></tr>";
-  }).join("") || '<tr><td colspan="5" style="text-align:center;color:var(--dark-gray);padding:2rem;">No tier changes since the prior run.</td></tr>';
-  document.getElementById("panel-compare").innerHTML = '<h2>Changes Since ' + esc(DATA.priorRun.meta.generatedAt || "prior run") + "</h2>" +
+  }).join("") || '<tr class="no-sort-row"><td colspan="5" style="text-align:center;color:var(--text-muted);padding:2rem;">No group changes since the prior run.</td></tr>';
+  var priorLookback = (DATA.priorRun.meta && DATA.priorRun.meta.period) || "";
+  var lookbackNote = (priorLookback && priorLookback !== DATA.meta.period)
+    ? '<p class="lede">Note: the prior run used a ' + esc(priorLookback) + ' usage lookback and this run uses ' + esc(DATA.meta.period) + ', so some objects may have moved groups only because of the longer window (Group 4 membership in particular).</p>'
+    : "";
+  document.getElementById("panel-compare").innerHTML = '<h2>Changes Since ' + esc(DATA.priorRun.meta.generatedAt || "prior run") + "</h2>" + lookbackNote +
     '<div class="table-wrap"><table><thead><tr><th>Workload</th><th>Object</th><th>Identifier</th><th>Previously</th><th>Now</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
 }
+
 '@
 
 #endregion
@@ -5771,7 +8226,7 @@ function renderCompareTab() {
     until its recovery-time budget is full - not an automatic top-third
     split) and pausing for one real, hands-on step (change the recovery
     window, watch Group 1's live object count respond) rather than just
-    narrating past it. Per feedback 2026-08-27: several customers have
+    narrating past it. Per feedback: several customers have
     independently asked for a way to force a specific department/group into
     Group 1 regardless of activity score - the tour's Criticality Groups
     steps exist specifically to surface that this already works today
@@ -5838,42 +8293,46 @@ function getGroup1Snapshot() {
   return { count: count, hours: state.recovery.group1Hours };
 }
 
-var TOUR_STEPS = [
-  { tab: "exec", selector: null, htmlBody: true, title: "Welcome to the Recovery Assessment", body: "<b>If SaaS went down right now, who would shout the loudest - and who actually needs to be back up first?</b> This report answers exactly that: which of your mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to the business, and how fast each priority tier comes back online after an outage. Take two minutes for a walkthrough?" },
-  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div.money", htmlBody: true, title: "Downtime Cost Avoided", body: "<b>What would an hour of downtime actually cost this business?</b> Recovering Group 1 first - instead of everything at once, in random order - is what saves it, based on the $/hour you set on the Recovery tab." },
-  { tab: "exec", selector: "#exec-lean .exec-lean-tiles > div:first-child", title: "Time to Critical Data", body: "Now that we know what's at stake, here's how fast you get there: your most critical data is usable again in this time with ABR, instead of a traditional restore that brings everything back at once, in random order." },
-  { tab: "exec", selector: "#exec-lean .recovery-ladder", title: "The Recovery Ladder", body: "The same story on a timeline: Group 1 online, then Groups 1-2, then Groups 1-3, all compared against how long a fully random-order Mass Recovery would take. So how does an object actually end up in Group 1 versus Group 2 or 3? Let's go look." },
-  { tab: "groups", selector: null, htmlBody: true, title: "How Objects Land in a Group", body: "<b>Think of an evacuation airlift.</b> One manifest ranked by need - not one list per neighborhood - and the first plane fills to its weight limit before the next one loads. That's exactly how objects land in a Criticality Group." },
-  { tab: "groups", selector: null, htmlBody: true, title: "The Manifest, Explained", body: "Every object in your tenant - mailbox, OneDrive account, SharePoint site, Team - is scored on real usage: how active it is, how much data it holds, how recently it was touched. <b>All objects go on one tenant-wide manifest</b>, not ranked department by department. Group 1 boards from the top down until it hits the recovery time budget you set; whoever's left fills Group 2 against its own budget, then Group 3. So <b>group size follows your budget, not a fixed one-third split</b> - a generous Group 1 budget gets more objects on the first plane, a tight one gets fewer." },
-  { tab: "groups", selector: "#group1-overview", htmlBody: true, title: "Everyone in Group 1, One List", body: "This is your first plane. The names on it are the people your business runs on: <b>the CFO closing the quarter, the legal team mid-litigation, the SharePoint site your field org lives in.</b> Every object that made Group 1's cut, across every workload, lands in one sortable, filterable table - scan it, sort by department or owner, and confirm the right people are on board before anyone else recovers." },
-  { tab: "groups", selector: "#attr-filters-mailboxes", title: "Filter to Exactly Who You Want", body: "Slice any workload by department, manager, job title, mailbox type, or Entra ID group. Want to isolate just Legal, one manager's org, or one specific group? Filter here." },
-  { tab: "groups", selector: "#mass-edit-bar-mailboxes", title: "Make Adjustments", body: "Once you're filtered down to exactly who you want, mass-reassign everyone in that filtered set to a different tier in one click. A common case: a compliance review team or an e-discovery hold list needs to be Group 1 regardless of what the activity score says - filter to that group, pick Group 1, hit Apply." },
-  { tab: "recovery", selector: "#recovery-inputs-panel", tooltipPlacement: "bottom-fixed", htmlBody: true, title: "Recovery Modeling Inputs", body: "Two inputs drive everything on this tab. Recovery window (days) models how far back ABR can reach - up to the last 7 days of activity. <b>The default downtime cost per hour shown here is a conservative estimate</b> - in reality, downtime costs tend to run much higher. Use this field to apply the customer's own estimated downtime cost and see an accurate picture of the savings." },
-  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, By the Numbers",
+function tourOpenControls() { if (typeof openAcc === "function") { openAcc("grp-controls-acc"); } }
+// v2.0 walkthrough. fullOnly steps are skipped in the Preview (its controls are locked); previewOnly steps are skipped in Full.
+var TOUR_STEPS_ALL = [
+  { tab: "exec", selector: null, htmlBody: true, title: "Welcome to the Recovery Assessment", body: "<b>If SaaS went down right now, who needs to be back first, and how fast?</b> This overview answers that. We will <b>come back to the Executive Summary</b> at the end, once we have shown how every number on it is built." },
+
+  { tab: "groups", fullOnly: true, before: tourOpenControls, selector: "#scoring-panel", htmlBody: true, title: "Step 1: Live Scoring Controls", body: "We <b>stack-rank every user and site</b> by how much they use M365 to do their job: mail, files, pages, meetings. The more someone uses it, the more important it is to their role. Job titles and other signals add to the score. <b>Change a weight and everything recomputes.</b>" },
+  { tab: "groups", fullOnly: true, before: tourOpenControls, selector: "#recovery-inputs-panel", htmlBody: true, title: "Step 2: Recovery Modeling", body: "<b>How many days back do we restore in the first pass?</b> The default is 7 days of recent data. Add your <b>downtime cost per hour</b> and the hours saved turn into cost avoided." },
+  { tab: "groups", fullOnly: true, before: tourOpenControls, selector: "#rto-panel", htmlBody: true, title: "Step 3: The Recovery Window (RTO)", body: "<b>This is the window of time you have to recover as many objects and items as possible.</b> We cut the ranked list to fit inside it. A <b>larger window fits more objects</b> into each group; a tighter window keeps the group small." },
+  { tab: "groups", fullOnly: true, before: tourOpenControls, selector: "#grp-headline", title: "Group 1, By the Numbers",
     body: function () {
       var snap = getGroup1Snapshot();
       tourState.g1Before = snap;
-      return "Right now, Group 1 has <b>" + fmtNum(snap.count) + " objects</b> queued for fast recovery at today's <b>" + snap.hours + "-hour</b> target. Let's adjust the recovery target below.";
+      return "Right now <b>" + fmtNum(snap.count) + " objects</b> fit inside Group 1's <b>" + snap.hours + "-hour</b> Recovery Window. Try changing the window and watch the count move.";
     }
   },
-  { tab: "recovery", selector: "#group1-target-input", title: "Try It Yourself", body: "This is how quickly the business needs Group 1 back up - its recovery time budget. Change this number and watch Group 1's object count update live. A bigger budget lets Group 1 absorb more objects from the leaderboard before it's full; a tighter budget means fewer objects fit and Group 1 stays smaller. Try changing it down, then back up - click Continue whenever you're ready.", manualAdvance: true },
-  { tab: "recovery", selector: "#rt-group-1-section", tooltipPlacement: "bottom-fixed", title: "Group 1, Updated",
+  { tab: "groups", fullOnly: true, before: tourOpenControls, selector: "#group1-target-input", title: "Try It Yourself", body: "Change the Group 1 Recovery Window, then back again. A bigger window fits more objects in Group 1. Click Continue when you are ready.", manualAdvance: true },
+  { tab: "groups", fullOnly: true, selector: "#grp-headline", title: "Group 1, Updated",
     body: function () {
       var before = tourState.g1Before;
       var after = getGroup1Snapshot();
-      if (!before) {
-        return "Group 1 now has <b>" + fmtNum(after.count) + " objects</b> at a " + after.hours + "-hour target.";
-      }
-      var delta = after.count - before.count;
+      if (!before) { return "Group 1 now has <b>" + fmtNum(after.count) + " objects</b> at a " + after.hours + "-hour window."; }
+      var delta = after.count - before.count, abs = Math.abs(delta);
       var verb = delta > 0 ? "an increase" : (delta < 0 ? "a decrease" : "no change");
-      var deltaAbs = Math.abs(delta);
-      var deltaPlural = deltaAbs === 1 ? "object" : "objects";
-      return "You just moved Group 1's target from " + before.hours + " hr to " + after.hours + " hr - Group 1 went from <b>" + fmtNum(before.count) + "</b> to <b>" + fmtNum(after.count) + "</b> objects, " + verb + " of <b>" + fmtNum(deltaAbs) + " " + deltaPlural + "</b>. That's the budget-constrained tiering responding live: objects move in and out of Group 1 as the time budget changes, nothing is recomputed from scratch.";
+      return "You moved the window from " + before.hours + " hr to " + after.hours + " hr. Group 1 went from <b>" + fmtNum(before.count) + "</b> to <b>" + fmtNum(after.count) + "</b> objects, " + verb + " of <b>" + fmtNum(abs) + "</b>.";
     }
   },
-  { tab: "recovery", selector: ".rt-preset-row", htmlBody: true, title: "Set the Real Numbers", body: "You can use our <b>default RTO targets</b>, based on the size of the customer's organization, or <b>fully customize them</b> to fit their business needs - along with the downtime cost per hour above. The calculations throughout this workbook, including the Executive Summary and the cost table, update instantly." },
-  { tab: "exec", selector: null, htmlBody: true, title: "Why Autonomous Business Recovery Matters", body: "<b>This is how you answer the question we opened with:</b> the people and processes this business can't function without are back online in hours, not days - because ABR (Autonomous Business Recovery) brings back Critical data first, then Important, then Standard, instead of restoring everything at once in random order. Everything else keeps recovering safely in the background. Use the button below to run through it again, or reopen it anytime from the tour icon in the toolbar.", isFinal: true }
+  { tab: "groups", previewOnly: true, before: tourOpenControls, selector: "#grp-controls", htmlBody: true, title: "How Group 1 Was Built", body: "Every user and site is ranked by how much they use M365, then the ranked list is cut to fit the Recovery Window. These settings are <b>locked in the Preview</b>; the full assessment lets you change them." },
+  { tab: "groups", previewOnly: true, selector: "#grp-headline", title: "Group 1 at a Glance", body: "The users and sites that fit inside the Group 1 Recovery Window, and how soon they are back." },
+
+  { tab: "report", selector: "#report-by-group", htmlBody: true, title: "Recovery by Group", body: "Each group's objects, storage and <b>time to critical data</b>, against how long a full restore takes." },
+  { tab: "report", selector: "#report-calendar", htmlBody: true, title: "If Recovery Started Today", body: "<b>Look ahead from today.</b> Which projects, launches or audits fall inside the outage? Would they be affected?" },
+  { tab: "report", selector: "#report-g1list", htmlBody: true, title: "Who Is in Group 1", body: "<b>The people and sites your business runs on.</b> Review the list with the business owners, then use the Group 1 list to move anyone who belongs elsewhere." },
+
+  { tab: "exec", selector: "#exec-fast", title: "Critical Data Back", body: "How fast your most critical users are back, versus a full restore." },
+  { tab: "exec", selector: "#exec-worth", htmlBody: true, title: "Downtime Avoided", body: "Hours saved reaching Group 1 first. <b>Enter your hourly downtime cost</b> to see cost avoided." },
+  { tab: "exec", selector: "#exec-concentration", title: "Why Order Matters", body: "The share of objects that carries most of the storage and recent activity." },
+  { tab: "exec", selector: "#exec-ladder", title: "The Recovery Timeline", body: "Critical, Important and Standard users come back in order. Group 4 and the older data finish with mass recovery." },
+  { tab: "exec", selector: null, htmlBody: true, title: "That Is the Whole Picture", body: "<b>Critical data back in hours, everything else by mass recovery.</b> Use the tour icon in the toolbar to run this again.", isFinal: true }
 ];
+var TOUR_STEPS = TOUR_STEPS_ALL.filter(function (st) { return !((IS_PREVIEW && st.fullOnly) || (!IS_PREVIEW && st.previewOnly)); });
 
 var tourState = { active: false, stepIndex: 0, g1Before: null };
 
@@ -5899,7 +8358,7 @@ function showTourWelcome() {
   backdrop.innerHTML =
     '<div class="tour-welcome-card">' +
       '<div class="tour-welcome-title">Take a 2-minute tour?</div>' +
-      '<div class="tour-welcome-body">We\'ll walk through how this report prioritizes recovery - starting with the Executive Summary, then how objects land in a Criticality Group, then how the recovery window and cost inputs work.</div>' +
+      '<div class="tour-welcome-body">We\'ll walk through how this report prioritizes recovery - starting with how users are scored, then the Recovery Window, then who is in Group 1, and finally how it rolls up into the Executive Summary.</div>' +
       '<div class="tour-welcome-actions">' +
         '<button class="tour-btn tour-btn-primary" onclick="closeTourWelcome(); startTour();">Start Tour</button>' +
         '<button class="tour-btn tour-btn-secondary" onclick="closeTourWelcome();">Skip for now</button>' +
@@ -5934,7 +8393,7 @@ function endTour() {
   });
 }
 
-// Arrow-key navigation, per feedback 2026-08-31: presenters using Storylane/
+// Arrow-key navigation, per feedback: presenters using Storylane/
 // DforD are used to clicking through with the keyboard, so mirror that here
 // rather than requiring a mouse click on Next/Back every step. Skipped
 // entirely when focus is in a form control (specifically the "Try It
@@ -5967,10 +8426,46 @@ function renderTourStep() {
   var step = TOUR_STEPS[tourState.stepIndex];
   if (!step) { endTour(); return; }
   if (step.tab) { switchTab(step.tab); }
+  if (typeof step.before === "function") { step.before(); }
   // Give the tab switch (and whatever it re-renders) one tick before
   // measuring positions, so getBoundingClientRect reflects the new tab's
   // real layout rather than the previous tab's now-hidden one.
   setTimeout(function () { paintTourStep(step); }, 60);
+}
+
+// Placement helpers: keep the tooltip beside the spotlighted data (right, then left), above it when there is
+// no side room, and only below / pinned as a last resort, so it does not cover what is being explained.
+function tourTabBottom() {
+  var tb = document.querySelector(".tabbar");
+  return tb ? Math.max(0, tb.getBoundingClientRect().bottom) + 8 : 8;
+}
+function tourScrollTo(target) {
+  var r = target.getBoundingClientRect();
+  var top0 = tourTabBottom(), vh = window.innerHeight;
+  var dy;
+  if (r.height > vh * 0.6) { dy = r.top - top0 - 4; }            // tall panel: show its top, just under the tab bar
+  else { dy = r.top - (top0 + (vh - top0 - r.height) / 2); }      // otherwise center it in the visible area
+  window.scrollTo({ top: Math.max(0, window.scrollY + dy), behavior: "auto" });
+}
+function tourVisibleRect(target) {
+  var r = target.getBoundingClientRect();
+  var top = Math.max(r.top, tourTabBottom()), bottom = Math.min(r.bottom, window.innerHeight - 8);
+  if (bottom <= top) { bottom = top + Math.min(r.height, 160); }
+  return { top: top, bottom: bottom, left: r.left, right: r.right, width: r.width, height: bottom - top };
+}
+function tourPlaceTooltip(vr, tooltip) {
+  var ttr = tooltip.getBoundingClientRect(), w = ttr.width, h = ttr.height, m = 12, gap = 16;
+  var tabB = tourTabBottom(), vw = window.innerWidth, vh = window.innerHeight;
+  function clampTop(v) { return Math.min(Math.max(v, tabB), vh - h - m); }
+  function clampLeft(v) { return Math.min(Math.max(v, m), vw - w - m); }
+  var pos = null;
+  if (vw - vr.right - gap - m >= w) { pos = { top: clampTop(vr.top), left: vr.right + gap }; }                       // beside, right
+  else if (vr.left - gap - m >= w) { pos = { top: clampTop(vr.top), left: vr.left - gap - w }; }                     // beside, left
+  else if (vr.top - tabB - gap >= h) { pos = { top: vr.top - gap - h, left: clampLeft(vr.left) }; }                  // above
+  else if (vh - vr.bottom - gap - m >= h) { pos = { top: vr.bottom + gap, left: clampLeft(vr.left) }; }              // below
+  else { pos = { top: vh - h - m, left: vw - w - m }; }                                                              // last resort: bottom-right corner
+  tooltip.style.top = pos.top + "px";
+  tooltip.style.left = pos.left + "px";
 }
 
 function paintTourStep(step) {
@@ -5991,8 +8486,8 @@ function paintTourStep(step) {
     // transparent here - only the no-target ("centered") branch below needs
     // the whole-page dim+blur.
     backdrop.classList.remove("dimmed");
-    target.scrollIntoView({ block: "center" });
-    var rect = target.getBoundingClientRect();
+    tourScrollTo(target);
+    var rect = tourVisibleRect(target);
     if (!spotlight) {
       spotlight = document.createElement("div");
       spotlight.id = "tour-spotlight";
@@ -6054,33 +8549,9 @@ function paintTourStep(step) {
     tooltip.classList.add("centered");
     tooltip.style.top = "";
     tooltip.style.left = "";
-  } else if (step.tooltipPlacement === "bottom-fixed") {
-    // A small number of steps spotlight a card that's routinely taller than
-    // the viewport (the recovery inputs panel; the Group 1 card, which is
-    // long enough that its own compare-grid/notes push well past one screen).
-    // The generic below/above/overlap logic three lines down was written
-    // assuming a target roughly the size of the tooltip itself, and for
-    // these taller cards it was landing squarely on top of the exact
-    // number/field the step is explaining. Rather than touch the shared
-    // scroll/positioning path every other step relies on (which was working
-    // fine), these specific steps just pin the tooltip to the bottom of the
-    // screen - it never depends on the target's own height, so it can never
-    // end up sitting over content the target itself is showing near its top.
-    tooltip.classList.remove("centered");
-    var trectBF = target.getBoundingClientRect();
-    var ttRectBF = tooltip.getBoundingClientRect();
-    var marginBF = 12;
-    tooltip.style.top = (window.innerHeight - ttRectBF.height - marginBF) + "px";
-    tooltip.style.left = Math.min(Math.max(marginBF, trectBF.left), window.innerWidth - ttRectBF.width - marginBF) + "px";
   } else {
     tooltip.classList.remove("centered");
-    var trect = target.getBoundingClientRect();
-    var ttRect = tooltip.getBoundingClientRect();
-    var top = trect.bottom + 16;
-    if (top + ttRect.height > window.innerHeight - 12) { top = Math.max(12, trect.top - ttRect.height - 16); }
-    var left = Math.min(Math.max(12, trect.left), window.innerWidth - ttRect.width - 12);
-    tooltip.style.top = top + "px";
-    tooltip.style.left = left + "px";
+    tourPlaceTooltip(tourVisibleRect(target), tooltip);
   }
 }
 
@@ -6102,14 +8573,30 @@ document.addEventListener("DOMContentLoaded", function () {
 $script:ReportJsBootstrap = @'
 function recomputeAll() {
   WORKLOAD_DEFS.forEach(function (wd) { computeScoresAndTiers(wd.key); });
-  renderExecLean();
-  renderExecSummary();
-  renderGroupsTab();
-  renderRecoveryTab();
-  renderMethodologyTab();
-  renderSizingTab();
-  renderCompareTab();
-  saveOverridesToStorage();
+  if (typeof computeInsights === "function") { computeInsights(); }
+  renderHeaderExtras();
+  renderModeChrome();
+  // v2.0: the old Recovery tab was merged into "Groups & Recovery Model" (groups), and a new
+  // "Recovery Insights" tab was added. Steps are looked up by name so a build that does not include a
+  // given renderer (e.g. a Summary-only build) still runs.
+  ["renderExecLean", "renderExecSummary", "renderPlaybookTab", "renderGroupsTab", "renderInsightsTab", "renderMethodologyTab", "renderSizingTab", "renderCompareTab"].forEach(function (name) {
+    if (typeof window[name] === "function") { window[name](); }
+  });
+  enhanceTables(document);
+  if (!IS_PREVIEW && !IS_SUMMARY) { saveOverridesToStorage(); }
+}
+
+// Preview: banner + hide full-only toolbar items. Summary: nothing extra here.
+function renderModeChrome() {
+  var banner = document.getElementById("pv-banner");
+  if (banner) { banner.innerHTML = (IS_PREVIEW ? previewBannerHtml() : "") + offlineBannerHtml(); }
+  document.body.classList.toggle("is-preview", IS_PREVIEW);
+  document.body.classList.toggle("is-summary", IS_SUMMARY);
+  Array.prototype.forEach.call(document.querySelectorAll(".full-only"), function (el) { el.style.display = (IS_PREVIEW || IS_SUMMARY) ? "none" : ""; });
+  var note = document.getElementById("footer-note");
+  if (note && IS_PREVIEW) {
+    note.innerHTML = 'Preview build: figures are for Critical Group 1 and the whole-tenant baseline only. Scoring weights, keywords, and recovery targets are shown for transparency and are locked. <a href="' + CONTACT_SALES_URL + '" target="_blank" rel="noopener">Contact your Rubrik representative</a> to run the full assessment.';
+  }
 }
 
 function exportOverrides() {
@@ -6262,6 +8749,7 @@ document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll(".tab-btn").forEach(function (b) {
     b.addEventListener("click", function () { switchTab(b.getAttribute("data-tab")); });
   });
+  initGroupCount();
   recomputeAll();
 });
 
@@ -6298,7 +8786,7 @@ function ConvertTo-ReportRows {
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]    $Data,
         [Parameter(Mandatory)] [string[]] $MetricFields
     )
-    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','MailboxClass','LicensePlan','HasArchiveAddon','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate')
+    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','MailboxClass','LicensePlan','HasArchiveAddon','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate','OwnerUpn')
     $rows = foreach ($row in $Data) {
         $metrics = @{}
         foreach ($f in $MetricFields) {
@@ -6318,6 +8806,10 @@ function ConvertTo-ReportRows {
         foreach ($opt in $optionalPassthrough) {
             if ($row.PSObject.Properties.Name -contains $opt) { $obj[$opt] = $row.$opt }
         }
+        # v2.0: composite score (0..1, same number the browser computes as _Score) so builds that do not
+        # re-score (Preview) can still show it; Mailbox quota (Prohibit Send/Receive) for the limit insight.
+        if ($row.PSObject.Properties.Name -contains '_Score' -and $null -ne $row._Score) { $obj['Score'] = [math]::Round([double]$row._Score, 4) }
+        if ($row.PSObject.Properties.Name -contains 'SendReceiveQuotaBytes' -and [double]$row.SendReceiveQuotaBytes -gt 0) { $obj['MailboxLimitBytes'] = [double]$row.SendReceiveQuotaBytes }
         [PSCustomObject]$obj
     }
     # NEW: when $Data is empty, the foreach-as-expression above produces ZERO
@@ -6335,6 +8827,192 @@ function ConvertTo-ReportRows {
 
 #endregion
 
+# ---------------------------------------------------------------------------
+# v2.0: aggregate payloads for the browser engine (all pure functions of the
+# row sets passed in, so they can be computed from the FULL data before the
+# Preview build removes anything). Field names mirror what the JS recovery
+# model reads: Mailboxes use ItemCount / StorageUsedMB (MB) / SendRecvActivity7d,
+# OneDrive and SharePoint use FileCount / StorageBytes / ViewedOrEditedCount7d
+# or ActiveFiles7d. "activity" is the sum of TotalActivity.
+# ---------------------------------------------------------------------------
+$script:ReportRecoveryFields = @{
+    mailboxes  = @{ Item = 'ItemCount'; Storage = 'StorageUsedMB'; Recent = 'SendRecvActivity7d' }
+    onedrive   = @{ Item = 'FileCount'; Storage = 'StorageBytes';  Recent = 'ViewedOrEditedCount7d' }
+    sharepoint = @{ Item = 'FileCount'; Storage = 'StorageBytes';  Recent = 'ActiveFiles7d' }
+}
+
+function Get-ReportTenantTotals {
+    <# Whole-tenant totals per workload: objectCount / itemCount / storage / activity (Teams: objectCount / activity). #>
+    param(
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Teams
+    )
+    $sets = [ordered]@{ mailboxes = @($Mailboxes); onedrive = @($OneDrive); sharepoint = @($SharePoint) }
+    $out = [ordered]@{}
+    foreach ($key in $sets.Keys) {
+        $f = $script:ReportRecoveryFields[$key]
+        $rows = @($sets[$key])
+        $out[$key] = [ordered]@{
+            objectCount = $rows.Count
+            itemCount   = [double](Get-FieldSum $rows $f.Item)
+            storage     = [double](Get-FieldSum $rows $f.Storage)
+            activity    = [double](Get-FieldSum $rows 'TotalActivity')
+        }
+    }
+    $teamRows = @($Teams)
+    $out['teams'] = [ordered]@{
+        objectCount = $teamRows.Count
+        activity    = [double](Get-FieldSum $teamRows 'TotalActivity')
+    }
+    return $out
+}
+
+function Get-ReportSizingAgg {
+    <# Aggregates behind the Sizing tab (the JS buildSizingSummary() / license-plan table) so a build with no per-object rows can still render it. #>
+    param(
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $SharePoint
+    )
+    $mb = @($Mailboxes)
+    $classKnown = [bool]($script:MailboxClassification -and $script:MailboxClassification.licenseDataAvailable)
+    if ($classKnown) {
+        $sharedMb = @($mb | Where-Object { $_.MailboxClass -eq 'Shared' })
+        $userMb   = @($mb | Where-Object { $_.MailboxClass -ne 'Shared' })
+    } else {
+        $sharedMb = @($mb | Where-Object { [string]$_.RecipientType -match 'shared' })
+        $userMb   = @($mb | Where-Object { [string]$_.RecipientType -notmatch 'shared' })
+    }
+    $archiveCount = @($mb | Where-Object { $_.HasArchive -eq $true }).Count
+    $ex = [ordered]@{
+        userCount          = $userMb.Count
+        userStorageBytes   = [double](Get-FieldSum $userMb 'StorageBytes')
+        userItems          = [double](Get-FieldSum $userMb 'ItemCount')
+        sharedCount        = $sharedMb.Count
+        sharedStorageBytes = [double](Get-FieldSum $sharedMb 'StorageBytes')
+        sharedItems        = [double](Get-FieldSum $sharedMb 'ItemCount')
+        archiveCount       = $archiveCount
+        classKnown         = $classKnown
+        userLabel          = $(if ($classKnown) { 'Licensed user mailboxes' } else { 'User Mailboxes' })
+        sharedLabel        = $(if ($classKnown) { 'Shared / group / other (no license needed)' } else { 'Shared Mailboxes' })
+        totalLabel         = $(if ($classKnown) { 'Total protected mailboxes' } else { 'Total' })
+        totalCount         = $mb.Count
+        totalStorageBytes  = [double](Get-FieldSum $mb 'StorageBytes')
+        totalItems         = [double](Get-FieldSum $mb 'ItemCount')
+    }
+    $od = @($OneDrive)
+    $sp = @($SharePoint)
+    $plans = [ordered]@{}
+    $archiveAddon = 0
+    $licensedRows = @($mb | Where-Object { $_.MailboxClass -eq 'Licensed' })
+    foreach ($r in $licensedRows) {
+        $k = if ($r.LicensePlan) { [string]$r.LicensePlan } else { 'Other (unrecognized)' }
+        if (-not $plans.Contains($k)) { $plans[$k] = [ordered]@{ users = 0; bytes = 0.0 } }
+        $plans[$k].users = [int]$plans[$k].users + 1
+        $plans[$k].bytes = [double]$plans[$k].bytes + [double]$r.StorageBytes
+        if ($r.HasArchiveAddon -eq $true) { $archiveAddon++ }
+    }
+    return [ordered]@{
+        ex            = $ex
+        od            = [ordered]@{ count = $od.Count; storageBytes = [double](Get-FieldSum $od 'StorageBytes'); files = [double](Get-FieldSum $od 'FileCount') }
+        sp            = [ordered]@{ count = $sp.Count; storageBytes = [double](Get-FieldSum $sp 'StorageBytes'); files = [double](Get-FieldSum $sp 'FileCount') }
+        licensePlans  = $plans
+        licensedUsers = $licensedRows.Count
+        archiveAddon  = $archiveAddon
+    }
+}
+
+function Get-ReportTierAgg {
+    <# Per workload, per tier: objectCount, itemCount, storage, recentItemCount, recentStorage, activity - the same arithmetic as the JS sliceTotals(). Summary build only. #>
+    param(
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $OneDrive,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $SharePoint,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Teams
+    )
+    $tierNames = @('Critical Group 1', 'Critical Group 2', 'Critical Group 3', 'Group 4')
+    $sets = [ordered]@{ mailboxes = @($Mailboxes); onedrive = @($OneDrive); sharepoint = @($SharePoint); teams = @($Teams) }
+    $out = [ordered]@{}
+    foreach ($key in $sets.Keys) {
+        $f = $script:ReportRecoveryFields[$key]
+        $acc = @{}
+        foreach ($tn in $tierNames) {
+            $acc[$tn] = @{ n = 0; items = 0.0; storage = 0.0; recentItems = 0.0; recentStorage = 0.0; activity = 0.0 }
+        }
+        foreach ($r in $sets[$key]) {
+            $tn = [string]$r.Tier
+            if (-not $acc.ContainsKey($tn)) { continue }
+            $a = $acc[$tn]
+            $a.n++
+            $a.activity += [double]$r.TotalActivity
+            if ($f) {
+                $ti = [double]$r.($f.Item)
+                $ts = [double]$r.($f.Storage)
+                $rawRecent = [double]$r.($f.Recent)
+                $ri = [math]::Max(0.0, [math]::Min($rawRecent, $ti))
+                $frac = if ($ti -gt 0) { $ri / $ti } else { 0.0 }
+                $a.items += $ti
+                $a.storage += $ts
+                $a.recentItems += $ri
+                $a.recentStorage += ($ts * $frac)
+            }
+        }
+        $perTier = [ordered]@{}
+        foreach ($tn in $tierNames) {
+            $a = $acc[$tn]
+            $entry = [ordered]@{ objectCount = [int]$a.n; activity = [double]$a.activity }
+            if ($f) {
+                $entry['itemCount']       = [double]$a.items
+                $entry['storage']         = [double]$a.storage
+                $entry['recentItemCount'] = [double]$a.recentItems
+                $entry['recentStorage']   = [double]$a.recentStorage
+            }
+            $perTier[$tn] = $entry
+        }
+        $out[$key] = $perTier
+    }
+    return $out
+}
+
+function Get-ReportGroup1Profile {
+    <# Group 1 profile for the aggregate-only Summary (the JS computes the same from rows in other builds): top departments (mailbox + OneDrive owners), top title keywords, distinct people. #>
+    param(
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $Mailboxes,
+        [AllowEmptyCollection()] [Parameter(Mandatory)] [array] $OneDrive
+    )
+    $g1Tier = 'Critical Group 1'
+    $deptCounts = @{}
+    $kwCounts = @{}
+    $people = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in $Mailboxes) {
+        if ([string]$r.Tier -ne $g1Tier) { continue }
+        $dept = [string]$r.Department
+        if ($dept) { $deptCounts[$dept] = 1 + [int]$deptCounts[$dept] }
+        if ($r.PSObject.Properties.Name -contains 'TitleWeightMatch' -and $r.TitleWeightMatch) {
+            $kw = [string]$r.TitleWeightMatch
+            $kwCounts[$kw] = 1 + [int]$kwCounts[$kw]
+        }
+        $id = if ($r.Identifier) { [string]$r.Identifier } else { [string]$r.ObjectName }
+        if ($id) { [void]$people.Add($id) }
+    }
+    foreach ($r in $OneDrive) {
+        if ([string]$r.Tier -ne $g1Tier) { continue }
+        $dept = [string]$r.Department
+        if ($dept) { $deptCounts[$dept] = 1 + [int]$deptCounts[$dept] }
+        $id = if ($r.PSObject.Properties.Name -contains 'OwnerUpn' -and $r.OwnerUpn) { [string]$r.OwnerUpn } else { '' }
+        if ($id) { [void]$people.Add($id) }
+    }
+    $topDepts = @($deptCounts.GetEnumerator() | Sort-Object -Property @{Expression='Value';Descending=$true}, @{Expression='Name';Descending=$false} | Select-Object -First 8 | ForEach-Object { [ordered]@{ name = [string]$_.Key; count = [int]$_.Value } })
+    $topKw = @($kwCounts.GetEnumerator() | Sort-Object -Property @{Expression='Value';Descending=$true}, @{Expression='Name';Descending=$false} | Select-Object -First 8 | ForEach-Object { [ordered]@{ keyword = [string]$_.Key; count = [int]$_.Value } })
+    return [ordered]@{
+        topDepartments   = $topDepts
+        titleKeywordHits = $topKw
+        group1People     = [int]$people.Count
+    }
+}
+
 #region ---------- HTML report: page template + New-M365HtmlReport ----------
 
 $script:ReportHtmlTemplate = @'
@@ -6346,28 +9024,33 @@ $script:ReportHtmlTemplate = @'
 <title>__TITLE__</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,__FAVICON__">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script>(function(){var t="light";try{t=window.localStorage.getItem("m365Theme")||"light"}catch(e){}document.documentElement.setAttribute("data-theme",t==="dark"?"dark":"light")})();</script>
 <style>__CSS__</style>
 </head>
 <body>
 <div class="rainbow-bar"></div>
 <div class="header">
   <div class="logo">__LOGO__</div>
-  <div class="eyebrow">RECOVERY SEQUENCING ASSESSMENT - LIVE, ADJUSTABLE</div>
+  <div class="eyebrow">RECOVERY ASSESSMENT <span class="v2-badge" title="Version 2 of the Recovery Assessment">v2</span></div>
   <h1>Recovery Assessment - M365 - __CUSTOMER__</h1>
   <div class="meta">
     <span>Usage window: <b>__PERIOD__</b></span>
     <span>Generated: <b>__GENERATED__</b></span>
+    <span id="hdr-calib"></span>
+    <span id="hdr-unit"></span>
+    <span id="hdr-theme"></span>
   </div>
 </div>
 <div class="tabbar">
   <button class="tab-btn active" data-tab="exec">Executive Summary</button>
   <button class="tab-btn" data-tab="report">Report</button>
-  <button class="tab-btn" data-tab="groups">Criticality Groups</button>
-  <button class="tab-btn" data-tab="recovery">Recovery</button>
+  <button class="tab-btn" data-tab="playbook">Recovery Playbook</button>
+  <button class="tab-btn" data-tab="groups">Groups &amp; Recovery Model</button>
+  <button class="tab-btn" data-tab="insights">Recovery Insights</button>
   <button class="tab-btn" data-tab="methodology">Methodology &amp; Glossary</button>
   <button class="tab-btn" data-tab="sizing">Sizing</button>
   <button class="tab-btn" data-tab="compare" id="compare-tab-btn" style="display:none;">Changes Since Last Run</button>
-  <!-- NEW v3.6.2: icon-only action toolbar, per feedback 2026-07-23 - moved
+  <!-- NEW v3.6.2: icon-only action toolbar, per feedback - moved
        out of the full-width text-button export-bar (previously its own row
        under the tabbar) and docked to the far right of the tabbar itself,
        via margin-left:auto on .tabbar-actions. title/aria-label carry the
@@ -6377,14 +9060,14 @@ $script:ReportHtmlTemplate = @'
     <button class="icon-btn" onclick="startTour()" title="Take the Tour" aria-label="Take the Tour">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
     </button>
-    <button class="icon-btn" onclick="exportOverrides()" title="Export overrides (for next run)" aria-label="Export overrides (for next run)">
+    <button class="icon-btn full-only" onclick="exportOverrides()" title="Export overrides (for next run)" aria-label="Export overrides (for next run)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 19h16"/></svg>
     </button>
-    <label class="icon-btn" style="cursor:pointer;" title="Import overrides" aria-label="Import overrides">
+    <label class="icon-btn full-only" style="cursor:pointer;" title="Import overrides" aria-label="Import overrides">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V7"/><path d="M8 11l4-4 4 4"/><path d="M4 19h16"/></svg>
       <input type="file" accept=".json" style="display:none;" onchange="importOverridesFile(this)">
     </label>
-    <button class="icon-btn" onclick="exportCriticalityGroupsCsv()" title="Export Criticality Groups (CSV)" aria-label="Export Criticality Groups (CSV)">
+    <button class="icon-btn full-only" onclick="exportCriticalityGroupsCsv()" title="Export Criticality Groups (CSV)" aria-label="Export Criticality Groups (CSV)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 9v12"/></svg>
     </button>
     <button class="icon-btn" onclick="exportPdf('summary')" title="Export PDF: One Page Summary" aria-label="Export PDF: One Page Summary">
@@ -6396,51 +9079,40 @@ $script:ReportHtmlTemplate = @'
   </div>
 </div>
 <main>
+  <div id="pv-banner"></div>
   <section class="tab-panel active" data-tab-panel="exec" id="panel-exec">
     <h2>Executive Summary</h2>
-    <!-- NEW v3.5.0: split out of the (now much longer) detailed content per
-         feedback 2026-07-17 - the original single Executive Summary tab had
-         grown too long for an exec skim. This tab is now deliberately just
-         three numbers (time to critical data, downtime cost avoided, dormant
-         data %) plus one sentence on the mechanism - everything else that
-         used to live here (financial compare cards, recovery timeline,
-         per-group recovery times, per-workload cards, totals) moved to the
-         new Report tab, see panel-report below. -->
+    <!-- v2.0: one-screen story built by renderExecLean() (ReportJsRenderA.js): who matters, how fast they come
+         back, what that is worth, and what could slow it down. Every block links to its detail. -->
     <div id="exec-lean"></div>
   </section>
   <section class="tab-panel" data-tab-panel="report" id="panel-report">
     <h2>Report</h2>
-    <p style="color:var(--dark-gray);font-size:.9rem;max-width:70ch;margin:-1rem 0 1.5rem;">Full detail behind the Executive Summary headline figures - financial comparison, recovery timeline, per-group breakdown, and per-workload totals.</p>
-    <!-- NEW: reordered per the point of this whole exercise - break critical
-         objects into groups to reduce recovery time. Lead with financial
-         impact, then recovery times, THEN the per-workload group breakdown
-         (previously the only thing on this tab). -->
-    <div id="exec-financial"></div>
-    <div id="exec-recovery-times"></div>
-    <!-- NEW: reordered again 2026-08-24 per feedback - Totals Across All
-         Workloads (exec-totals, which renders its own "Totals Across All
-         Workloads" <h2>) now leads the group breakdown, ahead of the
-         per-workload Group Overview cards, which in turn now comes before
-         the Downtime Cost Avoided table. Pure DOM reorder - each section
-         still renders into its own div by id from the same render
-         functions, regardless of where that div sits in this template. -->
-    <div id="exec-totals"></div>
-    <h2 style="margin-top:2rem;">Group Overview</h2>
-    <div class="summary-grid" id="exec-summary-cards"></div>
-    <div id="exec-cost-table"></div>
-    <!-- NEW v3.6.0: Dormant Data moved to the very bottom of the Report tab
-         and collapsed by default, per feedback 2026-07-22 - see
-         renderExecFinancialAndRecoveryTop's dormantHtml block. -->
-    <div id="exec-dormant"></div>
+    <p class="report-intro">The evidence behind the Executive Summary: the verdict, the recovery times by group, what drives them, how sensitive they are, and what to decide next. Every figure links to its detail on the Groups &amp; Recovery Model tab.</p>
+    <div id="report-verdict"></div>
+    <div id="report-case"></div>
+    <div id="report-by-group"></div>
+    <div id="report-calendar"></div>
+    <div id="report-drivers"></div>
+    <div id="report-sensitivity"></div>
+    <div id="report-concentration"></div>
+    <div id="report-g1list"></div>
+    <div id="report-rto"></div>
+    <div id="report-risks"></div>
+    <div id="report-group-overview"></div>
+    <div id="report-low-activity"></div>
+    <div id="report-decisions"></div>
+    <div id="report-data-quality"></div>
   </section>
+  <section class="tab-panel" data-tab-panel="playbook" id="panel-playbook"></section>
   <section class="tab-panel" data-tab-panel="groups" id="panel-groups"></section>
-  <section class="tab-panel" data-tab-panel="recovery" id="panel-recovery"></section>
+  <section class="tab-panel" data-tab-panel="insights" id="panel-insights"></section>
   <section class="tab-panel" data-tab-panel="methodology" id="panel-methodology"></section>
   <section class="tab-panel" data-tab-panel="sizing" id="panel-sizing"></section>
   <section class="tab-panel" data-tab-panel="compare" id="panel-compare"></section>
 </main>
 <footer>
-  <p>Tiers, totals, and recovery/cost figures are a data-driven starting point computed LIVE in this page from the embedded raw metrics - adjust weights, title/hub-site keywords, or manual overrides above and everything recomputes instantly. Nothing you change here is sent anywhere; use "Export overrides" to save your adjustments and pass the file back in via -OverridesFile on the next run so they persist.</p>
+  <p id="footer-note">Tiers, totals, and recovery/cost figures are a data-driven starting point computed LIVE in this page from the embedded raw metrics - adjust weights, title/hub-site keywords, or manual overrides and everything recomputes instantly. Nothing you change here is sent anywhere; use "Export overrides" to save your adjustments and pass the file back in via -OverridesFile on the next run so they persist.</p>
 </footer>
 <!-- NEW v3.6.0: PDF export target. Hidden on screen always; only shown
      during an actual print (see @media print rules) when body carries
@@ -6449,7 +9121,7 @@ $script:ReportHtmlTemplate = @'
 <!-- NEW 2026-09-24: split into one <script> tag per workload (plus a
      meta/weights tag) instead of one combined blob - see ReportJsEngine's
      header comment for why (V8's hard max JS string length, hit by a real
-     ~908,000-object tenant). -->
+     very large tenant). -->
 <script type="application/json" id="report-data-meta">__DATA_META_JSON__</script>
 <script type="application/json" id="report-data-mailboxes">__DATA_MAILBOXES_JSON__</script>
 <script type="application/json" id="report-data-onedrive">__DATA_ONEDRIVE_JSON__</script>
@@ -6495,23 +9167,27 @@ function New-M365HtmlReport {
         # its "not collected" note instead of these numbers.
         [switch]    $DetailedSizingRequested,
         $Sizing = $null,
+        # v2.0: build mode and pre-aggregated payloads (see Get-ReportTenantTotals etc.)
+        [ValidateSet('full','preview','summary')] [string] $BuildMode = 'full',
+        $TenantTotals = $null,
+        $TierAgg = $null,
+        $SizingAgg = $null,
+        $Group1Profile = $null,
         $PriorRunData = $null
     )
 
     # NEW 2026-09-24: each workload's rows are built and serialized to JSON
     # SEPARATELY from meta/weights/etc (below), instead of nested inside one
     # combined $dataObject that gets ConvertTo-Json'd as a single blob. A
-    # real customer tenant (~908,000 objects across all four
-    # workloads) produced one combined JSON string of 539,000,418 characters -
-    # 2.1MB OVER V8's hard-coded maximum JS string length (536,870,888
+    # customer tenant (a very large number of objects) produced one combined JSON string of more than 536 million characters -
+    # OVER V8's hard-coded maximum JS string length (536,870,888
     # characters - a fixed engine constant in every Chromium/Node build, not
     # something more RAM works around). JSON.parse() on a string past that
     # ceiling throws in EVERY browser, before any of the report's JS can run,
-    # leaving the page blank - see ReportJsEngine's header comment and
-    # CHANGELOG 3.16.11. Splitting per-workload keeps each individual
+    # leaving the page blank. Splitting per-workload keeps each individual
     # ConvertTo-Json/JSON.parse call's string comfortably under the limit for
     # every tenant seen to date (the largest single workload seen, SharePoint,
-    # was ~327MB - about 185MB of headroom left). This does NOT eliminate the
+    # was several hundred MB - with headroom left). This does NOT eliminate the
     # ceiling - an extreme enough SINGLE workload could still someday exceed
     # it on its own; there is no dynamic chunking within a workload yet.
     $mailboxesRows  = ConvertTo-ReportRows -Data $Mailboxes  -MetricFields @('SendRecvActivity','ReadActivity','Size','TotalActivity','ItemCount','StorageUsedMB','StorageBytes','SendRecvActivity7d')
@@ -6524,14 +9200,20 @@ function New-M365HtmlReport {
             runId                        = $RunId
             customerLabel                = $CustomerLabel
             period                       = $Period
+            buildMode                    = $BuildMode
+            calibrationVersion           = 'v1'
+            group1Profile                = $Group1Profile
             generatedAt                  = (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt')
             groupsRequested              = [bool]$Groups
+            offlineMode                  = [bool]$script:Offline
+            groupCount                   = [int]$CriticalGroupCount
+            offlineMissing               = @($script:OfflineMissing)
             recoveryWindowDays           = $RecoveryWindowDays
             recoveryLicenseTierRequested = $RecoveryLicenseTier
             downtimeCostPerHour          = $DowntimeCostPerHour
             spodTierTable                = $script:SPODTierTable
             exBenchmark                  = $script:EXBenchmark
-            # NEW v3.10.0: M365 MVC Recovery Time Estimator constants - single
+            # NEW v3.10.0: recovery time model constants - single
             # source of truth is PowerShell (here); the JS engine reads these
             # back out of meta rather than hardcoding a second copy, so the
             # two can never drift. See Get-RecoveryTimeMinutes.
@@ -6575,9 +9257,12 @@ function New-M365HtmlReport {
         hubSiteBonus             = $HubSiteBonus
         priorRun = $PriorRunData
     }
+    # v2.0: aggregate payloads only present when the caller supplies them (Preview / Summary).
+    if ($null -ne $TenantTotals) { $dataObject['tenantTotals'] = $TenantTotals }
+    if ($null -ne $TierAgg)      { $dataObject['tierAgg']      = $TierAgg }
+    if ($null -ne $SizingAgg)    { $dataObject['sizingAgg']    = $SizingAgg }
 
-    # NEW 2026-09-22: found via a real customer's OutOfMemoryException on a ~213,000-
-    # object tenant. ConvertTo-Json on a large nested object graph is one of
+    # NEW 2026-09-22: found in field use: OutOfMemoryException on a very large tenant. ConvertTo-Json on a large nested object graph is one of
     # the most memory-hungry single operations in this script - it builds a
     # full string representation of everything passed to it at once, on top
     # of the source PSCustomObjects that are still alive. A GC pass right
@@ -6591,7 +9276,7 @@ function New-M365HtmlReport {
     # collection into ConvertTo-Json unrolls it one item at a time, so a
     # workload with EXACTLY one row would serialize as a bare object instead
     # of a 1-element JSON array (the same pipe-auto-unroll footgun fixed
-    # elsewhere in this script - see CHANGELOG 3.16.8). -InputObject passes
+    # elsewhere in this script). -InputObject passes
     # the whole array as one argument, so ConvertTo-Json always emits an
     # array regardless of row count.
     $reportMailboxesJson  = ConvertTo-Json -InputObject $mailboxesRows  -Depth 12 -Compress
@@ -6604,7 +9289,7 @@ function New-M365HtmlReport {
     Assert-ValidReportJson -Json $reportTeamsJson      -Context 'the embedded HTML report-data-teams blob'
 
     $faviconB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RubrikBrandmarkSvg))
-    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsRenderA, $script:ReportJsRenderB, $script:ReportJsRenderC, $script:ReportJsTour, $script:ReportJsBootstrap) -join "`n"
+    $allJs = @($script:ReportJsEngine, $script:ReportJsRecovery, $script:ReportJsUi, $script:ReportJsInsights, $script:ReportJsRenderA, $script:ReportJsRenderTables, $script:ReportJsRenderB, $script:ReportJsRenderRecovery, $script:ReportJsRenderC, $script:ReportJsTour, $script:ReportJsBootstrap) -join "`n"
 
     $html = $script:ReportHtmlTemplate
     $html = $html.Replace('__TITLE__', (ConvertTo-SafeHtml "Recovery Assessment - M365 - $CustomerLabel"))
@@ -6627,304 +9312,50 @@ function New-M365HtmlReport {
 
 function New-M365SummaryHtmlReport {
     <#
-        The "Summary" report - a small, static, aggregate-only companion to
-        the Interactive report, added in v3.11.0. Unlike the Interactive
-        report, this file embeds NO per-object data at all - no per-row JSON
-        array, no client-side scoring/tiering engine - only pre-computed
-        totals and counts. That distinction (not the rendered table rows) is
-        what actually keeps large-tenant Interactive reports huge; a
-        true aggregate-only build sidesteps it entirely rather than just
-        hiding rows behind a cap. Retains total-objects-per-group per
-        workload, since that detail is useful even without row-level data.
-        Always generated alongside the Interactive report on every run -
-        meant to be the file a customer can open on a phone or forward
-        around without a multi-hundred-MB attachment; the Interactive report
-        remains the working session for row-level detail, live weight/RTO
-        tuning, and manual tier overrides. Reuses the same visual language as
-        the Interactive report's "One Page Summary" PDF export
-        (buildPrintSummaryHtml/buildSizingPdfHtml in the JS engine) and the
-        same $script:ReportCss stylesheet, rendered server-side here instead
-        of recomputed client-side, since there is no embedded data for a
-        client-side engine to recompute from.
+        v2.0: the "Summary" report is now the SAME report engine as the Interactive report, built in
+        aggregate-only mode (buildMode 'summary'): all four workload arrays are empty and the page carries
+        only pre-computed aggregates - per-tier totals (tierAgg), whole-tenant totals (tenantTotals), sizing
+        aggregates (sizingAgg) and the Group 1 profile. No per-object data ships, so it stays small enough to
+        email or forward. The browser renders Executive Summary, Report, Methodology and Sizing from those
+        aggregates; there are no object tables and no controls. Same parameters as New-M365HtmlReport for the
+        settings that matter (weights, RTO targets, etc. are splatted in by the caller via -CommonParams).
     #>
     param(
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Mailboxes,
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $OneDrive,
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $SharePoint,
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]  $Teams,
-        [Parameter(Mandatory)] [string] $CustomerLabel,
-        [Parameter(Mandatory)] [string] $Period,
-        [Parameter(Mandatory)] [string] $OutFile,
-        [Parameter(Mandatory)] $RecoveryModel,
-        [double] $DowntimeCostPerHour = 0,
-        [double] $RecoveryWindowDays = 7,
-        [double] $Group1TargetHours = 4,
-        [double] $Group2TargetHours = 24,
-        [double] $Group3TargetHours = 72,
-        [string] $RTOPresetResolved = 'Standard',
-        [string] $RTOPresetReason = '',
-        [switch] $DetailedSizingRequested,
-        $Sizing = $null
+        [Parameter(Mandatory)] [hashtable] $CommonParams,
+        [Parameter(Mandatory)] [string] $OutFile
     )
-
-    function local:fmtMin($min) {
-        if (-not $min -or $min -le 0) { return '0 min' }
-        if ($min -lt 60) { return "$([math]::Round($min)) min" }
-        if ($min -lt 1440) { return "{0:N1} hr" -f ($min / 60) }
-        return "{0:N1} days" -f ($min / 1440)
-    }
-    function local:fmtMoney($n) { return "`${0:N0}" -f [math]::Round([double]$n) }
-    function local:fmtNum($n) { return "{0:N0}" -f [double]$n }
-    function local:fmtGB($bytes) { if (-not $bytes) { return '0.00' }; return "{0:N2}" -f ([double]$bytes / 1GB) }
-
-    $tierOrder = @('Critical Group 1', 'Critical Group 2', 'Critical Group 3', 'Group 4')
-    $tierShort = @{ 'Critical Group 1' = 'Group 1'; 'Critical Group 2' = 'Group 2'; 'Critical Group 3' = 'Group 3'; 'Group 4' = 'Group 4' }
-    $workloads = @(
-        @{ Label = 'Mailboxes';  Rows = $Mailboxes }
-        @{ Label = 'OneDrive';   Rows = $OneDrive }
-        @{ Label = 'SharePoint'; Rows = $SharePoint }
-        @{ Label = 'Teams';      Rows = $Teams }
-    )
-
-    $g1 = $RecoveryModel.Milestones['Critical Group 1']
-    $g2 = $RecoveryModel.Milestones['Critical Group 2']
-    $g3 = $RecoveryModel.Milestones['Critical Group 3']
-    $fullRestoreMin = $RecoveryModel.FullRestoreUnprioritizedMin
-    $fullExposureMoney = ($fullRestoreMin / 60.0) * $DowntimeCostPerHour
-    $abrCostG1 = ($g1.WallClockCumulativeMin / 60.0) * $DowntimeCostPerHour
-    $savingsMoney = [math]::Max(0, $fullExposureMoney - $abrCostG1)
-    $pctReduction = if ($fullExposureMoney -gt 0) { [math]::Round(($savingsMoney / $fullExposureMoney) * 100) } else { 0 }
-
-    $body = '<div class="pr-header">' +
-        '<div class="pr-eyebrow">Recovery Sequencing Assessment - Summary</div>' +
-        '<div class="pr-title">Recovery Assessment - M365 - ' + (ConvertTo-SafeHtml $CustomerLabel) + '</div>' +
-        '<div class="pr-meta">' +
-        '<span>Usage window: <b>' + (ConvertTo-SafeHtml $Period) + '</b></span>' +
-        '<span>Generated: <b>' + (Get-Date).ToString('dddd, MMMM d, yyyy - h:mm tt') + '</b></span>' +
-        '</div>' +
-        '</div>'
-
-    $body += '<div class="pr-tiles">' +
-        '<div class="pr-tile"><div class="pr-tile-label">Time to Critical Data</div><div class="pr-tile-value">' + (fmtMin $g1.WallClockCumulativeMin) + '</div><div class="pr-tile-sub">instead of ' + (fmtMin $fullRestoreMin) + ' with a traditional, random-order restore</div></div>' +
-        '<div class="pr-tile"><div class="pr-tile-label">Downtime Cost Avoided</div><div class="pr-tile-value">' + $(if ($DowntimeCostPerHour -gt 0) { fmtMoney $savingsMoney } else { 'n/a' }) + '</div><div class="pr-tile-sub">' + $(if ($DowntimeCostPerHour -gt 0) { "$pctReduction% reduction vs. a fully random-order restore" } else { 'set -DowntimeCostPerHour for a dollar figure' }) + '</div></div>' +
-        '</div>'
-
-    $body += '<div class="pr-mechanism">ABR restores recently accessed, modified, and created data first - the data people were actually working on - so the business is operational in hours, not weeks, while Mass Recovery continues restoring everything else in the background, in whatever order it happens to land.</div>'
-
-    $body += '<div class="pr-section-title">Recovery Times by Group</div>'
-    $body += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">ABR Time</th><th class="num">Target</th><th>Status</th></tr></thead><tbody>'
-    $rtoRows = @(
-        @{ Label = 'Group 1 online';    M = $g1; Target = $Group1TargetHours }
-        @{ Label = 'Groups 1-2 online'; M = $g2; Target = $Group2TargetHours }
-        @{ Label = 'Groups 1-3 online'; M = $g3; Target = $Group3TargetHours }
-    )
-    foreach ($r in $rtoRows) {
-        $status = if ($r.M.ExceedsTarget) { '<span class="pr-badge exceeds">Exceeds target</span>' } else { 'Within target' }
-        $body += "<tr><td>$($r.Label)</td><td class=""num"">$(fmtMin $r.M.WallClockCumulativeMin)</td><td class=""num"">$($r.Target) hr</td><td>$status</td></tr>"
-    }
-    $body += "<tr class=""total-row""><td>Full tenant (Mass Recovery baseline)</td><td class=""num"">$(fmtMin $fullRestoreMin)</td><td class=""num"">&mdash;</td><td>&mdash;</td></tr>"
-    $body += '</tbody></table>'
-    $body += "<div class=""pr-subnote"">RTO preset: $(ConvertTo-SafeHtml $RTOPresetResolved). $(ConvertTo-SafeHtml $RTOPresetReason)</div>"
-
-    if ($DowntimeCostPerHour -gt 0 -and $fullRestoreMin -gt 0) {
-        $body += '<div class="pr-section-title">Downtime Cost Avoided by Group</div>'
-        $body += '<table class="pr-table"><thead><tr><th>Milestone</th><th class="num">Time</th><th class="num">Downtime Cost</th><th class="num">Cost Avoided</th><th class="num">Reduction</th></tr></thead><tbody>'
-        foreach ($r in $rtoRows) {
-            $cost = ($r.M.WallClockCumulativeMin / 60.0) * $DowntimeCostPerHour
-            $avoided = [math]::Max(0, $fullExposureMoney - $cost)
-            $pct = if ($fullExposureMoney -gt 0) { [math]::Round(($avoided / $fullExposureMoney) * 100) } else { 0 }
-            $body += "<tr><td>$($r.Label)</td><td class=""num"">$(fmtMin $r.M.WallClockCumulativeMin)</td><td class=""num"">$(fmtMoney $cost)</td><td class=""num"">$(fmtMoney $avoided)</td><td class=""num"">$pct%</td></tr>"
-        }
-        $body += "<tr class=""total-row""><td>Full tenant (Mass Recovery baseline)</td><td class=""num"">$(fmtMin $fullRestoreMin)</td><td class=""num"">$(fmtMoney $fullExposureMoney)</td><td class=""num"">&mdash;</td><td class=""num"">&mdash;</td></tr>"
-        $body += '</tbody></table>'
-    }
-
-    $body += '<div class="pr-section-title">Group Overview by Workload</div>'
-    $body += '<div class="pr-subnote">Object counts per recovery-priority tier - no individual names, identifiers, or other per-object detail. See the Interactive report from this same run for row-level detail and live customization.</div>'
-    $body += '<table class="pr-table"><thead><tr><th>Workload</th>' + (($tierOrder | ForEach-Object { "<th class=""num"">$($tierShort[$_])</th>" }) -join '') + '<th class="num">Total</th></tr></thead><tbody>'
-    $grandTotals = @{}; foreach ($t in $tierOrder) { $grandTotals[$t] = 0 }
-    $grandTotal = 0
-    foreach ($wd in $workloads) {
-        $rowHtml = "<tr><td>$($wd.Label)</td>"
-        foreach ($t in $tierOrder) {
-            $count = @($wd.Rows | Where-Object { $_.Tier -eq $t }).Count
-            $grandTotals[$t] += $count
-            $rowHtml += "<td class=""num"">$(fmtNum $count)</td>"
-        }
-        $grandTotal += $wd.Rows.Count
-        $rowHtml += "<td class=""num"">$(fmtNum $wd.Rows.Count)</td></tr>"
-        $body += $rowHtml
-    }
-    $body += "<tr class=""total-row""><td>Total</td>" + (($tierOrder | ForEach-Object { "<td class=""num"">$(fmtNum $grandTotals[$_])</td>" }) -join '') + "<td class=""num"">$(fmtNum $grandTotal)</td></tr>"
-    $body += '</tbody></table>'
-
-    # ---- Sizing (aggregate only - same math as buildSizingSummary/
-    # buildSizingPdfHtml in the JS engine, computed here server-side instead) ----
-    $body += '<div class="pr-page-break"></div>'
-    $body += '<div class="pr-section-title">M365 Sizing</div>'
-    $body += '<div class="pr-subnote">Tenant-wide capacity and object counts across Exchange, OneDrive, and SharePoint - independent of the criticality groups above.</div>'
-
-    # v3.17.0: license-based classification (see Add-MailboxTypeHeuristic);
-    # falls back to the old Recipient Type split only when license data
-    # wasn't available for this run.
-    $mcInfo = $script:MailboxClassification
-    $classKnown = [bool]($mcInfo -and $mcInfo.licenseDataAvailable)
-    if ($classKnown) {
-        $sharedMb = @($Mailboxes | Where-Object { $_.MailboxClass -eq 'Shared' })
-        $userMb   = @($Mailboxes | Where-Object { $_.MailboxClass -ne 'Shared' })
-    } else {
-        $userMb = @($Mailboxes | Where-Object { $_.RecipientType -notmatch 'shared' })
-        $sharedMb = @($Mailboxes | Where-Object { $_.RecipientType -match 'shared' })
-    }
-    $userLabel   = if ($classKnown) { 'Licensed user mailboxes' } else { 'User Mailboxes' }
-    $sharedLabel = if ($classKnown) { 'Shared / group / other (no license needed)' } else { 'Shared Mailboxes' }
-    $totalLabel  = if ($classKnown) { 'Total protected mailboxes' } else { 'Total' }
-    $archiveMb = @($Mailboxes | Where-Object { $_.HasArchive -eq $true })
-
-    $exUserStorage = Get-FieldSum $userMb 'StorageBytes'
-    $exUserItems = Get-FieldSum $userMb 'ItemCount'
-    $exSharedStorage = Get-FieldSum $sharedMb 'StorageBytes'
-    $exSharedItems = Get-FieldSum $sharedMb 'ItemCount'
-    $exTotalStorage = Get-FieldSum $Mailboxes 'StorageBytes'
-    $exTotalItems = Get-FieldSum $Mailboxes 'ItemCount'
-
-    $detailed = [bool]$DetailedSizingRequested -and $Sizing
-    if ($detailed) {
-        $archStorage = $Sizing.archiveStorageBytes
-        $archItems = $Sizing.archiveItems
-        $archiveStorageCell = fmtGB $archStorage
-        $archiveItemsCell = fmtNum $archItems
-        $rifStorage = $Sizing.recoverableItemsStorageBytes
-        $rifItems = $Sizing.recoverableItemsItems
-        $rifCount = $Sizing.recoverableItemsCount
-        $rifRow = "<tr><td>Recoverable Items</td><td class=""num"">$(fmtNum $rifCount)</td><td class=""num"">$(fmtGB $rifStorage)</td><td class=""num"">$(fmtNum $rifItems)</td></tr>"
-        $totalStorageForAvg = $exTotalStorage + $archStorage + $rifStorage
-    } else {
-        $archiveStorageCell = '*'
-        $archiveItemsCell = '*'
-        $rifRow = '<tr><td>Recoverable Items</td><td class="num">*</td><td class="num">*</td><td class="num">*</td></tr>'
-        $totalStorageForAvg = $exTotalStorage
-    }
-
-    $body += '<table class="pr-table"><thead><tr><th>Mailbox Type</th><th class="num">Count</th><th class="num">Storage (GB)</th><th class="num">Items</th></tr></thead><tbody>' +
-        "<tr><td>$userLabel</td><td class=""num"">$(fmtNum $userMb.Count)</td><td class=""num"">$(fmtGB $exUserStorage)</td><td class=""num"">$(fmtNum $exUserItems)</td></tr>" +
-        "<tr><td>$sharedLabel</td><td class=""num"">$(fmtNum $sharedMb.Count)</td><td class=""num"">$(fmtGB $exSharedStorage)</td><td class=""num"">$(fmtNum $exSharedItems)</td></tr>" +
-        "<tr><td>Archive Mailboxes</td><td class=""num"">$(fmtNum $archiveMb.Count)</td><td class=""num"">$archiveStorageCell</td><td class=""num"">$archiveItemsCell</td></tr>" +
-        $rifRow +
-        "<tr class=""total-row""><td>$totalLabel</td><td class=""num"">$(fmtNum $Mailboxes.Count)</td><td class=""num"">$(fmtGB $totalStorageForAvg)</td><td class=""num"">$(fmtNum $exTotalItems)</td></tr>" +
-        '</tbody></table>'
-
-    if (-not $detailed) {
-        $body += '<div class="pr-note">*Note: Not collected - run the script with -DetailedSizing to capture Recoverable Items and In Place Archive details. Capturing In Place Archive and Recoverable Items can take time, depending on the size of the M365 subscription.</div>'
-    }
-
-    # NEW v3.17.0: licensing note + licensed users by plan (aggregate only)
-    if ($classKnown) {
-        $licNote = "<b>Licensed users (Rubrik license basis): $(fmtNum $userMb.Count).</b> Shared / group / other mailboxes ($(fmtNum $sharedMb.Count)) are protected and sized here but need no Rubrik license. "
-        if ($mcInfo.excludedCount -gt 0) {
-            $licNote += "$(fmtNum $mcInfo.excludedCount) mailboxes belonging to enabled, unlicensed users ($(fmtGB $mcInfo.excludedStorageBytes) GB, $(fmtNum $mcInfo.excludedItems) items) are not protected by Rubrik and are excluded from every figure in this report. "
-        }
-        $licNote += if ($mcInfo.exoConfirmedShared) { "Shared mailboxes were confirmed via Exchange Online ($(fmtNum $mcInfo.exoSharedCount))." }
-                    else { "Shared mailboxes are an <b>estimate</b> from license data (unlicensed accounts that are disabled or have the 50 GB shared-mailbox limit, plus mailboxes with no matching user account); run with -DetailedSizing to confirm via Exchange Online." }
-        $body += "<div class=""pr-note"">$licNote</div>"
-
-        $licensedRows = @($Mailboxes | Where-Object { $_.MailboxClass -eq 'Licensed' })
-        if ($licensedRows.Count -gt 0) {
-            $familyOf = @{ 'E7'='Enterprise';'E5'='Enterprise';'E3'='Enterprise';'E1'='Enterprise';'F3'='Frontline';'F1'='Frontline';'G5'='Government';'G3'='Government';'G1'='Government';'A5'='Education';'A3'='Education';'A1'='Education';'Business Premium'='Business';'Business Standard'='Business';'Business Basic'='Business';'Exchange Online (Plan 2)'='Exchange only';'Exchange Online (Plan 1)'='Exchange only';'Exchange Online Essentials'='Exchange only';'Exchange Online Kiosk'='Exchange only';'Other (unrecognized)'='Other' }
-            $planOrder = @('E7','E5','E3','E1','F3','F1','G5','G3','G1','A5','A3','A1','Business Premium','Business Standard','Business Basic','Exchange Online (Plan 2)','Exchange Online (Plan 1)','Exchange Online Essentials','Exchange Online Kiosk','Other (unrecognized)')
-            $byPlan = $licensedRows | Group-Object { if ($_.LicensePlan) { $_.LicensePlan } else { 'Other (unrecognized)' } }
-            $planBody = ''
-            foreach ($pl in $planOrder) {
-                $g = $byPlan | Where-Object { $_.Name -eq $pl }
-                if ($g) {
-                    $fam = $familyOf[$pl]
-                    $planBody += "<tr><td>$fam</td><td>$pl</td><td class=""num"">$(fmtNum $g.Count)</td><td class=""num"">$(fmtGB (Get-FieldSum $g.Group 'StorageBytes'))</td><td class=""num"">$([math]::Round(100.0 * $g.Count / $licensedRows.Count, 1))%</td></tr>"
-                }
-            }
-            $archiveAddonCount = @($licensedRows | Where-Object { $_.HasArchiveAddon }).Count
-            $body += '<div class="pr-section-title" style="font-size:1rem">Licensed users by plan</div>'
-            $body += '<table class="pr-table"><thead><tr><th>Family</th><th>Plan</th><th class="num">Users</th><th class="num">Mailbox storage (GB)</th><th class="num">% of licensed</th></tr></thead><tbody>' + $planBody +
-                "<tr class=""total-row""><td colspan=""2"">Total licensed users</td><td class=""num"">$(fmtNum $licensedRows.Count)</td><td class=""num"">$(fmtGB (Get-FieldSum $licensedRows 'StorageBytes'))</td><td class=""num"">100%</td></tr></tbody></table>"
-            $body += "<div class=""pr-note"">Each licensed user is counted once, under their highest plan. Plan names come from a built-in table of Microsoft license SKU ids; anything else is listed as 'Other (unrecognized)'. Exchange Online Archiving add-on (standalone SKU): $(fmtNum $archiveAddonCount) user(s).</div>"
-        }
-    } else {
-        $body += '<div class="pr-note">Licensed vs. shared mailboxes <b>could not be classified from license data</b> for this run (user profile enrichment failed or returned nothing). The split above relies on the Exchange Recipient Type field, which the Microsoft usage report no longer reliably returns, so Shared Mailboxes may be understated and no unlicensed mailboxes were excluded.</div>'
-    }
-
-    $odStorage = Get-FieldSum $OneDrive 'StorageBytes'
-    $odFiles = Get-FieldSum $OneDrive 'FileCount'
-    $spStorage = Get-FieldSum $SharePoint 'StorageBytes'
-    $spFiles = Get-FieldSum $SharePoint 'FileCount'
-
-    $body += '<table class="pr-table"><tbody>' +
-        "<tr><td>OneDrive accounts</td><td class=""num"">$(fmtNum $OneDrive.Count)</td></tr>" +
-        "<tr><td>OneDrive storage (GB)</td><td class=""num"">$(fmtGB $odStorage)</td></tr>" +
-        "<tr><td>OneDrive files</td><td class=""num"">$(fmtNum $odFiles)</td></tr>" +
-        "<tr><td>SharePoint sites</td><td class=""num"">$(fmtNum $SharePoint.Count)</td></tr>" +
-        "<tr><td>SharePoint storage (GB)</td><td class=""num"">$(fmtGB $spStorage)</td></tr>" +
-        "<tr><td>SharePoint files</td><td class=""num"">$(fmtNum $spFiles)</td></tr>" +
-        '</tbody></table>'
-
-    $totalStorageAll = $totalStorageForAvg + $odStorage + $spStorage
-    $totalItemsFiles = $exTotalItems + $odFiles + $spFiles
-    $licenseEstimate = if ($classKnown) { [math]::Max($userMb.Count, $OneDrive.Count) } else { [math]::Max([math]::Max($userMb.Count, $sharedMb.Count), $OneDrive.Count) }
-    $body += "<div class=""pr-note"">Discovery Summary - Total Users/Accounts: $(fmtNum $licenseEstimate), Total Storage: $(fmtGB $totalStorageAll) GB, Total Items &amp; Files: $(fmtNum $totalItemsFiles).</div>"
-
-    $body += '<div class="pr-page-break"></div>'
-    $body += '<div class="pr-section-title">Methodology (Brief)</div>'
-    $body += '<dl class="pr-glossary">' +
-        '<dt>Tiers</dt><dd>All four workloads ranked by composite score (weighted activity/size metrics) and split into recovery-priority tiers - Critical Group 1 recovers first, then 2, then 3. Group 4 has minimal activity in the period and is recovered via bulk Mass Recovery, not on the critical path.</dd>' +
-        "<dt>ABR recovery time</dt><dd>ABR (Autonomous Business Recovery) recovers each object's RECENT/ACTIVE data first, estimated from real telemetry already collected. Mass Recovery continues afterward to fully restore the remaining (older) data, and is also the baseline figure for a fully undifferentiated restore with no prioritization.</dd>" +
-        '<dt>Downtime cost</dt><dd>Cumulative wall-clock hours to reach a milestone, multiplied by the $/hour set via -DowntimeCostPerHour. Industry research from IDC, ITIC, CloudSecureTech, and others puts downtime cost at over $5,000 per minute ($300K per hour) on average, reaching $1M per hour or more for Fortune 1000 companies.</dd>' +
-        '</dl>'
-
-    $body += "<div class=""pr-footer"">Recovery window: $RecoveryWindowDays days &middot; SP/OD throughput tier: $($RecoveryModel.Meta.SPODTierBucket) &middot; Downtime cost: $(if ($DowntimeCostPerHour -gt 0) { (fmtMoney $DowntimeCostPerHour) + '/hour' } else { 'not set' }). This is an aggregate-only summary - no individual identities, totals only. For row-level detail, live customization, and manual tier overrides, see the Interactive report from this same run.</div>"
-
-    $summaryTemplate = @'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>__TITLE__</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-<style>
-__CSS__
-body { padding: 0 0 3rem; }
-.pr-wrap { max-width: 900px; margin: 2rem auto 0; padding: 2rem 2.5rem; background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-.pr-print-btn { position: fixed; top: 14px; right: 18px; background: var(--blue); color: #fff; border: none; border-radius: 6px; padding: .5rem 1rem; font-weight: 700; font-size: .82rem; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
-@media print { .pr-print-btn { display: none; } }
-</style>
-</head>
-<body>
-<div class="rainbow-bar"></div>
-<button class="pr-print-btn" onclick="window.print()">Print / Save as PDF</button>
-<div class="pr-wrap">
-__BODY__
-</div>
-</body>
-</html>
-'@
-
-    $pageHtml = $summaryTemplate.
-        Replace('__TITLE__', (ConvertTo-SafeHtml "Recovery Assessment - M365 Summary - $CustomerLabel")).
-        Replace('__CSS__', $script:ReportCss).
-        Replace('__BODY__', $body)
-
-    Set-Content -Path $OutFile -Value $pageHtml -Encoding UTF8
-    return $OutFile
+    $tierAgg   = Get-ReportTierAgg      -Mailboxes $Mailboxes -OneDrive $OneDrive -SharePoint $SharePoint -Teams $Teams
+    $totals    = Get-ReportTenantTotals -Mailboxes $Mailboxes -OneDrive $OneDrive -SharePoint $SharePoint -Teams $Teams
+    $sizingAgg = Get-ReportSizingAgg    -Mailboxes $Mailboxes -OneDrive $OneDrive -SharePoint $SharePoint
+    $g1Profile = Get-ReportGroup1Profile -Mailboxes $Mailboxes -OneDrive $OneDrive
+    $splat = @{} + $CommonParams
+    $splat['Mailboxes']     = @()
+    $splat['OneDrive']      = @()
+    $splat['SharePoint']    = @()
+    $splat['Teams']         = @()
+    $splat['OutFile']       = $OutFile
+    $splat['BuildMode']     = 'summary'
+    $splat['TenantTotals']  = $totals
+    $splat['TierAgg']       = $tierAgg
+    $splat['SizingAgg']     = $sizingAgg
+    $splat['Group1Profile'] = $g1Profile
+    # The Summary has no use for a prior-run comparison payload.
+    $splat['PriorRunData']  = $null
+    return (New-M365HtmlReport @splat)
 }
 
 #endregion
 
 #region ---------- Main ----------
 
-Write-Host "=== Recovery Assessment - M365 (v3.17.1) ===" -ForegroundColor Cyan
+Write-Host "=== Recovery Assessment - M365 (v2.0.0) ===" -ForegroundColor Cyan
 
-# NEW 2026-09-22: found via a real customer - a very large tenant
-# (~213,000 objects across all four workloads: 51,849 mailboxes, 47,761
-# OneDrive accounts, 32,386 Teams, and a SharePoint pull large enough that
-# its own row count was never reached) crashed with a raw
+# NEW 2026-09-22: found in field use from a customer - a very large tenant
+# (hundreds of thousands of objects across all four workloads) crashed with a raw
 # System.OutOfMemoryException partway through the raw-collection phase, with
 # no output files written at all - not even the per-workload CSVs, which
 # are the very first thing written once scoring starts. A 32-bit PowerShell
@@ -6956,12 +9387,16 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 # Always written, no side effects - the guided (not automated) Enterprise App path.
 Get-EnterpriseAppSetupGuideText | Set-Content -Path (Join-Path $OutputPath 'EnterpriseApp-Setup-Guide.md') -Encoding UTF8
 
+if ($Offline) { Test-OfflineInputs -Path $OfflinePath -Period $Period } else {
 Assert-GraphModules -DetailedSizing:$DetailedSizing
 Connect-Assessment -Groups:$Groups -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphTimeoutSeconds $GraphTimeoutSeconds
+}
 
 $groupsNote = if ($Groups) { " Entra ID group membership (Group.Read.All) is also being resolved for bulk group-based selection." } else { " -NoGroups was passed: Group.Read.All was NOT requested and the group filter/mass-reassign-by-group workflow will be unavailable this run." }
 $sizingNote = if ($DetailedSizing) { " -DetailedSizing is on: Archive Mailbox and Recoverable Items sizing will run last, via a separate Exchange Online connection." } else { "" }
-Write-Host "`nReports.Read.All/User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote$sizingNote" -ForegroundColor Magenta
+if (-not $Offline) {Write-Host "`nReports.Read.All/User.Read.All/Sites.Read.All requested; enrichment, title-weight scoring, mailbox-type heuristic, and exact Team-site dedupe are active.$groupsNote$sizingNote" -ForegroundColor Magenta}
+
+if ($CriticalGroupCount -gt 3) { Write-Host ("Criticality groups: $CriticalGroupCount (+1 low-activity group). The interactive report applies this live; the per-workload CSVs and the Summary report keep the 3-group baseline.") -ForegroundColor Magenta }
 
 $overridesIndex = Import-Overrides -Path $OverridesFile
 
@@ -6983,7 +9418,7 @@ if ($CompareTo) {
 }
 
 Write-Host "`n--- User profile enrichment ---" -ForegroundColor Yellow
-$userEnrichment = Get-UserEnrichmentIndex -IncludeGroups:$Groups
+$userEnrichment = if ($Offline) { Write-Host 'Skipped in offline mode (no directory access).' -ForegroundColor Gray; @{} } else { Get-UserEnrichmentIndex -IncludeGroups:$Groups }
 
 $results = @{}
 
@@ -7052,7 +9487,7 @@ Write-Host ("{0,-24} {1,5} rows" -f 'OneDrive', $onedriveRaw.Count) -ForegroundC
 $teams = @(Get-TeamsCriticality -Period $Period -WorkDir $rawDir)
 Write-Host ("{0,-24} {1,5} rows" -f 'Teams', $teams.Count) -ForegroundColor Gray
 
-# NEW 2026-09-22: found via a real customer - this is the point in a very large tenant's
+# NEW 2026-09-22: found in field use from a customer - this is the point in a very large tenant's
 # run where a raw OutOfMemoryException was actually thrown (no output files
 # were written at all, meaning it died somewhere in raw collection/scoring,
 # before the SharePoint pull's own row count was ever printed). SharePoint
@@ -7070,7 +9505,7 @@ if ($rawObjectsSoFar -gt 80000) {
 [System.GC]::Collect()
 
 Write-Host "Resolving exact Team SharePoint sites..." -ForegroundColor Gray
-$exactTeamSiteUrls = Get-ExactTeamSiteUrls -Teams $teams -Groups:$Groups
+$exactTeamSiteUrls = if ($Offline) { $null } else { Get-ExactTeamSiteUrls -Teams $teams -Groups:$Groups }
 
 $sharepointResult = Get-SharePointCriticality -Period $Period -WorkDir $rawDir -IncludeGroupConnectedSites:$IncludeGroupConnectedSites -ExactTeamSiteKeys $exactTeamSiteUrls
 $sharepointRaw = @($sharepointResult.Sites)
@@ -7156,7 +9591,7 @@ $targetsMin = [double[]]@(($Group1TargetHours * 60.0), ($Group2TargetHours * 60.
 # the JS engine's assignBudgetTiers()), computed once here - before any
 # per-workload processing - so Mailboxes/OneDrive/SharePoint's tiering walk
 # and Build-RecoveryModel's console-summary figures use the exact same SP/OD
-# throughput tier and 0-7 day window scaling. See RECOVERY-MODEL-METHODOLOGY.md.
+# throughput tier and 0-7 day window scaling. See the Methodology tab.
 $tierWindowFactor = [math]::Max(0, [math]::Min(7, $RecoveryWindowDays)) / 7
 $tierSpodScale = [math]::Max($onedriveRaw.Count, $sharepointRaw.Count)
 $tierSpodTier = Resolve-RecoveryLicenseTier -Requested $RecoveryLicenseTier -ObjectScale $tierSpodScale
@@ -7172,7 +9607,7 @@ Write-Host ("Reason: {0}" -f $presetReason) -ForegroundColor Gray
 # Add-RecentDataEstimate, called first) - see Add-BudgetTier's header
 # comment. Teams has no independent recovery-time model to walk against, so
 # it keeps Add-Tier's original criticality-ranked equal-thirds split
-# (-TierSplit). See RECOVERY-MODEL-METHODOLOGY.md.
+# (-TierSplit). See the Methodology tab.
 # ---------------------------------------------------------------------------
 
 Write-Host "`n--- Mailboxes ---" -ForegroundColor Yellow
@@ -7291,29 +9726,44 @@ if (-not $SkipHtmlReport) {
     $resolvedCustomerLabel = if ($CustomerName) {
         $CustomerName
     } else {
-        $acct = (Get-MgContext).Account
+        $acct = (Get-SignedInAccount)
         if ($acct -and $acct.Contains('@')) { $acct.Split('@')[1] } else { 'Customer Tenant' }
     }
+    $commonReportParams = @{
+        CustomerLabel           = $resolvedCustomerLabel
+        Period                  = $Period
+        RunId                   = $runId
+        Groups                  = [bool]$Groups
+        MailboxWeights          = $MailboxWeights
+        OneDriveWeights         = $OneDriveWeights
+        SharePointWeights       = $SharePointWeights
+        TeamsWeights            = $TeamsWeights
+        TierSplit               = $TierSplit
+        TitleWeights            = $TitleWeights
+        TitleWeightContribution = $TitleWeightContribution
+        HubSiteKeywords         = $HubSiteKeywords
+        HubSiteBonus            = $HubSiteBonus
+        RecoveryWindowDays      = $RecoveryWindowDays
+        RecoveryLicenseTier     = $RecoveryLicenseTier
+        DowntimeCostPerHour     = $DowntimeCostPerHour
+        PriorRunData            = $priorRunData
+        Group1TargetHours       = $Group1TargetHours
+        Group2TargetHours       = $Group2TargetHours
+        Group3TargetHours       = $Group3TargetHours
+        RTOPresetResolved       = $resolvedPresetLabel
+        RTOPresetReason         = $presetReason
+        DetailedSizingRequested = [bool]$DetailedSizing
+        Sizing                  = $detailedSizingResult
+    }
     $htmlReportPath = New-M365HtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        -CustomerLabel $resolvedCustomerLabel -Period $Period -RunId $runId -Groups:$Groups `
-        -MailboxWeights $MailboxWeights -OneDriveWeights $OneDriveWeights -SharePointWeights $SharePointWeights -TeamsWeights $TeamsWeights `
-        -TierSplit $TierSplit -TitleWeights $TitleWeights -TitleWeightContribution $TitleWeightContribution -HubSiteKeywords $HubSiteKeywords -HubSiteBonus $HubSiteBonus `
-        -RecoveryWindowDays $RecoveryWindowDays -RecoveryLicenseTier $RecoveryLicenseTier -DowntimeCostPerHour $DowntimeCostPerHour -PriorRunData $priorRunData `
-        -Group1TargetHours $Group1TargetHours -Group2TargetHours $Group2TargetHours -Group3TargetHours $Group3TargetHours -RTOPresetResolved $resolvedPresetLabel -RTOPresetReason $presetReason `
-        -DetailedSizingRequested:$DetailedSizing -Sizing $detailedSizingResult `
+        @commonReportParams -BuildMode 'full' `
         -OutFile (Join-Path $OutputPath 'Interactive_CriticalityAssessment_Report.html')
     Write-Host "Interactive report        ->  $htmlReportPath" -ForegroundColor Gray
 
-    # NEW v3.11.0: small, static, aggregate-only companion report - no
-    # embedded per-object data, safe to email/forward without a
-    # multi-hundred-MB attachment. Always generated alongside the Interactive
-    # report; see New-M365SummaryHtmlReport's header comment.
+    # v2.0: aggregate-only companion (same engine, buildMode 'summary'): no per-object data, safe to
+    # email/forward. See New-M365SummaryHtmlReport's header comment.
     $summaryReportPath = New-M365SummaryHtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        -CustomerLabel $resolvedCustomerLabel -Period $Period -RecoveryModel $recoveryModel `
-        -DowntimeCostPerHour $DowntimeCostPerHour -RecoveryWindowDays $RecoveryWindowDays `
-        -Group1TargetHours $Group1TargetHours -Group2TargetHours $Group2TargetHours -Group3TargetHours $Group3TargetHours `
-        -RTOPresetResolved $resolvedPresetLabel -RTOPresetReason $presetReason `
-        -DetailedSizingRequested:$DetailedSizing -Sizing $detailedSizingResult `
+        -CommonParams $commonReportParams `
         -OutFile (Join-Path $OutputPath 'Summary_CriticalityAssessment_Report.html')
     Write-Host "Summary report             ->  $summaryReportPath" -ForegroundColor Gray
 
@@ -7333,13 +9783,13 @@ if (-not $SkipHtmlReport) {
 }
 
 $manifest = @"
-Recovery Assessment - M365 - Run Manifest (v3.17.1)
+Recovery Assessment - M365 - Run Manifest (v2.0.0)
 Run time (UTC):        $((Get-Date).ToUniversalTime())
 Usage report period:   $Period
 Tier split (Teams only): $($TierSplit -join ' / ')
-Graph scopes used:     $(if ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' })
+Graph scopes used:     $(if ($Offline) { 'None - OFFLINE run from exported admin center reports (reduced confidence)' } elseif ($Groups) { 'Reports.Read.All, User.Read.All, Sites.Read.All, Group.Read.All' } else { 'Reports.Read.All, User.Read.All, Sites.Read.All' })
 Detailed sizing:       $(if ($DetailedSizing) { 'Requested (Exchange Online - Archive/Recoverable Items sizing included)' } else { 'Not requested (Sizing tab shows Exchange/OneDrive/SharePoint totals + Archive count only)' })
-Signed in as:          $((Get-MgContext).Account)
+Signed in as:          $((Get-SignedInAccount))
 Overrides file used:   $(if ($OverridesFile) { $OverridesFile } else { '(none)' })
 Compared against:      $(if ($CompareTo) { $CompareTo } else { '(none)' })
 
@@ -7383,6 +9833,6 @@ Write-Host "Enterprise App setup guide: $(Join-Path $OutputPath 'EnterpriseApp-S
 
 $masterRows | Group-Object Workload, Tier | Sort-Object Name | Format-Table @{L='Workload / Tier';E={$_.Name}}, Count -AutoSize
 
-Disconnect-MgGraph | Out-Null
+if (-not $Offline) { Disconnect-MgGraph | Out-Null }
 
 #endregion

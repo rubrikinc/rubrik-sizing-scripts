@@ -2,6 +2,8 @@
 
 Identifies which mailboxes, OneDrive accounts, SharePoint sites, and Teams matter most to your business, groups them into recovery-priority tiers (Critical Group 1 recovers first, then 2, then 3), and estimates how long each tier takes to recover and what downtime would cost. A data-driven starting point for a recovery-sequencing conversation — not a replacement for what you already know about your own environment.
 
+> **v2.0**: one run produces the interactive report **and** a Summary report (aggregates only, safe to forward). New: Groups & Recovery Model tab (criticality and recovery merged), collapsed group and workload breakdowns, sortable tables, one storage unit (GB/TB toggle), Recovery Insights (outlier objects), hours saved and Group 1 downtime cost avoided, dark theme. Recovery-time constants are unchanged from 3.x.
+
 **Script file:** `Invoke-RecoveryAssessment-M365-Full.ps1`
 
 Looking for the redacted trade-show/demo build instead? It's distributed as a separate script/repo — contact your Rubrik team for it.
@@ -34,16 +36,23 @@ Getting an assembly-load error like `Could not load file or assembly 'Microsoft.
 .\Invoke-RecoveryAssessment-M365-Full.ps1
 ```
 
-Defaults: 90-day usage window, 7-day recovery window, Auto-selected RTO preset, $10,000/hour downtime cost (pass `-DowntimeCostPerHour` to override), output to a timestamped folder (`.\M365CriticalityAssessment_yyyyMMdd_HHmmss\`) in the current directory. That single command already covers full tiering, recovery time, cost modeling, enrichment, and Entra ID group data for every workload — everything below is optional.
+Defaults: 180-day usage window (`-Period D180`), 7-day recovery window, Auto-selected RTO preset, downtime cost per hour not set (enter it in the report, or pass `-DowntimeCostPerHour`, to see cost avoided), output to a timestamped folder (`.\M365CriticalityAssessment_yyyyMMdd_HHmmss\`) in the current directory. That single command already covers full tiering, recovery time, cost modeling, enrichment, and Entra ID group data for every workload — everything below is optional.
 
 ## Command-Line Switches
+
+**No tenant access?** `-OfflinePath <folder>` runs from usage reports exported from the admin center - see [Running offline](#running-offline-no-tenant-access) at the bottom of this file.
 
 Every switch below can be combined with any other. All of them are optional — the plain `.\Invoke-RecoveryAssessment-M365-Full.ps1` command above already runs the full assessment.
 
 ```powershell
+.\Invoke-RecoveryAssessment-M365-Full.ps1 -CriticalGroupCount 10
+```
+Number of criticality groups the interactive report opens with (3-12, default 3). The **low-activity group is always one more**: 10 criticality groups gives 11 groups, and Group 11 is the low-activity group (no ABR priority, recovered by Mass Recovery). Above 3 groups the Recovery Window (RTO) targets default to **Enterprise Plus**, sized to the tenant: Group 1 at Day 1 (24 hr or less on a small tenant), the last group at the tenant's whole-tenant ABR time, and the groups in between spaced so each is a bit larger than the one before. Every target stays editable. You can also change the number live in the report under **Groups & Recovery Model -> Scoring & Recovery inputs -> Recovery modeling inputs -> Criticality groups**. The per-workload CSVs and the Summary report keep the 3-group baseline; the interactive report applies the chosen count (and Export overrides carries group names such as "Critical Group 7").
+
+```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -NoGroups
 ```
-Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — via its own separate bulk directory pull alongside the one the base assessment already does (Microsoft Graph only allows one property expanded per user query, so the two can't be combined) — and surfaces a "Filter to Entra ID group" bulk-selection tool on the Criticality Groups tab, so you can filter to a specific department/team and mass-reassign everyone in it to a tier in one motion. This requests one additional Graph scope, `Group.Read.All`, on every run, plus that extra directory pull. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope), or to cut collection time/memory on a very large tenant — it drops the extra scope request, the extra pull, and the group filter/column disappear for that run.
+Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — via its own separate bulk directory pull alongside the one the base assessment already does (Microsoft Graph only allows one property expanded per user query, so the two can't be combined) — and surfaces a "Filter to Entra ID group" bulk-selection tool on the Groups & Recovery Model tab, so you can filter to a specific department/team and mass-reassign everyone in it to a tier in one motion. This requests one additional Graph scope, `Group.Read.All`, on every run, plus that extra directory pull. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope), or to cut collection time/memory on a very large tenant — it drops the extra scope request, the extra pull, and the group filter/column disappear for that run.
 
 ```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -DetailedSizing
@@ -53,7 +62,7 @@ Adds Archive Mailbox storage/item counts and Recoverable Items folder storage/it
 ```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -DowntimeCostPerHour 25000
 ```
-Sets the $/hour used for every downtime-cost figure in the report. Defaults to $10,000/hour; always override with the customer's real number when known.
+Sets the $/hour used for every downtime-cost figure in the report. Defaults to 0 (hours saved only; the report prompts for a rate); override with the customer's real number when known.
 
 ```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -OverridesFile .\overrides.json
@@ -121,7 +130,7 @@ Manual overrides: every row's tier is a dropdown; changing it always wins over t
 
 `Export Criticality Groups (CSV)` downloads one CSV listing every object across all four workloads with its final tier — reading the live, on-screen state at the moment you click it, so any manual overrides or mass-reassignments you've made are included, not just what the script originally computed. Meant as a hand-off file for downstream automation (e.g. a script that calls RSC to create or update criticality groups from this list).
 
-**Large tenants:** the Criticality Groups tab's tables render only the top 500 rows per section by score (highest-priority objects first), not every object — a tenant with tens of thousands of objects per workload would otherwise hang the browser building that many table rows at once. A "Show all N rows" button appears whenever a table is capped, for anyone who needs the full list on screen. Search and filters still run against every object regardless of the cap, so searching for one specific person or site always finds it.
+**Large tenants:** the Groups & Recovery Model tab's tables render only the top 500 rows per section by score (highest-priority objects first), not every object — a tenant with tens of thousands of objects per workload would otherwise hang the browser building that many table rows at once. A "Show all N rows" button appears whenever a table is capped, for anyone who needs the full list on screen. Search and filters still run against every object regardless of the cap, so searching for one specific person or site always finds it.
 
 ## The Summary Report
 
@@ -216,3 +225,78 @@ Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
 ```
 
 Open a brand-new PowerShell window before running the assessment again.
+
+
+---
+
+## Running offline (no tenant access)
+
+Use this when your security team will not approve running the script against your tenant. You export usage reports from the Microsoft 365 admin center into a folder, then run the script against that folder. **No sign-in, no Graph or Exchange connection, no app consent.** The script only reads the CSV files you give it.
+
+Offline runs are **reduced confidence** (see [What offline mode cannot show](#what-offline-mode-cannot-show)).
+
+### Step 1 - Export the reports
+
+**Who:** anyone with the **Reports Reader** role (or Global Reader / Global Admin).
+**Where:** [admin.microsoft.com](https://admin.microsoft.com) -> **Reports -> Usage**. Pick the report, set the period (top right), click **Export** (top right of the table).
+
+> **Important - concealed names must be turned off first.** Many tenants hide real user, group and site names in usage reports (exports show 32-character hashes such as `B8CD4590FAA61BD1EA95298F11203093` instead of names, and the admin center shows *"Information is concealed for privacy"*). With hashed names the offline assessment cannot match mailboxes to licenses, cannot show real names in the report, and Teams rows lose their IDs. **Turn the setting off before exporting, then turn it back on afterward.**
+>
+> 1. Sign in to [admin.microsoft.com](https://admin.microsoft.com) as a **Global Administrator** (Reports Reader cannot change this setting).
+> 2. Go to **Settings -> Org settings**, open the **Services** tab, and select **Reports**.
+> 3. **Clear** the checkbox *"Display concealed user, group, and site names in all reports"* and click **Save**.
+> 4. Export all the reports below. Open one file and confirm it shows real names (for example `user@company.com`), not hashes. If it still shows hashes, wait a few minutes and re-export.
+> 5. When all exports are done, return to the same page, **re-check** the box and **Save** to restore your privacy setting.
+>
+> The change is recorded in the audit log and your privacy or security team may need to approve it. If it cannot be turned off, the offline assessment still runs, but mailbox license classification is unavailable, names in the report are hashes, and results are lower confidence still.
+
+Create one empty folder, for example `C:\RubrikAssessment\input\`, and save each export into it **with exactly the file name shown**:
+
+| # | Where to find it (Reports -> Usage ->) | Period | Save as |
+|---|---|---|---|
+| 1 | **Email activity** | 180 days | `email_activity.csv` |
+| 2 | **Email activity** | 7 days | `email_activity_7d.csv` |
+| 3 | **Mailbox usage** | 180 days | `mailbox_usage.csv` |
+| 4 | **OneDrive** -> *Activity* tab | 180 days | `onedrive_activity.csv` |
+| 5 | **OneDrive** -> *Activity* tab | 7 days | `onedrive_activity_7d.csv` |
+| 6 | **OneDrive** -> *Usage* tab | 180 days | `onedrive_usage.csv` |
+| 7 | **SharePoint** -> *Site usage* tab | 180 days | `sharepoint_usage.csv` |
+| 8 | **SharePoint** -> *Site usage* tab | 7 days | `sharepoint_usage_7d.csv` |
+| 9 | **Microsoft Teams** -> *Team usage* tab (optional) | 180 days | `teams_team_activity.csv` |
+
+Notes:
+
+- Files 1-8 are required. File 9 is optional; without it Teams is reported as not modeled.
+- Use the same long period for every non-7-day file. If you pick a period other than 180 days, pass the matching `-Period` (`D30`, `D90`) when you run the script. The script checks each file's *Report Period* column and warns on a mismatch. It also rejects any file missing its key column (a wrong export).
+- The **7-day files drive the recent-data (ABR) recovery estimate** and cannot be skipped or substituted.
+- For Teams, open the **Team usage** tab (not *User activity*) and use the **Export** link at the **bottom-left of the team table** (it shows an item count, e.g. "13 items"). Do not use the Export links above the charts; they export daily totals (for example `TeamsTeamCounts...csv`, columns `PublicTeams, PrivateTeams, ...`), not one row per team. The script rejects a file without a `Team Id` column and runs without Teams.
+- Do not open and re-save the CSVs in Excel (it can change encoding and dates). Save them straight from the browser download.
+
+**Sending to Rubrik:** zip the folder. The files contain user principal names and object sizes/activity counts, no content. Use your normal secure transfer.
+
+### Step 2 - Run the script offline
+
+On any Windows machine with PowerShell 5.1 or later. The Microsoft Graph and Exchange modules are **not** needed.
+
+```powershell
+.\Invoke-RecoveryAssessment-M365-Full.ps1 -OfflinePath C:\RubrikAssessment\input -Period D180
+```
+
+(For the Preview script, use `Invoke-RecoveryAssessment-M365-Preview.ps1` with the same switch.)
+
+What happens:
+
+1. The script lists each expected file as found / missing, with its size.
+2. If a required file is missing, it stops and names it. Missing optional files are noted and the run continues.
+3. It builds the same HTML reports and CSVs as a live run. Open `Interactive_CriticalityAssessment_Report.html` as usual.
+
+### What offline mode cannot show
+
+The report carries an **"Offline run - reduced confidence"** banner and a row in *Data quality & coverage* listing what was skipped:
+
+- **User profile enrichment** (job title, department, manager, Entra groups): title-weight scoring and group/department filters are empty.
+- **License-based mailbox classification:** unlicensed and shared mailboxes cannot be told apart from licensed ones, so mailbox counts may be overstated.
+- **Team-to-site mapping:** Team sites are matched by heuristic only, so Teams/SharePoint overlap is approximate.
+- **Archive mailbox and Recoverable Items sizes** (`-DetailedSizing` is ignored offline): Exchange sizing is understated by the Recoverable Items amount.
+
+Do not compare an offline report directly with a live run on the same tenant. When the customer's security team later approves a live run, re-run without `-OfflinePath`.
