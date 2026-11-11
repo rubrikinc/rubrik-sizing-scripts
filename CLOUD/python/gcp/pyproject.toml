@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rubrik-discovery-gcp"
+version = "0.1.1"
+description = "Rubrik GCP environment discovery tool"
+requires-python = ">=3.10"
+dependencies = [
+    "google-cloud-asset>=3.20.0",
+    "google-cloud-compute>=1.14.0",
+    "google-cloud-storage>=2.14.0",
+    "google-cloud-resource-manager>=1.12.0",
+    "google-cloud-billing>=1.12.0",
+    "google-cloud-monitoring>=2.19.0",
+    "google-cloud-backupdr>=0.2.0",
+    "google-cloud-spanner>=3.40.0",
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.27.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "openpyxl>=3.1.0",
+    "pyyaml>=6.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+databases = [
+    "google-cloud-bigtable>=2.23.0",
+    "google-cloud-alloydb>=0.4.0",
+]
+portal = ["flask>=3.0.0"]
+security = ["google-cloud-securitycenter>=1.27.0"]
+
+[project.scripts]
+rubrik-gcp-discovery = "main:main"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "auth",
+    "config",
+    "logging_setup",
+    "streaming_writer",
+    "csv_export",
+    "anonymize",
+    "preflight",
+    "preflight_core",
+    "runlog",
+    "runlog_core",
+    "manifest_core",
+    "totals",
+]
+
+[tool.setuptools.packages.find]
+where   = ["."]
+# Only the collectors/ and models/ packages are shipped; the exclude list keeps
+# tests and any other top-level package out of the wheel.
+include = ["collectors*", "models*"]
+exclude = ["tests*", "output*", "analysis*", "pricing*"]

@@ -1,0 +1,24 @@
+# The packages this tool needs, with the versions it supports. Edit this file, then run
+# ../update_requirements.sh to regenerate requirements.txt, which pins every package to an exact,
+# tested version and is what `pip install -r requirements.txt` installs.
+
+google-cloud-asset>=3.20.0
+google-cloud-compute>=1.14.0
+google-cloud-storage>=2.14.0
+google-cloud-resource-manager>=1.12.0
+google-cloud-billing>=1.12.0
+google-cloud-monitoring>=2.19.0
+google-cloud-backupdr>=0.2.0
+google-api-python-client>=2.100.0
+google-cloud-spanner>=3.40.0
+google-cloud-bigtable>=2.23.0
+google-cloud-alloydb>=0.4.0
+google-cloud-filestore>=1.8.0
+google-cloud-securitycenter>=1.27.0
+google-auth>=2.27.0
+rich>=13.0.0
+pydantic>=2.0.0
+openpyxl>=3.1.0
+pyyaml>=6.0
+requests>=2.31.0
+flask>=3.0.0

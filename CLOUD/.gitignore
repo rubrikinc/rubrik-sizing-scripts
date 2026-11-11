@@ -1,3 +1,6 @@
 *.log
 *.zip
 *.txt
+# The Python tools install from requirements*.txt; keep them despite *.txt above.
+!python/**/requirements*.txt
+!python/requirements*.txt

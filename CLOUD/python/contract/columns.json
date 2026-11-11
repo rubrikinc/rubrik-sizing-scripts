@@ -1,0 +1,4409 @@
+{
+  "generated_from": {
+    "Get-AWSSizingInfo.ps1": "32f1221be74ff63dc115d874bf61b2b67c580ce476e59e1a241842a298b2be05",
+    "Get-AzureSizingInfo.ps1": "b1b36060f71056094595151814f88414fa7cd374527beeffc5788357436320a3",
+    "Get-GCPSizingInfo.ps1": "4897120d990e1edf56c5dd1f72961a3ba68b0cd85cc5ddfccfeb3afef0aaf222"
+  },
+  "clouds": {
+    "aws": [
+      {
+        "export_var": "$outputEc2Instance",
+        "prefix": "aws_ec2_instance_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6209,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "InstanceId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Volumes",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "Platform",
+            "optional": false
+          },
+          {
+            "name": "ProductCode",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEC2Inventory",
+            "var": "$ec2obj",
+            "line": 1248
+          }
+        ]
+      },
+      {
+        "export_var": "$outputEc2AttachedVolume",
+        "prefix": "aws_ec2_attached_volume_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6213,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "VolumeId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "InstanceId",
+            "optional": false
+          },
+          {
+            "name": "InstanceName",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "DeviceName",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "AvailabilityZone",
+            "optional": false
+          },
+          {
+            "name": "VolumeType",
+            "optional": false
+          },
+          {
+            "name": "State",
+            "optional": false
+          },
+          {
+            "name": "Iops",
+            "optional": false
+          },
+          {
+            "name": "Throughput",
+            "optional": false
+          },
+          {
+            "name": "Encrypted",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEC2Inventory",
+            "var": "$attachedVolObj",
+            "line": 1206
+          }
+        ]
+      },
+      {
+        "export_var": "$outputEc2UnattachedVolume",
+        "prefix": "aws_ec2_unattached_volume_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6217,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "VolumeId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "VolumeType",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEC2Inventory",
+            "var": "$ec2UnVolObj",
+            "line": 1299
+          }
+        ]
+      },
+      {
+        "export_var": "$outputRDS",
+        "prefix": "aws_rds_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6221,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "DBName",
+            "optional": false
+          },
+          {
+            "name": "DBInstanceIdentifier",
+            "optional": false
+          },
+          {
+            "name": "DBClusterIdentifier",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "Engine",
+            "optional": false
+          },
+          {
+            "name": "EngineVersion",
+            "optional": false
+          },
+          {
+            "name": "DBInstanceStatus",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "BackupRetentionPeriod",
+            "optional": false
+          },
+          {
+            "name": "PreferredBackupWindow",
+            "optional": false
+          },
+          {
+            "name": "StorageType",
+            "optional": false
+          },
+          {
+            "name": "EngineMode",
+            "optional": false
+          },
+          {
+            "name": "InstanceCount",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSRDSInventory",
+            "var": "$rdsObj",
+            "line": 1371
+          },
+          {
+            "fn": "Get-AWSRDSInventory",
+            "var": "$clusterObj",
+            "line": 1450
+          }
+        ]
+      },
+      {
+        "export_var": "$outputVPC",
+        "prefix": "aws_vpc_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6225,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "VpcId",
+            "optional": false
+          },
+          {
+            "name": "OwnerId",
+            "optional": false
+          },
+          {
+            "name": "CidrBlock",
+            "optional": false
+          },
+          {
+            "name": "State",
+            "optional": false
+          },
+          {
+            "name": "IsDefault",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSVPCInventory",
+            "var": "$vpcObj",
+            "line": 1672
+          }
+        ]
+      },
+      {
+        "export_var": "$outputLB",
+        "prefix": "aws_lb_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6229,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "LoadBalancerName",
+            "optional": false
+          },
+          {
+            "name": "Type",
+            "optional": false
+          },
+          {
+            "name": "Scheme",
+            "optional": false
+          },
+          {
+            "name": "VpcId",
+            "optional": false
+          },
+          {
+            "name": "DNSName",
+            "optional": false
+          },
+          {
+            "name": "Arn",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSLoadBalancerInventory",
+            "var": "$lbObj",
+            "line": 1709
+          },
+          {
+            "fn": "Get-AWSLoadBalancerInventory",
+            "var": "$lbObj",
+            "line": 1745
+          }
+        ]
+      },
+      {
+        "export_var": "$outputRoute53",
+        "prefix": "aws_route53_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6232,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "HostedZoneId",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "PrivateZone",
+            "optional": false
+          },
+          {
+            "name": "ResourceRecordSetCount",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSRoute53Inventory",
+            "var": "",
+            "line": 1799
+          }
+        ]
+      },
+      {
+        "export_var": "$outputIAM",
+        "prefix": "aws_iam_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6235,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Users",
+            "optional": false
+          },
+          {
+            "name": "Roles",
+            "optional": false
+          },
+          {
+            "name": "CustomerManagedPolicies",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSIAMInventory",
+            "var": "",
+            "line": 1865
+          }
+        ]
+      },
+      {
+        "export_var": "$outputS3",
+        "prefix": "aws_s3_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6238,
+        "status": "partial",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "BucketName",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "expr:($($bytesStorage.Name) + \"_SizeGB\")",
+          "expr:($($bytesStorage.Name) + \"_SizeTB\")",
+          "expr:($($bytesStorage.Name) + \"_SizeGiB\")",
+          "expr:($($bytesStorage.Name) + \"_SizeTiB\")",
+          "expr:($($bytesStorage.Name) + \"_SizeBytes\")",
+          "expr:(\"NumberOfObjects-\" + $($numObjStorage.Name))",
+          "expr:(\"CurrentVersion_\" + $($cvStorage.Name) + \"_SizeBytes\")",
+          "expr:(\"CurrentVersion_\" + $($cvStorage.Name) + \"_SizeGB\")",
+          "expr:(\"CurrentVersion_\" + $($cvStorage.Name) + \"_SizeTB\")",
+          "expr:(\"CurrentVersion_\" + $($cvStorage.Name) + \"_SizeGiB\")",
+          "expr:(\"CurrentVersion_\" + $($cvStorage.Name) + \"_SizeTiB\")",
+          "expr:(\"CurrentVersionObjectCount_\" + $($cvObjStorage.Name))",
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSS3Inventory",
+            "var": "$s3obj",
+            "line": 1073
+          }
+        ],
+        "notes": "Final column order is computed at run time from the union of row properties (Select-Object $s3PropsOrdered), and per-storage-class columns depend on the account's buckets. HasIcebergTable is added in the script body. Needs the live parity run (B3) to pin exactly."
+      },
+      {
+        "export_var": "$outputEFS",
+        "prefix": "aws_efs_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6242,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "FileSystemId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "FileSystemProtection",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "SizeInBytes",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "NumberOfMountTargets",
+            "optional": false
+          },
+          {
+            "name": "OwnerId",
+            "optional": false
+          },
+          {
+            "name": "PerformanceMode",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughputInMibps",
+            "optional": false
+          },
+          {
+            "name": "DBInstanceIdentifier",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ThroughputMode",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEFSInventory",
+            "var": "$efsObj",
+            "line": 1515
+          }
+        ]
+      },
+      {
+        "export_var": "$outputFSXfilesystems",
+        "prefix": "aws_fsx_filesystem_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6246,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "FileSystemId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "FileSystemDNSName",
+            "optional": false
+          },
+          {
+            "name": "FileSystemType",
+            "optional": false
+          },
+          {
+            "name": "FileSystemTypeVersion",
+            "optional": false
+          },
+          {
+            "name": "FileSystemOwnerId",
+            "optional": false
+          },
+          {
+            "name": "FileSystemStorageType",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "OnTapType",
+            "optional": false
+          },
+          {
+            "name": "WindowsType",
+            "optional": false
+          },
+          {
+            "name": "LustreType",
+            "optional": false
+          },
+          {
+            "name": "OpenZFSType",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedBytes",
+            "optional": true
+          },
+          {
+            "name": "StorageUsedGiB",
+            "optional": true
+          },
+          {
+            "name": "StorageUsedTiB",
+            "optional": true
+          },
+          {
+            "name": "StorageUsedGB",
+            "optional": true
+          },
+          {
+            "name": "StorageUsedTB",
+            "optional": true
+          },
+          {
+            "name": "StorageCapacityUtilizationPercentage",
+            "optional": true
+          },
+          {
+            "name": "PhysicalDiskUsageBytes",
+            "optional": true
+          },
+          {
+            "name": "PhysicalDiskUsageGiB",
+            "optional": true
+          },
+          {
+            "name": "PhysicalDiskUsageTiB",
+            "optional": true
+          },
+          {
+            "name": "PhysicalDiskUsageGB",
+            "optional": true
+          },
+          {
+            "name": "PhysicalDiskUsageTB",
+            "optional": true
+          },
+          {
+            "name": "LogicalDiskUsageBytes",
+            "optional": true
+          },
+          {
+            "name": "LogicalDiskUsageGiB",
+            "optional": true
+          },
+          {
+            "name": "LogicalDiskUsageTiB",
+            "optional": true
+          },
+          {
+            "name": "LogicalDiskUsageGB",
+            "optional": true
+          },
+          {
+            "name": "LogicalDiskUsageTB",
+            "optional": true
+          },
+          {
+            "name": "FreeDataStorageCapacityBytes",
+            "optional": true
+          },
+          {
+            "name": "FreeDataStorageCapacityGiB",
+            "optional": true
+          },
+          {
+            "name": "FreeDataStorageCapacityTiB",
+            "optional": true
+          },
+          {
+            "name": "FreeDataStorageCapacityGB",
+            "optional": true
+          },
+          {
+            "name": "FreeDataStorageCapacityTB",
+            "optional": true
+          },
+          {
+            "name": "UsedStorageCapacityBytes",
+            "optional": true
+          },
+          {
+            "name": "UsedStorageCapacityGiB",
+            "optional": true
+          },
+          {
+            "name": "UsedStorageCapacityTiB",
+            "optional": true
+          },
+          {
+            "name": "UsedStorageCapacityGB",
+            "optional": true
+          },
+          {
+            "name": "UsedStorageCapacityTB",
+            "optional": true
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSFSxInventory",
+            "var": "$fsxObj",
+            "line": 1901
+          }
+        ]
+      },
+      {
+        "export_var": "$outputFSX",
+        "prefix": "aws_fsx_volume_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6250,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "FileSystemId",
+            "optional": false
+          },
+          {
+            "name": "FileSystemDNSName",
+            "optional": false
+          },
+          {
+            "name": "FileSystemType",
+            "optional": false
+          },
+          {
+            "name": "FileSystemTypeVersion",
+            "optional": false
+          },
+          {
+            "name": "FileSystemOwnerId",
+            "optional": false
+          },
+          {
+            "name": "FileSystemStorageType",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "VolumeId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "VolumeType",
+            "optional": false
+          },
+          {
+            "name": "LifeCycle",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedBytes",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedGiB",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedTiB",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedGB",
+            "optional": false
+          },
+          {
+            "name": "StorageUsedTB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "StorageCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSFSxInventory",
+            "var": "$fsxObj",
+            "line": 2112
+          }
+        ]
+      },
+      {
+        "export_var": "$outputDDB",
+        "prefix": "aws_DynamoDB_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6253,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "TableName",
+            "optional": false
+          },
+          {
+            "name": "TableId",
+            "optional": false
+          },
+          {
+            "name": "TableArn",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "TableSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "TableStatus",
+            "optional": false
+          },
+          {
+            "name": "TableSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "TableSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "TableSizeGB",
+            "optional": false
+          },
+          {
+            "name": "TableSizeTB",
+            "optional": false
+          },
+          {
+            "name": "ItemCount",
+            "optional": false
+          },
+          {
+            "name": "DeletionProtectionEnabled",
+            "optional": false
+          },
+          {
+            "name": "GlobalTableVersion",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughputLastDecreaseDateTime",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughputLastIncreaseDateTime",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughput.NumberOfDecreasesToday",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughputReadCapacityUnits",
+            "optional": false
+          },
+          {
+            "name": "ProvisionedThroughputWriteCapacityUnits",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          },
+          {
+            "name": "PITREnabled",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSDynamoDBInventory",
+            "var": "$ddbObj",
+            "line": 2186
+          }
+        ]
+      },
+      {
+        "export_var": "$outputS3Tables",
+        "prefix": "aws_s3_tables_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6257,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "CatalogType",
+            "optional": false
+          },
+          {
+            "name": "DatabaseName",
+            "optional": false
+          },
+          {
+            "name": "TableName",
+            "optional": false
+          },
+          {
+            "name": "TableBucketName",
+            "optional": false
+          },
+          {
+            "name": "TableBucketArn",
+            "optional": false
+          },
+          {
+            "name": "Namespace",
+            "optional": false
+          },
+          {
+            "name": "TableArn",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "WarehouseLocation",
+            "optional": false
+          },
+          {
+            "name": "MetadataLocation",
+            "optional": false
+          },
+          {
+            "name": "TableType",
+            "optional": false
+          },
+          {
+            "name": "CreatedAt",
+            "optional": false
+          },
+          {
+            "name": "ModifiedAt",
+            "optional": false
+          },
+          {
+            "name": "FormatVersion",
+            "optional": false
+          },
+          {
+            "name": "StorageClass",
+            "optional": false
+          },
+          {
+            "name": "MetadataFileStorageClass",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeGB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeTB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileCount",
+            "optional": false
+          },
+          {
+            "name": "DataFileCount",
+            "optional": false
+          },
+          {
+            "name": "TotalDeleteFileCount",
+            "optional": false
+          },
+          {
+            "name": "ManifestCount",
+            "optional": false
+          },
+          {
+            "name": "TargetManifestSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "ManifestBytesEstimate",
+            "optional": false
+          },
+          {
+            "name": "CompactionEnabled",
+            "optional": false
+          },
+          {
+            "name": "SnapshotManagementEnabled",
+            "optional": false
+          },
+          {
+            "name": "BackupPlans",
+            "optional": false
+          },
+          {
+            "name": "InBackupPlan",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {sanitizedKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSS3TablesInventory",
+            "var": "$s3tObj",
+            "line": 2400
+          }
+        ]
+      },
+      {
+        "export_var": "$outputGlueIceberg",
+        "prefix": "aws_glue_iceberg_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6261,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "CatalogType",
+            "optional": false
+          },
+          {
+            "name": "DatabaseName",
+            "optional": false
+          },
+          {
+            "name": "TableName",
+            "optional": false
+          },
+          {
+            "name": "S3BucketName",
+            "optional": false
+          },
+          {
+            "name": "TableType",
+            "optional": false
+          },
+          {
+            "name": "S3Location",
+            "optional": false
+          },
+          {
+            "name": "MetadataLocation",
+            "optional": false
+          },
+          {
+            "name": "CreateTime",
+            "optional": false
+          },
+          {
+            "name": "UpdateTime",
+            "optional": false
+          },
+          {
+            "name": "FormatVersion",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeGB",
+            "optional": false
+          },
+          {
+            "name": "TotalFileSizeTB",
+            "optional": false
+          },
+          {
+            "name": "DataFileCount",
+            "optional": false
+          },
+          {
+            "name": "TotalDeleteFileCount",
+            "optional": false
+          },
+          {
+            "name": "ManifestCount",
+            "optional": false
+          },
+          {
+            "name": "TargetManifestSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "ManifestBytesEstimate",
+            "optional": false
+          },
+          {
+            "name": "CompactionEnabled",
+            "optional": false
+          },
+          {
+            "name": "MetadataFileStorageClass",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {sanitizedKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSGlueIcebergInventory",
+            "var": "$glueObj",
+            "line": 2890
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSecrets",
+        "prefix": "aws_secrets_numbers",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6264,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Secrets",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSSimpleServiceCounts",
+            "var": "$secretsObj",
+            "line": 2958
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSQS",
+        "prefix": "aws_sqs_numbers",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6267,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Queues",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSSimpleServiceCounts",
+            "var": "$sqsObj",
+            "line": 2971
+          }
+        ]
+      },
+      {
+        "export_var": "$outputKMS",
+        "prefix": "aws_kms_numbers",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6271,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Alias",
+            "optional": false
+          },
+          {
+            "name": "KeyId",
+            "optional": false
+          },
+          {
+            "name": "Arn",
+            "optional": false
+          },
+          {
+            "name": "KeyManager",
+            "optional": false
+          },
+          {
+            "name": "KeyState",
+            "optional": false
+          },
+          {
+            "name": "CreationDate",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSKMSInventory",
+            "var": "$kmsObj",
+            "line": 3042
+          }
+        ]
+      },
+      {
+        "export_var": "$outputBackupCosts",
+        "prefix": "aws_backup_costs",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6279,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Time-Period-Start",
+            "optional": false
+          },
+          {
+            "name": "Time-Period-End",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupAmortizedCost",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupBlendedCost",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupNetAmortizedCost",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupNetUnblendedCost",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupNormalizedUsageAmount",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupUnblendedCost",
+            "optional": false
+          },
+          {
+            "name": "AWSBackupUsageQuantity",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSBackupCosts",
+            "var": "$monthCostObj",
+            "line": 4723
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSnapshotStorageCosts",
+        "prefix": "aws_snapshot_storage_costs",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6288,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Time-Period-Start",
+            "optional": false
+          },
+          {
+            "name": "Time-Period-End",
+            "optional": false
+          },
+          {
+            "name": "Service",
+            "optional": false
+          },
+          {
+            "name": "UsageType",
+            "optional": false
+          },
+          {
+            "name": "UsageQuantity",
+            "optional": false
+          },
+          {
+            "name": "UsageUnit",
+            "optional": false
+          },
+          {
+            "name": "AmortizedCost",
+            "optional": false
+          },
+          {
+            "name": "BlendedCost",
+            "optional": false
+          },
+          {
+            "name": "NetAmortizedCost",
+            "optional": false
+          },
+          {
+            "name": "NetUnblendedCost",
+            "optional": false
+          },
+          {
+            "name": "UnblendedCost",
+            "optional": false
+          },
+          {
+            "name": "NormalizedUsageAmount",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSSnapshotStorageCosts",
+            "var": "$row",
+            "line": 4890
+          }
+        ]
+      },
+      {
+        "export_var": "$outputEKSClusters",
+        "prefix": "aws_eks_clusters_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6294,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Version",
+            "optional": false
+          },
+          {
+            "name": "PlatformVersion",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "Arn",
+            "optional": false
+          },
+          {
+            "name": "RoleArn",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEKSInventory",
+            "var": "$eksObj",
+            "line": 1583
+          }
+        ]
+      },
+      {
+        "export_var": "$outputEKSNodegroups",
+        "prefix": "aws_eks_nodegroups_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6297,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "NodegroupName",
+            "optional": false
+          },
+          {
+            "name": "ClusterName",
+            "optional": false
+          },
+          {
+            "name": "DiskSize",
+            "optional": false
+          },
+          {
+            "name": "CapacityType",
+            "optional": false
+          },
+          {
+            "name": "AmiType",
+            "optional": false
+          },
+          {
+            "name": "NodegroupArn",
+            "optional": false
+          },
+          {
+            "name": "NodeRole",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "ReleaseVersion",
+            "optional": false
+          },
+          {
+            "name": "Version",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AWSEKSInventory",
+            "var": "$eksNodeGroupObj",
+            "line": 1621
+          }
+        ]
+      },
+      {
+        "export_var": "$outputEBSAndAMI",
+        "prefix": "aws_ebs_and_ami_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6303,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Source",
+            "optional": false
+          },
+          {
+            "name": "ImageId",
+            "optional": false
+          },
+          {
+            "name": "SnapshotId",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "SizeBytes",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "CreationDate",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Description",
+            "optional": false
+          },
+          {
+            "name": "State",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSEBSAndAMIInventory",
+            "var": "",
+            "line": 4036
+          },
+          {
+            "fn": "Get-AWSEBSAndAMIInventory",
+            "var": "",
+            "line": 4090
+          }
+        ]
+      },
+      {
+        "export_var": "$outputRDSSnapshots",
+        "prefix": "aws_rds_snapshot_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6310,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Source",
+            "optional": false
+          },
+          {
+            "name": "Engine",
+            "optional": false
+          },
+          {
+            "name": "SnapshotIdentifier",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "SnapshotArn",
+            "optional": false
+          },
+          {
+            "name": "SizeBytes",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "CreationDate",
+            "optional": false
+          },
+          {
+            "name": "SnapshotType",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "ClusterIdentifier",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSRDSSnapshotInventory",
+            "var": "",
+            "line": 4191
+          },
+          {
+            "fn": "Get-AWSRDSSnapshotInventory",
+            "var": "",
+            "line": 4262
+          }
+        ]
+      },
+      {
+        "export_var": "$outputRedshiftClusters",
+        "prefix": "aws_redshift_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 6317,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ClusterIdentifier",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "NodeType",
+            "optional": false
+          },
+          {
+            "name": "NumberOfNodes",
+            "optional": false
+          },
+          {
+            "name": "ClusterStatus",
+            "optional": false
+          },
+          {
+            "name": "MasterUsername",
+            "optional": false
+          },
+          {
+            "name": "DBName",
+            "optional": false
+          },
+          {
+            "name": "ClusterCreateTime",
+            "optional": false
+          },
+          {
+            "name": "AutomatedSnapshotRetentionPeriod",
+            "optional": false
+          },
+          {
+            "name": "ManualSnapshotRetentionPeriod",
+            "optional": false
+          },
+          {
+            "name": "HasBackups",
+            "optional": false
+          },
+          {
+            "name": "HasRecoveryPoints",
+            "optional": false
+          },
+          {
+            "name": "BackupCount",
+            "optional": false
+          },
+          {
+            "name": "BackupSources",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupDate",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeGB",
+            "optional": false
+          },
+          {
+            "name": "LatestBackupSizeTB",
+            "optional": false
+          },
+          {
+            "name": "BackupEnumerationTruncated",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AWSRedshiftInventory",
+            "var": "$row",
+            "line": 4546
+          }
+        ]
+      },
+      {
+        "export_var": "$outputBackupRecoveryPoints",
+        "prefix": "aws_backup_recovery_points",
+        "separator": "-",
+        "extension": "csv",
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "AwsAccountId",
+            "optional": false
+          },
+          {
+            "name": "AwsAccountAlias",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "BackupVaultName",
+            "optional": false
+          },
+          {
+            "name": "BackupVaultArn",
+            "optional": false
+          },
+          {
+            "name": "RecoveryPointArn",
+            "optional": false
+          },
+          {
+            "name": "ResourceArn",
+            "optional": false
+          },
+          {
+            "name": "ResourceId",
+            "optional": false
+          },
+          {
+            "name": "ResourceName",
+            "optional": false
+          },
+          {
+            "name": "ResourceType",
+            "optional": false
+          },
+          {
+            "name": "BackupSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "BackupSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "BackupSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "CreationDate",
+            "optional": false
+          },
+          {
+            "name": "BackupPlanId",
+            "optional": false
+          },
+          {
+            "name": "BackupPlanName",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "IsParent",
+            "optional": false
+          },
+          {
+            "name": "ParentRecoveryPointArn",
+            "optional": false
+          },
+          {
+            "name": "Source",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "New-AWSRecoveryPointRow",
+            "var": "",
+            "line": 3702
+          }
+        ]
+      }
+    ],
+    "azure": [
+      {
+        "export_var": "$outputVmDisk",
+        "prefix": "azure_vmdisk_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2635,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Disks",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "SizeGB",
+            "optional": false
+          },
+          {
+            "name": "SizeTB",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "vmID",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "HasMSSQL",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicies",
+            "optional": false
+          },
+          {
+            "name": "InBackupPolicy",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureVMAndDiskInventory",
+            "var": "$vmObj",
+            "line": 1533
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSQL",
+        "prefix": "azure_sql_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2679,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Database",
+            "optional": false
+          },
+          {
+            "name": "Server",
+            "optional": false
+          },
+          {
+            "name": "ElasticPool",
+            "optional": false
+          },
+          {
+            "name": "ManagedInstance",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTB",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "DatabaseID",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "Allocated_Bytes",
+            "optional": true
+          },
+          {
+            "name": "Utilized_Bytes",
+            "optional": true
+          },
+          {
+            "name": "LTRWeeklyRetention",
+            "optional": true
+          },
+          {
+            "name": "LTRMonthlyRetention",
+            "optional": true
+          },
+          {
+            "name": "LTRYearlyRetention",
+            "optional": true
+          },
+          {
+            "name": "LTRWeekOfYear",
+            "optional": true
+          },
+          {
+            "name": "PITR (Days)",
+            "optional": true
+          },
+          {
+            "name": "DiffBackupFrequency (Hours)",
+            "optional": true
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureSQLInventory",
+            "var": "$sqlObj",
+            "line": 1667
+          },
+          {
+            "fn": "Get-AzureSQLInventory",
+            "var": "$sqlObj",
+            "line": 1702
+          }
+        ],
+        "producers_differ": true
+      },
+      {
+        "export_var": "$outputMI",
+        "prefix": "azure_mi_sql_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2680,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Database",
+            "optional": false
+          },
+          {
+            "name": "Server",
+            "optional": false
+          },
+          {
+            "name": "ElasticPool",
+            "optional": false
+          },
+          {
+            "name": "ManagedInstance",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTB",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "DatabaseID",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "Databases",
+            "optional": false
+          },
+          {
+            "name": "storage_space_used_mb",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureSQLInventory",
+            "var": "$sqlObj",
+            "line": 1875
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzSA",
+        "prefix": "azure_storage_account_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2716,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "StorageAccount",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountType",
+            "optional": false
+          },
+          {
+            "name": "HNSEnabled(ADLSGen2)",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountSkuName",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountAccessTier",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "UsedBlobCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedBlobCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedBlobCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedBlobCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "UsedBlobCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "BlobContainerCount",
+            "optional": false
+          },
+          {
+            "name": "BlobCount",
+            "optional": false
+          },
+          {
+            "name": "UsedFileShareCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedFileShareCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedFileShareCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedFileShareCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "UsedFileShareCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "FileShareCount",
+            "optional": false
+          },
+          {
+            "name": "FileCountInFileShares",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicies",
+            "optional": false
+          },
+          {
+            "name": "InBackupPolicy",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureStorageAndFilesInventory",
+            "var": "$azSAObj",
+            "line": 668
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzCon",
+        "prefix": "azure_storage_account_container_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2740,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "StorageAccount",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountType",
+            "optional": false
+          },
+          {
+            "name": "HNSEnabled(ADLSGen2)",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountSkuName",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountAccessTier",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityHotTierBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityHotTierGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityHotTierTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityHotTierGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityHotTierTB",
+            "optional": false
+          },
+          {
+            "name": "HotTierBlobCount",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityCoolTierBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityCoolTierGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityCoolTierTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityCoolTierGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityCoolTierTB",
+            "optional": false
+          },
+          {
+            "name": "CoolTierBlobCount",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityArchiveTierBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityArchiveTierGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityArchiveTierTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityArchiveTierGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityArchiveTierTB",
+            "optional": false
+          },
+          {
+            "name": "ArchiveTierBlobCount",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityUnknownTierBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityUnknownTierGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityUnknownTierTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityUnknownTierGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityUnknownTierTB",
+            "optional": false
+          },
+          {
+            "name": "UnknownTierBlobCount",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityAllTiersBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityAllTiersGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityAllTiersTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityAllTiersGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityAllTiersTB",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureStorageAndFilesInventory",
+            "var": "$azConObj",
+            "line": 754
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzFS",
+        "prefix": "azure_file_share_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2761,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "StorageAccount",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountType",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountSkuName",
+            "optional": false
+          },
+          {
+            "name": "StorageAccountAccessTier",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "QuotaGiB",
+            "optional": false
+          },
+          {
+            "name": "QuotaTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityBytes",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityGiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityTiB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityGB",
+            "optional": false
+          },
+          {
+            "name": "UsedCapacityTB",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicies",
+            "optional": false
+          },
+          {
+            "name": "InBackupPolicy",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AzureStorageAndFilesInventory",
+            "var": "$azFSObj",
+            "line": 847
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzVaults",
+        "prefix": "azure_backup_vault_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2805,
+        "status": "unresolved",
+        "columns": [],
+        "dynamic": [],
+        "notes": "Rows are Az.RecoveryServices vault objects exported as returned; columns come from the module type, not from this script."
+      },
+      {
+        "export_var": "$outputAzVaultVMItems",
+        "prefix": "azure_backup_vault_VM_items",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2814,
+        "status": "unresolved",
+        "columns": [],
+        "dynamic": [],
+        "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."
+      },
+      {
+        "export_var": "$outputAzVaultVMSQLItem",
+        "prefix": "azure_backup_vault_VM_SQL_items",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2815,
+        "status": "unresolved",
+        "columns": [],
+        "dynamic": [],
+        "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."
+      },
+      {
+        "export_var": "$outputAzVaultAzureSQLDatabaseItems",
+        "prefix": "azure_backup_vault_Azure_SQL_Database_items",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2816,
+        "status": "unresolved",
+        "columns": [],
+        "dynamic": [],
+        "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."
+      },
+      {
+        "export_var": "$outputAzVaultAzureFilesItems",
+        "prefix": "azure_backup_vault_Azure_Files_items",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2817,
+        "status": "unresolved",
+        "columns": [],
+        "dynamic": [],
+        "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."
+      },
+      {
+        "export_var": "$outputAzVaultBackupCostsItems",
+        "prefix": "azure_backup_costs",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2818,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "SubscriptionId",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "BillingMonth",
+            "optional": false
+          },
+          {
+            "name": "PreTaxCostUSD",
+            "optional": false
+          },
+          {
+            "name": "CostUSD",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AzureBackupInventory",
+            "var": "$costDetail",
+            "line": 1214
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzDpVaults",
+        "prefix": "azure_backup_data_protection_vaults",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2837,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Type",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AzureDataProtectionInventory",
+            "var": "$dpVaultObj",
+            "line": 1335
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzDpItems",
+        "prefix": "azure_backup_data_protection_items",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2846,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "VaultName",
+            "optional": false
+          },
+          {
+            "name": "InstanceName",
+            "optional": false
+          },
+          {
+            "name": "Workload",
+            "optional": false
+          },
+          {
+            "name": "DatasourceType",
+            "optional": false
+          },
+          {
+            "name": "DatasourceName",
+            "optional": false
+          },
+          {
+            "name": "DatasourceDatabase",
+            "optional": false
+          },
+          {
+            "name": "DatasourceResourceId",
+            "optional": false
+          },
+          {
+            "name": "ProtectionPolicyName",
+            "optional": false
+          },
+          {
+            "name": "PolicyId",
+            "optional": false
+          },
+          {
+            "name": "ProtectionState",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AzureDataProtectionInventory",
+            "var": "$dpItemObj",
+            "line": 1391
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzCosmosDB",
+        "prefix": "azure_cosmos_db",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2862,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "Location",
+            "optional": false
+          },
+          {
+            "name": "Id",
+            "optional": false
+          },
+          {
+            "name": "Kind",
+            "optional": false
+          },
+          {
+            "name": "InstanceId",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicyBackupIntervalInMinutes",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicyBackupRetentionIntervalInHours",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicyBackupType",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicyBackupStorageRedundancy",
+            "optional": false
+          },
+          {
+            "name": "BackupPolicyTier",
+            "optional": false
+          },
+          {
+            "name": "MinimalTlsVersion",
+            "optional": false
+          },
+          {
+            "name": "NameDatabaseAccountOfferType",
+            "optional": false
+          },
+          {
+            "name": "DocumentCount",
+            "optional": false
+          },
+          {
+            "name": "DataUsage",
+            "optional": false
+          },
+          {
+            "name": "PhysicalPartitionSizeInfo",
+            "optional": false
+          },
+          {
+            "name": "PhysicalPartitionCount",
+            "optional": false
+          },
+          {
+            "name": "IndexUsage",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzureCosmosDBInventory",
+            "var": "$dbAccountObj",
+            "line": 2087
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzPostgreSQLFlexible",
+        "prefix": "azure_postgres_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2882,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Server",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Version",
+            "optional": false
+          },
+          {
+            "name": "SkuName",
+            "optional": false
+          },
+          {
+            "name": "SkuTier",
+            "optional": false
+          },
+          {
+            "name": "SkuCapacity",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeGB",
+            "optional": false
+          },
+          {
+            "name": "MaxSizeTB",
+            "optional": false
+          },
+          {
+            "name": "SizeBucket",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          },
+          {
+            "name": "AdministratorLogin",
+            "optional": false
+          },
+          {
+            "name": "BackupRetentionDays",
+            "optional": false
+          },
+          {
+            "name": "GeoRedundantBackup",
+            "optional": false
+          },
+          {
+            "name": "HighAvailabilityMode",
+            "optional": false
+          },
+          {
+            "name": "DatabaseCount",
+            "optional": false
+          },
+          {
+            "name": "Utilized_Bytes",
+            "optional": false
+          },
+          {
+            "name": "Utilized_GiB",
+            "optional": true
+          },
+          {
+            "name": "Utilized_TiB",
+            "optional": true
+          },
+          {
+            "name": "Utilized_GB",
+            "optional": true
+          },
+          {
+            "name": "Utilized_TB",
+            "optional": true
+          },
+          {
+            "name": "BackupPolicies",
+            "optional": false
+          },
+          {
+            "name": "InBackupPolicy",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-AzurePostgreSQLInventory",
+            "var": "$pgObj",
+            "line": 1977
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAKS",
+        "prefix": "azure_aks_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2899,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "ResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "Location",
+            "optional": false
+          },
+          {
+            "name": "Id",
+            "optional": false
+          },
+          {
+            "name": "KubernetesVersion",
+            "optional": false
+          },
+          {
+            "name": "ProvisioningState",
+            "optional": false
+          },
+          {
+            "name": "PowerState",
+            "optional": false
+          },
+          {
+            "name": "DnsPrefix",
+            "optional": false
+          },
+          {
+            "name": "Fqdn",
+            "optional": false
+          },
+          {
+            "name": "NodeResourceGroup",
+            "optional": false
+          },
+          {
+            "name": "NodePoolCount",
+            "optional": true
+          },
+          {
+            "name": "NodePoolNames",
+            "optional": true
+          },
+          {
+            "name": "NodePoolVMSizes",
+            "optional": true
+          },
+          {
+            "name": "NodePoolNodeCounts",
+            "optional": true
+          },
+          {
+            "name": "NodePoolMaxCounts",
+            "optional": true
+          },
+          {
+            "name": "NodePoolOSDiskSizes",
+            "optional": true
+          },
+          {
+            "name": "TotalNodes",
+            "optional": true
+          }
+        ],
+        "dynamic": [
+          "Tag: {key}"
+        ],
+        "sources": [
+          {
+            "fn": "getAKSInventory",
+            "var": "$aksClusterObj",
+            "line": 495
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAzKeyVault",
+        "prefix": "azure_key_vault",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 2913,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "VaultName",
+            "optional": false
+          },
+          {
+            "name": "Location",
+            "optional": false
+          },
+          {
+            "name": "Tenant",
+            "optional": false
+          },
+          {
+            "name": "Subscription",
+            "optional": false
+          },
+          {
+            "name": "NumCertificates",
+            "optional": false
+          },
+          {
+            "name": "NumSecrets",
+            "optional": false
+          },
+          {
+            "name": "NumKeys",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "Get-AzureKeyVaultInventory",
+            "var": "$vaultDetails",
+            "line": 1449
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSummary",
+        "prefix": "azure_sizing_summary",
+        "separator": "_",
+        "extension": "csv",
+        "export_line": 3239,
+        "decision": "DEC-8",
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "ResourceType",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "TotalSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "TotalSizeTB",
+            "optional": false
+          },
+          {
+            "name": "Count",
+            "optional": false
+          }
+        ],
+        "dynamic": [],
+        "sources": [
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 2979
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 2988
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3024
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3060
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3099
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3134
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3168
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3205
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3212
+          },
+          {
+            "fn": "",
+            "var": "$summaryData",
+            "line": 3220
+          },
+          {
+            "fn": "",
+            "var": "$allRegionsSummary",
+            "line": 2997
+          },
+          {
+            "fn": "",
+            "var": "$regionSummary",
+            "line": 3008
+          }
+        ]
+      }
+    ],
+    "gcp": [
+      {
+        "export_var": "$outputVM",
+        "prefix": "gce_vm_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1208,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "Zone",
+            "optional": false
+          },
+          {
+            "name": "Name",
+            "optional": false
+          },
+          {
+            "name": "TotalDiskCount",
+            "optional": false
+          },
+          {
+            "name": "TotalDiskSizeGb",
+            "optional": false
+          },
+          {
+            "name": "TotalDiskSizeTb",
+            "optional": false
+          },
+          {
+            "name": "TotalDiskSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "TotalDiskSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "EncryptedDisksCount",
+            "optional": false
+          },
+          {
+            "name": "EncryptedDisksSizeGb",
+            "optional": false
+          },
+          {
+            "name": "EncryptedDisksSizeTb",
+            "optional": false
+          },
+          {
+            "name": "EncryptedDisksSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "EncryptedDisksSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "Status",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCEInstancesAndDisks",
+            "var": "$instanceObj",
+            "line": 412
+          }
+        ]
+      },
+      {
+        "export_var": "$outputAttachedDisks",
+        "prefix": "gce_attached_disk_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1212,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "Zone",
+            "optional": false
+          },
+          {
+            "name": "VMName",
+            "optional": false
+          },
+          {
+            "name": "DiskName",
+            "optional": false
+          },
+          {
+            "name": "Id",
+            "optional": false
+          },
+          {
+            "name": "SizeGb",
+            "optional": false
+          },
+          {
+            "name": "SizeTb",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "DiskEncryptionKey",
+            "optional": false
+          },
+          {
+            "name": "SourceImageSource",
+            "optional": false
+          },
+          {
+            "name": "SourceImageName",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCEInstancesAndDisks",
+            "var": "$diskObj",
+            "line": 374
+          }
+        ]
+      },
+      {
+        "export_var": "$outputUnattachedDisks",
+        "prefix": "gce_unattached_disk_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1216,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "Zone",
+            "optional": false
+          },
+          {
+            "name": "DiskName",
+            "optional": false
+          },
+          {
+            "name": "Id",
+            "optional": false
+          },
+          {
+            "name": "SizeGb",
+            "optional": false
+          },
+          {
+            "name": "SizeTb",
+            "optional": false
+          },
+          {
+            "name": "SizeGiB",
+            "optional": false
+          },
+          {
+            "name": "SizeTiB",
+            "optional": false
+          },
+          {
+            "name": "DiskEncryptionKey",
+            "optional": false
+          },
+          {
+            "name": "SourceImageSource",
+            "optional": false
+          },
+          {
+            "name": "SourceImageName",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCEUnattachedDisks",
+            "var": "$diskObj",
+            "line": 467
+          }
+        ]
+      },
+      {
+        "export_var": "$outputCloudSQL",
+        "prefix": "gce_cloudsql_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1220,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "InstanceName",
+            "optional": false
+          },
+          {
+            "name": "InstanceType",
+            "optional": false
+          },
+          {
+            "name": "DatabaseEngine",
+            "optional": false
+          },
+          {
+            "name": "EngineVersion",
+            "optional": false
+          },
+          {
+            "name": "Region",
+            "optional": false
+          },
+          {
+            "name": "Tier",
+            "optional": false
+          },
+          {
+            "name": "StorageSizeGb",
+            "optional": false
+          },
+          {
+            "name": "StorageSizeTb",
+            "optional": false
+          },
+          {
+            "name": "StorageType",
+            "optional": false
+          },
+          {
+            "name": "State",
+            "optional": false
+          },
+          {
+            "name": "NumberOfDatabases",
+            "optional": false
+          },
+          {
+            "name": "BackupEnabled",
+            "optional": false
+          },
+          {
+            "name": "BackupRetentionCount",
+            "optional": false
+          },
+          {
+            "name": "BackupStartTime",
+            "optional": false
+          },
+          {
+            "name": "AvailabilityType",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCPCloudSQLInstances",
+            "var": "$cloudSQLObj",
+            "line": 549
+          }
+        ]
+      },
+      {
+        "export_var": "$outputSpanner",
+        "prefix": "gce_spanner_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1224,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "InstanceName",
+            "optional": false
+          },
+          {
+            "name": "DisplayName",
+            "optional": false
+          },
+          {
+            "name": "Config",
+            "optional": false
+          },
+          {
+            "name": "State",
+            "optional": false
+          },
+          {
+            "name": "NumberOfDatabases",
+            "optional": false
+          },
+          {
+            "name": "NodeCount",
+            "optional": false
+          },
+          {
+            "name": "ProcessingUnits",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCPSpannerInstances",
+            "var": "$spannerObj",
+            "line": 624
+          }
+        ]
+      },
+      {
+        "export_var": "$outputBigQuery",
+        "prefix": "gce_bigquery_info",
+        "separator": "-",
+        "extension": "csv",
+        "export_line": 1228,
+        "status": "resolved",
+        "columns": [
+          {
+            "name": "Project",
+            "optional": false
+          },
+          {
+            "name": "DatasetId",
+            "optional": false
+          },
+          {
+            "name": "Location",
+            "optional": false
+          },
+          {
+            "name": "TableId",
+            "optional": false
+          },
+          {
+            "name": "TableType",
+            "optional": false
+          },
+          {
+            "name": "NumRows",
+            "optional": false
+          },
+          {
+            "name": "NumberOfColumns",
+            "optional": false
+          },
+          {
+            "name": "TotalLogicalSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "TotalLogicalSizeGb",
+            "optional": false
+          },
+          {
+            "name": "TotalLogicalSizeTb",
+            "optional": false
+          },
+          {
+            "name": "TotalLogicalSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "TotalLogicalSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "ActiveLogicalSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "ActiveLogicalSizeGb",
+            "optional": false
+          },
+          {
+            "name": "ActiveLogicalSizeTb",
+            "optional": false
+          },
+          {
+            "name": "ActiveLogicalSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "ActiveLogicalSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "LongTermLogicalSizeBytes",
+            "optional": false
+          },
+          {
+            "name": "LongTermLogicalSizeGb",
+            "optional": false
+          },
+          {
+            "name": "LongTermLogicalSizeTb",
+            "optional": false
+          },
+          {
+            "name": "LongTermLogicalSizeGiB",
+            "optional": false
+          },
+          {
+            "name": "LongTermLogicalSizeTiB",
+            "optional": false
+          },
+          {
+            "name": "ExternalSourceFormat",
+            "optional": false
+          },
+          {
+            "name": "ExternalSourceUri",
+            "optional": false
+          },
+          {
+            "name": "CreationTime",
+            "optional": false
+          },
+          {
+            "name": "LastModifiedTime",
+            "optional": false
+          }
+        ],
+        "dynamic": [
+          "Label/Tag: dataset_{labelKey}",
+          "Label/Tag: {labelKey}"
+        ],
+        "sources": [
+          {
+            "fn": "Get-GCPBigQueryInventory",
+            "var": "$tableObj",
+            "line": 846
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aws-sizing"
+version = "1.0.0"
+description = "Discover AWS inventory across an AWS Organization"
+requires-python = ">=3.9"
+dependencies = [
+    "boto3>=1.26",
+    "botocore[crt]",
+    "pyarrow>=14",  # reads a Storage Lens export delivered as Parquet
+]
+
+[project.scripts]
+aws-sizing = "main:main"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "accounts",
+    "anonymize",
+    "logging_setup",
+    "csv_export",
+    "csv_injection",
+    "backup_plan_membership",
+    "plans_json",
+    "totals",
+    "preflight",
+    "preflight_core",
+    "runlog",
+    "runlog_core",
+    "manifest_core",
+]
+packages = ["collectors", "models"]

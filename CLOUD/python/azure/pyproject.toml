@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rubrik-discovery-azure"
+version = "1.1.0"
+description = "Rubrik Azure environment discovery tool"
+requires-python = ">=3.10"
+dependencies = [
+    "azure-identity>=1.15.0",
+    "azure-mgmt-compute>=30.0.0",
+    "azure-mgmt-resource>=23.0.0,<26.0.0",  # 26.0.0 dropped top-level ResourceManagementClient export
+    "azure-mgmt-subscription>=3.0.0",
+    "azure-mgmt-recoveryservices>=3.0.0",
+    "azure-mgmt-recoveryservicesbackup>=9.0.0",
+    "azure-mgmt-storage>=21.0.0",
+    "azure-mgmt-sql>=4.0.0b1",
+    "azure-mgmt-rdbms>=10.0.0",
+    "azure-mgmt-monitor>=6.0.0",
+    "azure-mgmt-costmanagement>=4.0.0",
+    "azure-mgmt-dataprotection>=1.0.0",
+    "azure-mgmt-security>=7.0.0",
+    "azure-mgmt-purview>=1.0.1",
+    "azure-storage-blob>=12.19.0",
+    "azure-keyvault-certificates>=4.8.0",
+    "azure-keyvault-secrets>=4.8.0",
+    "azure-keyvault-keys>=4.9.0",
+    "requests>=2.28.0",  # collectors/devops.py (Azure DevOps REST) — customer-path
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Kept empty so pip install ".[parity]" still works: its packages are now in dependencies.
+parity = []
+
+[project.scripts]
+rubrik-discovery = "main:main"
+
+# Discovery only: the modules listed below plus the collectors/ and models/ packages
+# (found automatically). Tests and anything not listed here are not packaged.
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "auth",
+    "cloud",
+    "audit_manifest",
+    "config",
+    "anonymize",
+    "csv_export",
+    "logging_setup",
+    "preflight",
+    "preflight_core",
+    "progress",
+    "runlog",
+    "runlog_core",
+    "manifest_core",
+    "tls",
+    "totals",
+]
+
+[tool.setuptools.packages.find]
+where     = ["."]
+include   = ["collectors*", "models*"]
+exclude   = ["tests*"]

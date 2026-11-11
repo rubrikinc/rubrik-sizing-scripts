@@ -1,0 +1,79 @@
+{
+  "_comment": "Maps each output file (by the script's $output* variable) to the row constructor(s) that build its rows. Producer selectors: fn (function name), var (constructor variable, optional), nth (0-based among matches), min_keys (minimum initial keys). Regenerate columns.json with build_columns.py after editing.",
+  "aws": {
+    "script": "Get-AWSSizingInfo.ps1",
+    "files": {
+      "$outputEc2Instance": {"producers": [{"fn": "Get-AWSEC2Inventory", "var": "$ec2obj"}]},
+      "$outputEc2AttachedVolume": {"producers": [{"fn": "Get-AWSEC2Inventory", "var": "$attachedVolObj"}]},
+      "$outputEc2UnattachedVolume": {"producers": [{"fn": "Get-AWSEC2Inventory", "var": "$ec2UnVolObj"}]},
+      "$outputRDS": {"producers": [{"fn": "Get-AWSRDSInventory", "var": "$rdsObj"}, {"fn": "Get-AWSRDSInventory", "var": "$clusterObj"}]},
+      "$outputVPC": {"producers": [{"fn": "Get-AWSVPCInventory", "var": "$vpcObj"}]},
+      "$outputLB": {"producers": [{"fn": "Get-AWSLoadBalancerInventory", "var": "$lbObj"}]},
+      "$outputRoute53": {"producers": [{"fn": "Get-AWSRoute53Inventory", "nth": 0}]},
+      "$outputIAM": {"producers": [{"fn": "Get-AWSIAMInventory", "nth": 0}]},
+      "$outputS3": {
+        "producers": [{"fn": "Get-AWSS3Inventory", "var": "$s3obj"}],
+        "status": "partial",
+        "notes": "Final column order is computed at run time from the union of row properties (Select-Object $s3PropsOrdered), and per-storage-class columns depend on the account's buckets. HasIcebergTable is added in the script body. Needs the live parity run (B3) to pin exactly."
+      },
+      "$outputEFS": {"producers": [{"fn": "Get-AWSEFSInventory", "var": "$efsObj"}]},
+      "$outputFSXfilesystems": {"producers": [{"fn": "Get-AWSFSxInventory", "var": "$fsxObj", "nth": 0}]},
+      "$outputFSX": {"producers": [{"fn": "Get-AWSFSxInventory", "var": "$fsxObj", "nth": 1}]},
+      "$outputDDB": {"producers": [{"fn": "Get-AWSDynamoDBInventory", "var": "$ddbObj"}]},
+      "$outputS3Tables": {"producers": [{"fn": "Get-AWSS3TablesInventory", "var": "$s3tObj"}]},
+      "$outputGlueIceberg": {"producers": [{"fn": "Get-AWSGlueIcebergInventory", "var": "$glueObj"}]},
+      "$outputSecrets": {"producers": [{"fn": "Get-AWSSimpleServiceCounts", "var": "$secretsObj"}]},
+      "$outputSQS": {"producers": [{"fn": "Get-AWSSimpleServiceCounts", "var": "$sqsObj"}]},
+      "$outputKMS": {"producers": [{"fn": "Get-AWSKMSInventory", "var": "$kmsObj"}]},
+      "$outputBackupCosts": {
+        "producers": [{"fn": "Get-AWSBackupCosts", "var": "$monthCostObj"}],
+        "expand": {"AWSBackup{metric}": ["AmortizedCost", "BlendedCost", "NetAmortizedCost", "NetUnblendedCost", "NormalizedUsageAmount", "UnblendedCost", "UsageQuantity"]}
+      },
+      "$outputSnapshotStorageCosts": {"producers": [{"fn": "Get-AWSSnapshotStorageCosts", "var": "$row"}]},
+      "$outputEKSClusters": {"producers": [{"fn": "Get-AWSEKSInventory", "var": "$eksObj"}]},
+      "$outputEKSNodegroups": {"producers": [{"fn": "Get-AWSEKSInventory", "var": "$eksNodeGroupObj"}]},
+      "$outputEBSAndAMI": {"producers": [{"fn": "Get-AWSEBSAndAMIInventory", "min_keys": 10}]},
+      "$outputRDSSnapshots": {"producers": [{"fn": "Get-AWSRDSSnapshotInventory", "min_keys": 10}]},
+      "$outputRedshiftClusters": {"producers": [{"fn": "Get-AWSRedshiftInventory", "var": "$row"}]},
+      "$outputBackupRecoveryPoints": {"producers": [{"fn": "New-AWSRecoveryPointRow", "nth": 0}]}
+    }
+  },
+  "azure": {
+    "script": "Get-AzureSizingInfo.ps1",
+    "files": {
+      "$outputVmDisk": {"producers": [{"fn": "Get-AzureVMAndDiskInventory", "var": "$vmObj"}]},
+      "$outputSQL": {"producers": [{"fn": "Get-AzureSQLInventory", "var": "$sqlObj", "nth": 0}, {"fn": "Get-AzureSQLInventory", "var": "$sqlObj", "nth": 1}]},
+      "$outputMI": {"producers": [{"fn": "Get-AzureSQLInventory", "var": "$sqlObj", "nth": 2}]},
+      "$outputAzSA": {"producers": [{"fn": "Get-AzureStorageAndFilesInventory", "var": "$azSAObj"}]},
+      "$outputAzCon": {"producers": [{"fn": "Get-AzureStorageAndFilesInventory", "var": "$azConObj"}]},
+      "$outputAzFS": {"producers": [{"fn": "Get-AzureStorageAndFilesInventory", "var": "$azFSObj"}]},
+      "$outputAzVaults": {"status": "unresolved", "notes": "Rows are Az.RecoveryServices vault objects exported as returned; columns come from the module type, not from this script."},
+      "$outputAzVaultVMItems": {"status": "unresolved", "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."},
+      "$outputAzVaultVMSQLItem": {"status": "unresolved", "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."},
+      "$outputAzVaultAzureSQLDatabaseItems": {"status": "unresolved", "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."},
+      "$outputAzVaultAzureFilesItems": {"status": "unresolved", "notes": "Rows are Az.RecoveryServices backup item objects exported as returned."},
+      "$outputAzVaultBackupCostsItems": {"producers": [{"fn": "Get-AzureBackupInventory", "var": "$costDetail"}]},
+      "$outputAzDpVaults": {"producers": [{"fn": "Get-AzureDataProtectionInventory", "var": "$dpVaultObj"}]},
+      "$outputAzDpItems": {"producers": [{"fn": "Get-AzureDataProtectionInventory", "var": "$dpItemObj"}]},
+      "$outputAzCosmosDB": {"producers": [{"fn": "Get-AzureCosmosDBInventory", "var": "$dbAccountObj"}]},
+      "$outputAzPostgreSQLFlexible": {"producers": [{"fn": "Get-AzurePostgreSQLInventory", "var": "$pgObj"}]},
+      "$outputAKS": {"producers": [{"fn": "getAKSInventory", "var": "$aksClusterObj"}]},
+      "$outputAzKeyVault": {"producers": [{"fn": "Get-AzureKeyVaultInventory", "var": "$vaultDetails"}]},
+      "$outputSummary": {"decision": "DEC-8", "producers": [{"fn": "", "var": "$summaryData"}, {"fn": "", "var": "$allRegionsSummary"}, {"fn": "", "var": "$regionSummary"}]}
+    }
+  },
+  "gcp": {
+    "script": "Get-GCPSizingInfo.ps1",
+    "files": {
+      "$outputVM": {"producers": [{"fn": "Get-GCEInstancesAndDisks", "var": "$instanceObj"}]},
+      "$outputAttachedDisks": {"producers": [{"fn": "Get-GCEInstancesAndDisks", "var": "$diskObj"}]},
+      "$outputUnattachedDisks": {"producers": [{"fn": "Get-GCEUnattachedDisks", "var": "$diskObj"}]},
+      "$outputCloudSQL": {"producers": [{"fn": "Get-GCPCloudSQLInstances", "var": "$cloudSQLObj"}]},
+      "$outputSpanner": {"producers": [{"fn": "Get-GCPSpannerInstances", "var": "$spannerObj"}]},
+      "$outputBigQuery": {
+        "producers": [{"fn": "Get-GCPBigQueryInventory", "var": "$tableObj"}],
+        "dynamic": ["Label/Tag: dataset_{labelKey}", "Label/Tag: {labelKey}"]
+      }
+    }
+  }
+}

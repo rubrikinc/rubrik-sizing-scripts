@@ -1,0 +1,39 @@
+{
+  "AdvancedBackupSettings": null,
+  "BackupPlan": {
+    "AdvancedBackupSettings": null,
+    "BackupPlanName": "example-plan",
+    "Rules": [
+      {
+        "CompletionWindowMinutes": 180,
+        "CopyActions": null,
+        "EnableContinuousBackup": null,
+        "IndexActions": null,
+        "Lifecycle": {
+          "DeleteAfterDays": 7,
+          "DeleteAfterEvent": null,
+          "MoveToColdStorageAfterDays": null,
+          "OptInToArchiveForSupportedResources": null
+        },
+        "RecoveryPointTags": null,
+        "RuleId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "RuleName": "never-runs",
+        "ScanActions": null,
+        "ScheduleExpression": "cron(0 5 1 1 ? *)",
+        "ScheduleExpressionTimezone": "Etc/UTC",
+        "StartWindowMinutes": 60,
+        "TargetBackupVaultName": "example-vault",
+        "TargetLogicallyAirGappedBackupVaultArn": null
+      }
+    ],
+    "ScanSettings": null
+  },
+  "BackupPlanArn": "arn:aws:backup:ca-central-1:123456789012:backup-plan:11111111-2222-3333-4444-555555555555",
+  "BackupPlanId": "11111111-2222-3333-4444-555555555555",
+  "CreationDate": "2026-10-07T22:02:26.233Z",
+  "CreatorRequestId": "99999999-8888-7777-6666-555555555555",
+  "DeletionDate": null,
+  "LastExecutionDate": null,
+  "ScheduledRunsPreview": null,
+  "VersionId": "EXAMPLEVERSIONID"
+}

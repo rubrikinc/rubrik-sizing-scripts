@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run the AWS sizing tool (Python)</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#59636e; --line:#d0d7de; --code:#f6f8fa; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --warnbg:#fff8c5; --badbg:#ffebe9; --okbg:#dafbe1; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --code:#161b22; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --warnbg:#3b2e00; --badbg:#4b1113; --okbg:#0f2d1a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 20px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; } h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  .box { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:12px 0; background:var(--code); }
+  .box.warn { background:var(--warnbg); border-color:var(--warn); } .box.bad { background:var(--badbg); border-color:var(--bad); } .box.ok { background:var(--okbg); border-color:var(--ok); }
+  .box b:first-child { display:block; margin-bottom:2px; }
+  code, pre { font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px; }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; margin:8px 0; white-space:pre-wrap; word-break:break-word; }
+  .cmd { position:relative; } .cmd button.copy { position:absolute; top:8px; right:8px; }
+  button { font:inherit; font-size:13px; padding:5px 11px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); } button.primary:hover { color:#fff; opacity:.9; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  label { display:block; font-weight:600; font-size:13px; margin:0 0 3px; } .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:10px 0; }
+  input[type=text], select { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .hint { color:var(--muted); font-size:12px; font-weight:400; }
+  .checks { display:flex; flex-wrap:wrap; gap:6px 16px; } .checks label { font-weight:400; display:inline-flex; gap:5px; align-items:center; margin:0; }
+  .stage { border:1px solid var(--line); border-radius:8px; padding:10px 14px 4px; margin:14px 0; } .stage.done { border-color:var(--ok); } .stage h3 { margin:0 0 4px; font-size:16px; display:flex; gap:8px; align-items:center; }
+  .stage h3 label { margin:0 0 0 auto; font-weight:400; font-size:13px; display:inline-flex; gap:5px; align-items:center; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; } th, td { text-align:left; padding:6px 9px; border:1px solid var(--line); vertical-align:top; } th { background:var(--code); }
+  #errs { color:var(--bad); font-size:13px; margin:6px 0; } #errs div::before { content:"\2022 "; } .small { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Run the AWS sizing tool (Python)</h1>
+  <p class="sub">Branch <code>master</code> &middot; <code>CLOUD/python/aws</code> &middot; a runbook and command builder. This page does not run anything: it builds commands and a script that you run in your own terminal.</p>
+
+  <div class="box warn"><b>Before you run it</b>
+    The tool is <b>read-only</b> (List/Describe/Get calls). The main files (EC2, volumes, RDS, EFS, DynamoDB, S3, secrets, SQS, KMS, snapshots) were compared with a PowerShell run of the same account and matched. <b>Not run on a real account yet:</b> Cost Explorer, the organization and named-account modes, GovCloud, the SSO device sign-in, the profile modes, recovery points, FSx, Glue and S3 Tables data, and S3 sizes across several storage classes. Start with one account and one region.
+    The CSV files and the JSON hold account IDs, resource names and tags: keep them local, or run with <code>--anonymize</code> (the zip then has no raw JSON; the file that maps labels back stays beside it). Cost Explorer API requests are billed per request (check current AWS pricing); the builder skips cost data by default.
+  </div>
+
+  <h2>1. Command builder</h2>
+  <div class="row">
+    <div><label for="mode">Mode</label>
+      <select id="mode"><option value="single">Single account (current credentials) &ndash; recommended first</option><option value="sso">SSO: many accounts (--sso)</option><option value="org">Organization (--org)</option><option value="cross">Named accounts through a role (--cross-account-role)</option><option value="profiles">Named local profiles (--profiles)</option><option value="allprofiles">Every local profile (--all-profiles)</option></select></div>
+    <div><label for="profile">AWS profile <span class="hint">(optional, sets AWS_PROFILE)</span></label><input type="text" id="profile" placeholder="my-sandbox"></div>
+    <div><label for="regions">Regions <span class="hint">comma-separated; empty = all enabled</span></label><input type="text" id="regions" value="us-east-1"></div>
+  </div>
+  <div class="row" id="ssoFields" hidden>
+    <div><label for="ssoUrl">SSO start URL</label><input type="text" id="ssoUrl" placeholder="https://myorg.awsapps.com/start"></div>
+    <div><label for="roleName">Permission set name <span class="hint">(required; as assigned to you in IAM Identity Center)</span></label><input type="text" id="roleName" placeholder="ReadOnlyAccess"></div>
+    <div><label for="ssoRegion">SSO region <span class="hint">(optional; default: your cached login, else us-east-1)</span></label><input type="text" id="ssoRegion" placeholder="us-east-1"></div>
+  </div>
+  <div class="row" id="orgFields" hidden>
+    <div><label for="orgRole">Role name in each account <span class="hint">(default RubrikDiscoveryRole)</span></label><input type="text" id="orgRole" placeholder="RubrikDiscoveryRole"></div>
+  </div>
+  <div class="row" id="crossFields" hidden>
+    <div><label for="crossRole">Role name in each account</label><input type="text" id="crossRole" placeholder="OrganizationAccountAccessRole"></div>
+  </div>
+  <div class="row" id="acctFields" hidden>
+    <div><label for="accounts">Account IDs <span class="hint">(optional; required for named accounts)</span></label><input type="text" id="accounts" placeholder="123456789012,234567890123"></div>
+    <div><label for="accountsFile">or a file with one ID per line <span class="hint">(absolute path)</span></label><input type="text" id="accountsFile" placeholder="/home/me/accounts.txt"></div>
+  </div>
+  <div class="row" id="profileFields" hidden>
+    <div><label for="profiles">Profile names <span class="hint">comma-separated</span></label><input type="text" id="profiles" placeholder="prod,staging"></div>
+  </div>
+  <div class="row" id="locationFields" hidden>
+    <div><label for="profileLocation">Credentials file <span class="hint">(optional; absolute path)</span></label><input type="text" id="profileLocation" placeholder="/home/me/aws-creds"></div>
+  </div>
+  <label>Services</label>
+  <div class="checks" id="services"></div>
+  <p class="small" style="margin:4px 0"><button type="button" id="svcAll">All</button> <button type="button" id="svcFew">EC2 + RDS only</button></p>
+  <div class="checks" style="margin:10px 0">
+    <label><input type="checkbox" id="noCost" checked> <code>--no-cost</code> skip Cost Explorer (12-month spend)</label>
+    <label><input type="checkbox" id="noCapacity"> <code>--no-capacity</code> skip S3 sizing (drops the S3 collector)</label>
+    <label><input type="checkbox" id="noBackupCapacity"> <code>--no-backup-capacity</code> skip RDS snapshots, EBS snapshots and AMIs (otherwise they run with ec2 and rds)</label>
+    <label><input type="checkbox" id="noCsv"> <code>--no-csv</code> JSON only, no PowerShell-style CSV files</label>
+    <label><input type="checkbox" id="preflightOnly"> <code>--preflight-only</code> only check what the sign-in can read in each account and write <code>aws_access_check_&lt;timestamp&gt;.zip</code>; nothing is collected (run this first for many accounts)</label>
+    <label><input type="checkbox" id="keepArtifacts"> <code>--keep-artifacts</code> also leave the loose JSON and CSV files beside the zip (single account only; by default only the zip is left)</label>
+    <label><input type="checkbox" id="skipBucketTags"> <code>--skip-bucket-tags</code> do not read S3 bucket tags</label>
+    <label><input type="checkbox" id="govcloud"> <code>--partition govcloud</code> scan GovCloud (Cost Explorer is skipped; not run on a real GovCloud account yet)</label>
+    <label><input type="checkbox" id="anonymize"> <code>--anonymize</code> replace names, IDs and tags in the CSV files (the zip has no raw JSON)</label>
+    <label><input type="checkbox" id="verbose"> <code>--verbose</code> debug logging</label>
+  </div>
+  <div class="row" id="anonFields" hidden>
+    <div><label for="anonymizeFields">Also anonymize these fields <span class="hint">(optional, comma-separated)</span></label><input type="text" id="anonymizeFields" placeholder="Region,InstanceType"></div>
+    <div><label for="notAnonymizeFields">Leave these alone <span class="hint">(optional; <code>Tags</code> keeps all tag columns)</span></label><input type="text" id="notAnonymizeFields" placeholder="Name,Tags"></div>
+  </div>
+  <div class="row">
+    <div><label for="regionToQuery">Region for account-wide calls <span class="hint">(optional; <code>--region-to-query</code>)</span></label><input type="text" id="regionToQuery" placeholder="us-east-1"></div>
+    <div><label for="rpMinutes">Recovery point time budget per region, minutes <span class="hint">(default 60)</span></label><input type="number" id="rpMinutes" value="60" min="1"></div>
+  </div>
+  <div class="row"><div><label for="outDir">Output directory <span class="hint">(a relative path is next to the downloaded script)</span></label><input type="text" id="outDir" value="./output"></div></div>
+  <div id="errs"></div>
+  <div id="notes"></div>
+  <div class="cmd"><button class="copy" data-copy="#cmd">Copy</button><pre id="cmd"></pre></div>
+  <p><button class="primary" id="dl">Download run-aws-sizing.sh</button> <span class="small">Run <code>bash run-aws-sizing.sh</code>. It uses the <code>rubrik-sizing-scripts</code> checkout the script sits in, or the one your current folder is in. If there is none, it offers to clone into <code>./rubrik-sizing-scripts</code> in the folder you run it from (never into your home folder unless you run it there). <code>REPO_DIR=/path bash run-aws-sizing.sh</code> overrides all of this. It then sets up a virtualenv, shows which AWS account you are about to scan, asks you to confirm, and runs the command above.</span></p>
+
+  <h2>2. Step by step</h2>
+  <p class="small">Tick each stage when done (saved in this browser). Do not move on if a stage looks wrong.</p>
+
+  <div class="stage" data-stage="s0"><h3>Stage 0 &ndash; Confirm which account you are in <label><input type="checkbox"> done</label></h3>
+    <p>For SSO first run <code>aws sso login --profile &lt;profile&gt;</code>. Make sure the Account ID is the one you intend. The downloaded script also checks the identity the Python tool itself sees: it can differ from this one, for example after <code>aws login</code>.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>aws sts get-caller-identity</pre></div></div>
+
+  <div class="stage" data-stage="s1"><h3>Stage 1 &ndash; Get the code and install <label><input type="checkbox"> done</label></h3>
+    <p>Python 3.9 or newer. A sparse clone fetches only <code>CLOUD</code> instead of the whole repository. The downloaded script does this for you if <code>~/rubrik-sizing-scripts</code> is missing. Do not use <code>install.sh</code> (it downloads from a placeholder bucket). The clone below uses the <code>master</code> branch.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>git clone --depth 1 --filter=blob:none --sparse --branch master \
+  https://github.com/rubrikinc/rubrik-sizing-scripts.git ~/rubrik-sizing-scripts
+git -C ~/rubrik-sizing-scripts sparse-checkout set CLOUD
+cd ~/rubrik-sizing-scripts/CLOUD/python/aws
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --help</pre></div></div>
+
+  <div class="stage" data-stage="s2"><h3>Stage 2 &ndash; Smallest real run <label><input type="checkbox"> done</label></h3>
+    <p>One region, EC2 and RDS (with their snapshots and AMIs), no cost data. Use the builder above, or:</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>AWS_PROFILE=&lt;profile&gt; python main.py --regions us-east-1 --services ec2,rds --no-cost --output ./output</pre></div>
+    <p>Writes <code>./output/aws_sizing_results_&lt;timestamp&gt;.zip</code> containing <code>aws_sizing_discovery.json</code>, the PowerShell-style CSV files and <code>output_aws_&lt;timestamp&gt;.log</code> (same names as the PowerShell script).</p></div>
+
+  <div class="stage" data-stage="s3"><h3>Stage 3 &ndash; Inspect the result <label><input type="checkbox"> done</label></h3>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>unzip -o output/aws_sizing_results_*.zip -d output/last
+python3 - &lt;&lt;'PY'
+import json, os
+path = 'output/last/aws_sizing_discovery.json'
+if not os.path.exists(path):
+    import glob
+    per_account = sorted(glob.glob('output/last/*/aws_sizing_discovery.json'))
+    if per_account:
+        raise SystemExit('Multi-account zip: one JSON per account folder (%d found). Point path at one of them.' % len(per_account))
+    raise SystemExit('No JSON in the zip (an --anonymize run leaves it out); open the CSV files in output/last instead.')
+d = json.load(open(path))
+print('account       :', d['account_id'])
+print('regions       :', d['regions_scanned'])
+print('ec2 instances :', len(d['ec2_instances']))
+print('ebs attached  :', len(d['ec2_attached_volumes']), ' unattached:', len(d['ec2_unattached_volumes']))
+print('rds           :', len(d['rds_instances']))
+print('s3 buckets    :', len(d['s3_buckets']))
+print('scp suspected :', d['scp_restrictions_suspected'])
+print('scan_errors   :', json.dumps(d['scan_errors'], indent=1))
+PY</pre></div>
+    <p class="small">This is for a single-account zip. A zip from SSO, org, named-account or profile modes has one <code>&lt;account id&gt;/aws_sizing_discovery.json</code> per account, and the CSV files in it cover all accounts together.</p>
+    <p><b>Check:</b> the counts match the AWS console for that region; <code>scan_errors</code> is empty (otherwise note the service and error); no <code>docdb</code> or <code>neptune</code> instances in the RDS list. If you can, run the PowerShell script on the same account and compare.</p></div>
+
+  <div class="stage" data-stage="s4"><h3>Stage 4 &ndash; Add S3 <label><input type="checkbox"> done</label></h3>
+    <p>S3 sizing makes CloudWatch calls per bucket. Look at <code>size_metric_failed</code> and <code>object_count_metric_failed</code> on each bucket: <code>true</code> means a size of 0 is "unknown", not "empty".</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>AWS_PROFILE=&lt;profile&gt; python main.py --regions us-east-1 --services ec2,rds,s3 --no-cost</pre></div></div>
+
+  <div class="stage" data-stage="s5"><h3>Stage 5 &ndash; All regions, all services <label><input type="checkbox"> done</label></h3>
+    <p>Unreachable or not-enabled regions are skipped quietly by the tool's region probe.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>AWS_PROFILE=&lt;profile&gt; python main.py --no-cost</pre></div></div>
+
+  <div class="stage" data-stage="s6"><h3>Stage 6 &ndash; Cost data (optional) <label><input type="checkbox"> done</label></h3>
+    <p>Drops <code>--no-cost</code>. Needs <code>ce:GetCostAndUsage</code>. An interactive terminal also asks yes/no for the cost and S3 scans.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>AWS_PROFILE=&lt;profile&gt; python main.py</pre></div></div>
+
+  <div class="stage" data-stage="s7"><h3>Stage 7 &ndash; Many accounts (only after the single account looks right) <label><input type="checkbox"> done</label></h3>
+    <p>Use the builder's <b>SSO</b>, <b>Organization</b>, <b>named accounts</b> or <b>profile</b> modes. Restrict to a few accounts with the account list first, and tick <code>--preflight-only</code> for a first pass: it signs in to every account, runs only the access check and lists the accounts it could not enter, which also get a <code>sign in</code> row in <code>aws_preflight_check-&lt;timestamp&gt;.csv</code>. Nothing is collected, and it does not touch the progress folder, so the full run afterwards is not affected. With SSO you can skip <code>aws sso login</code>: the tool prints a link and a code and waits for you to sign in. The zip goes to the output directory, next to the downloaded script, as in single-account mode. To combine the CSV files of several runs, run it from the folder above <code>aws</code> (it does not work from inside <code>aws</code>): <code>cd .. &amp;&amp; python -m common.consolidate DIR</code>.</p></div>
+
+  <h2>3. Troubleshooting</h2>
+  <table>
+    <tr><th>You see</th><th>Meaning / what to do</th></tr>
+    <tr><td>The downloaded script says <code>The Python tool cannot use your AWS credentials</code></td><td>The <code>aws</code> command can sign in in ways the Python library cannot. After <code>aws login</code>, either put temporary credentials in the terminal with <code>eval "$(aws configure export-credentials --format env)"</code> (AWS CLI v2.9 or newer), or run <code>pip install "botocore[crt]"</code> in the tool's virtualenv. Then run the script again.</td></tr>
+    <tr><td>The downloaded script warns that your checkout is behind <code>master</code></td><td>The script only clones when there is no checkout; it never updates one. Run <code>git -C &lt;the folder it names&gt; pull --ff-only</code> and run it again, or answer <code>y</code> to run the older code anyway. Set <code>SKIP_UPDATE_CHECK=1</code> to skip the check.</td></tr>
+    <tr><td><code>Unable to locate credentials</code> or <code>ExpiredToken</code></td><td>No or expired credentials. Set <code>AWS_PROFILE</code>, export keys, or <code>aws sso login</code>; re-run Stage 0.</td></tr>
+    <tr><td><code>Cannot sign in to ... skipping</code> in a run of many accounts</td><td>The tool could not get into that account (the role is missing or does not trust you, the permission set is not assigned, or a service control policy denies it). The closing box lists every such account, and each has a <code>sign in</code> row with the error code in <code>aws_preflight_check-&lt;timestamp&gt;.csv</code>. Fix them, checking with <code>--preflight-only</code>, then run the same command again.</td></tr>
+    <tr><td><code>scan_errors</code> with <code>AccessDenied</code></td><td>The identity lacks a read permission for that service and region. The run continues; add the permission (see below) or skip the service with <code>--services</code>.</td></tr>
+    <tr><td><code>--anonymize</code> run: where is the mapping back to real names?</td><td>Beside the zip: <code>aws_anonymized_keys_to_actual_values-&lt;timestamp&gt;.csv</code> and <code>output_aws_not_anonymized_&lt;timestamp&gt;.log</code>. Neither is inside the zip. Keep them local.</td></tr>
+    <tr><td>SSO: "No cached SSO login was found"</td><td>Run <code>aws sso login</code>, or pass <code>--sso-start-url</code> so the tool signs in itself (it prints a link and a code).</td></tr>
+    <tr><td><code>scan_errors</code> for <code>cloudwatch</code> mentioning <code>ListMetrics</code></td><td>S3 sizes then use only the Standard storage class. Add <code>cloudwatch:ListMetrics</code> to see every class.</td></tr>
+    <tr><td><code>scp_restrictions_suspected: true</code></td><td>An organization policy (SCP) explicitly denied a call. Not fixable from the tool; try other regions or ask the account owner.</td></tr>
+    <tr><td><code>scan_errors</code> entry for <code>cloudwatch</code> with "throttled"</td><td>CloudWatch rate limit. The tool retries; sizes for those items are unreliable. Re-run later or with fewer regions.</td></tr>
+    <tr><td>A region is missing from the results</td><td>The region probe skips regions that are not enabled or unreachable. Check <code>output_aws_&lt;timestamp&gt;.log</code> in the zip.</td></tr>
+    <tr><td>Bucket with <code>size_metric_failed: true</code></td><td>The size lookup failed; a size of 0 means unknown.</td></tr>
+  </table>
+
+  <h2>4. Reference</h2>
+  <details><summary><b>Read-only permissions the tool uses</b> (from <code>aws/iac/2-sizing-tool-spokes.yaml</code>; the <code>iac</code> collector also calls <code>cloudformation:ListStacks</code>)</summary>
+    <pre>iam:ListAccountAliases  sts:GetCallerIdentity
+ec2:DescribeAvailabilityZones DescribeInstances DescribeInstanceTypes DescribeRegions DescribeVolumes DescribeSnapshots DescribeImages
+rds:DescribeDBInstances DescribeDBSnapshots DescribeDBClusterSnapshots  rds:ListTagsForResource
+dynamodb:ListTables DescribeTable DescribeContinuousBackups ListTagsOfResource
+elasticfilesystem:DescribeFileSystems   fsx:DescribeFileSystems DescribeVolumes
+s3:GetBucketLocation ListAllMyBuckets GetBucketTagging
+cloudwatch:GetMetricStatistics GetMetricData ListMetrics
+s3:ListStorageLensConfigurations GetStorageLensConfiguration
+kms:ListKeys DescribeKey ListAliases  secretsmanager:ListSecrets  sqs:ListQueues
+ec2:DescribeVpcs  elasticloadbalancing:DescribeLoadBalancers DescribeTags
+eks:ListClusters DescribeCluster ListNodegroups DescribeNodegroup
+route53:ListHostedZones  iam:ListUsers ListRoles ListPolicies  redshift:DescribeClusters DescribeClusterSnapshots  dynamodb:ListBackups  fsx:DescribeBackups
+backup:ListBackupVaults ListRecoveryPointsByBackupVault
+s3tables:ListTableBuckets ListTables GetTable GetTableMetadataLocation GetTableMaintenanceConfiguration ListTagsForResource GetTableData
+glue:GetDatabases GetTables GetTags  s3:GetObject (only keys under metadata/)  kms:Decrypt
+ce:GetCostAndUsage GetDimensionValues  (only without --no-cost)
+backup:ListBackupPlans ListBackupSelections GetBackupPlan GetBackupSelection ListProtectedResources</pre>
+    <p class="small"><code>ce:GetDimensionValues</code> is in the template but the tool does not call it.</p>
+    <p><b>Only for the multi-account modes</b> (not in the template above):</p>
+    <pre>--org                                   organizations:ListAccounts in the management account
+--org, --cross-account-role, --assume-role   sts:AssumeRole on the role in each target account (and a trust policy that allows you)
+--sso                                   no IAM policy: the user you sign in as must be allowed to list accounts and roles in IAM Identity Center,
+                                        and the permission set needs the read permissions above</pre>
+    <p class="small">For a first test the AWS-managed <code>ReadOnlyAccess</code> policy covers all of these.</p></details>
+  <details><summary><b>Files in the zip</b></summary>
+    <table>
+      <tr><th>File</th><th>Content</th></tr>
+      <tr><td><code>aws_sizing_discovery.json</code></td><td>Everything collected. Left out of an <code>--anonymize</code> zip. In a multi-account zip there is one per account, as <code>&lt;account id&gt;/aws_sizing_discovery.json</code>.</td></tr>
+      <tr><td><code>output_aws_&lt;stamp&gt;.log</code></td><td>The run log. An <code>--anonymize</code> zip has a one-line note under this name instead.</td></tr>
+      <tr><td><code>aws_*-&lt;stamp&gt;.csv</code> (26 kinds)</td><td>The PowerShell-style CSV files, with the same names and columns: <code>aws_ec2_instance_info</code>, <code>aws_ec2_attached_volume_info</code>, <code>aws_ec2_unattached_volume_info</code>, <code>aws_rds_info</code>, <code>aws_efs_info</code>, <code>aws_DynamoDB_info</code>, <code>aws_s3_info</code>, <code>aws_rds_snapshot_info</code>, <code>aws_ebs_and_ami_info</code>, <code>aws_vpc_info</code>, <code>aws_lb_info</code>, <code>aws_route53_info</code>, <code>aws_iam_info</code>, <code>aws_eks_clusters_info</code>, <code>aws_eks_nodegroups_info</code>, <code>aws_kms_numbers</code>, <code>aws_redshift_info</code>, <code>aws_backup_costs</code>, <code>aws_snapshot_storage_costs</code>, <code>aws_fsx_filesystem_info</code>, <code>aws_fsx_volume_info</code>, <code>aws_s3_tables_info</code>, <code>aws_glue_iceberg_info</code>, <code>aws_backup_recovery_points</code>, <code>aws_secrets_numbers</code>, <code>aws_sqs_numbers</code>. A file with no rows is a 0-byte file. In multi-account runs one set covers all accounts.</td></tr>
+    </table>
+    <p class="small">The zip is named <code>aws_sizing_results_&lt;yyyy-MM-dd_HHmmss&gt;.zip</code>, like the PowerShell script's. A single-account run leaves <b>only the zip</b> in the output folder. An <code>--anonymize</code> run also leaves <code>aws_anonymized_keys_to_actual_values-&lt;stamp&gt;.csv</code> (maps the labels back) and <code>output_aws_not_anonymized_&lt;stamp&gt;.log</code>: keep those, do not send them.</p></details>
+  <details><summary><b>Flags</b></summary>
+    <table>
+      <tr><td><code>--regions a,b</code> / <code>--exclude-regions a,b</code></td><td>Limit or skip regions (default: all enabled).</td></tr>
+      <tr><td><code>--services ec2,rds,...</code></td><td>Subset of: backup, dynamodb, ec2, efs, eks, fsx, glue, iac, iam, kms, lb, rds, redshift, route53, s3, s3tables, secrets, sqs, vpc. Leave it out to run everything except <code>iac</code>. Snapshots and AMIs are collected with <code>ec2</code> and <code>rds</code> unless <code>--no-backup-capacity</code>.</td></tr>
+      <tr><td><code>--no-backup-capacity</code></td><td>Skip RDS snapshots, EBS snapshots and AMIs (like PowerShell's -SkipBackupCapacity).</td></tr>
+      <tr><td><code>--no-csv</code></td><td>Write only the JSON, not the PowerShell-style CSV files.</td></tr>
+      <tr><td><code>--preflight-only</code></td><td>Only run the access check, in every account of the mode (or the current account), and write <code>aws_access_check_&lt;timestamp&gt;.zip</code> with <code>aws_preflight_check-&lt;timestamp&gt;.csv</code> and the log. Nothing is collected and no progress folder is used. Accounts that cannot be signed in to get a <code>sign in</code> row and are listed at the end. Not with <code>--no-csv</code>; without <code>--no-cost</code> it makes one billed Cost Explorer request per account.</td></tr>
+      <tr><td><code>--keep-artifacts</code></td><td>Single-account mode: also leave the loose JSON and CSV files beside the zip. By default only the zip is left, as with Azure and GCP. With <code>--anonymize</code> the loose JSON holds the real names. The multi-account modes write only the zip and ignore it.</td></tr>
+      <tr><td><code>--all-profiles</code> / <code>--profiles a,b</code> / <code>--profile-location FILE</code></td><td>Scan the account of every local profile, or only the named ones, reading profiles from another credentials file (PowerShell's -AllLocalProfiles, -UserSpecifiedProfileNames, -ProfileLocation).</td></tr>
+      <tr><td><code>--cross-account-role NAME --accounts a,b</code> (or <code>--accounts-file FILE</code>)</td><td>Scan the named accounts through an IAM role, without calling Organizations (PowerShell's -CrossAccountRoleName).</td></tr>
+      <tr><td><code>--org --role-name NAME</code> (alias <code>--org-role-name</code>) [<code>--accounts a,b</code>]</td><td>All accounts of the organization, or only the listed ones, through this role. The default is <code>RubrikDiscoveryRole</code>; PowerShell's default is <code>OrganizationAccountAccessRole</code>.</td></tr>
+      <tr><td><code>--sso --sso-start-url URL --sso-region REGION</code> [<code>--role-name NAME</code>] [<code>--accounts a,b</code>]</td><td>Scan through IAM Identity Center, all accounts or the listed ones, with this permission set. Signs in with a device link if <code>aws sso login</code> was not run. The region defaults to the cached login's, else us-east-1.</td></tr>
+      <tr><td><code>--partition govcloud</code> / <code>--region-to-query REGION</code></td><td>Scan GovCloud (account-wide calls use us-gov-east-1; Cost Explorer is skipped), or choose the region for STS, IAM and Organizations calls.</td></tr>
+      <tr><td><code>--anonymize</code> [<code>--anonymize-fields a,b</code>] [<code>--not-anonymize-fields a,b</code>]</td><td>Replace names, ids and tags in the CSV files with labels. The zip then has no raw JSON; the file that maps labels back to real values and the real log are written beside the zip, not inside it. <code>Tags</code> in <code>--not-anonymize-fields</code> leaves all tag columns alone.</td></tr>
+      <tr><td><code>cd .. &amp;&amp; python -m common.consolidate DIR</code></td><td>Run from the folder above <code>aws</code>. Combine the CSV files of several runs into one <code>&lt;prefix&gt;_combined.csv</code> per kind (PowerShell's consolidate.ps1).</td></tr>
+      <tr><td><code>--bucket NAME</code> [<code>--bucket-region REGION</code>]</td><td>Also upload the results to this S3 bucket (default region us-east-1). Needs <code>s3:PutObject</code> on it. Optional; the zip is always written locally.</td></tr>
+      <tr><td><code>--no-cost</code> / <code>--no-capacity</code></td><td>Skip Cost Explorer / skip S3 sizing (drops the S3 collector).</td></tr>
+      <tr><td><code>--assume-role ARN</code></td><td>Assume a role before scanning.</td></tr>
+      <tr><td><code>--output DIR</code>, <code>--workers N</code>, <code>--verbose</code></td><td>Folder for the zip, the run log and the progress folder (default: <code>./outputs</code> for one account, the current folder for several); accounts in parallel; debug logging.</td></tr>
+    </table></details>
+  <p class="small">The PowerShell scripts remain the reference for output files and sizing rules. Python parameter mapping: <code>CLOUD/python/docs/powershell-parameter-mapping.md</code>.</p>
+</main>
+
+<script>
+const SERVICES = ["ec2","rds","dynamodb","efs","fsx","s3","kms","secrets","sqs","backup","vpc","lb","eks","redshift","route53","iam","s3tables","glue","iac"];
+const DEFAULT_SERVICES = SERVICES.filter(s => s !== "iac");
+const SAFE = /^[A-Za-z0-9._@:\/=+,-]*$/;
+
+function q(v) { return "'" + String(v).replace(/'/g, "'\\''") + "'"; }
+
+// The output folder as the script writes it: a relative path is taken next to the script itself.
+function outPath(dir) {
+  const d = String(dir).replace(/\/+$/, "") || "/";
+  return d.startsWith("/") ? q(d) : '"$SCRIPT_DIR"/' + q(d.replace(/^(\.\/)+/, "") || ".");
+}
+
+function validate(c) {
+  const e = [];
+  const text = {profile:c.profile, regions:c.regions, ssoUrl:c.ssoUrl, ssoRegion:c.ssoRegion, roleName:c.roleName,
+    accounts:c.accounts, accountsFile:c.accountsFile, orgRole:c.orgRole, crossRole:c.crossRole, profiles:c.profiles,
+    profileLocation:c.profileLocation, regionToQuery:c.regionToQuery, anonymizeFields:c.anonymizeFields,
+    notAnonymizeFields:c.notAnonymizeFields, outDir:c.outDir};
+  for (const [k, v] of Object.entries(text)) {
+    if (!SAFE.test(v || "")) e.push(k + ": only letters, digits and . _ @ : / = + , - are allowed (no spaces or ~)");
+  }
+  if (c.regions && !/^[a-z0-9-]+(,[a-z0-9-]+)*$/.test(c.regions)) e.push("regions: use region names like us-east-1,us-west-2");
+  if (c.regionToQuery && !/^[a-z0-9-]+$/.test(c.regionToQuery)) e.push("region for account-wide calls: use one region name like us-east-1");
+  if (c.ssoRegion && !/^[a-z0-9-]+$/.test(c.ssoRegion)) e.push("SSO region: use one region name like us-east-1");
+  if (c.accounts && !/^\d{12}(,\d{12})*$/.test(c.accounts)) e.push("accounts: use 12-digit account IDs separated by commas");
+  if (c.accounts && c.accountsFile) e.push("use either the account IDs or the accounts file, not both");
+  if (c.mode === "sso" && c.ssoUrl && !/^https:\/\//.test(c.ssoUrl)) e.push("SSO start URL must start with https://");
+  if (c.mode === "sso" && !c.roleName) e.push("SSO: give the permission set name assigned to you in the accounts (--role-name); IAM Identity Center has no default one");
+  if (c.mode === "cross" && !c.crossRole) e.push("named accounts: give the role name");
+  if (c.mode === "cross" && !c.accounts && !c.accountsFile) e.push("named accounts: give the account IDs or an accounts file");
+  if (c.mode === "profiles" && !c.profiles) e.push("named profiles: give the profile names");
+  if (c.profiles && !/^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$/.test(c.profiles)) e.push("profiles: use profile names separated by commas");
+  if ((c.anonymizeFields || c.notAnonymizeFields) && !c.anonymize) e.push("the anonymize field lists need --anonymize ticked");
+  if (c.anonymize && c.noCsv) e.push("--anonymize works on the CSV files, so it cannot be combined with --no-csv");
+  if (c.preflightOnly && c.noCsv) e.push("--preflight-only writes only the access-check CSV, so it cannot be combined with --no-csv");
+  if (c.rpMinutes !== undefined && c.rpMinutes !== "" && !(Number.isInteger(Number(c.rpMinutes)) && Number(c.rpMinutes) >= 1)) e.push("recovery point time budget: a whole number of minutes, at least 1");
+  if (c.services.length === 0) e.push("pick at least one service");
+  if (!c.outDir) e.push("give an output directory");
+  return e;
+}
+
+function buildArgs(c) {
+  const a = [];
+  const accountArgs = () => {
+    if (c.accounts) a.push("--accounts", q(c.accounts));
+    if (c.accountsFile) a.push("--accounts-file", q(c.accountsFile));
+  };
+  if (c.mode === "sso") {
+    a.push("--sso");
+    if (c.ssoUrl) a.push("--sso-start-url", q(c.ssoUrl));
+    if (c.ssoRegion) a.push("--sso-region", q(c.ssoRegion));
+    if (c.roleName) a.push("--role-name", q(c.roleName));
+    accountArgs();
+  } else if (c.mode === "org") {
+    a.push("--org");
+    if (c.orgRole) a.push("--role-name", q(c.orgRole));
+    accountArgs();
+  } else if (c.mode === "cross") {
+    a.push("--cross-account-role", q(c.crossRole));
+    accountArgs();
+  } else if (c.mode === "profiles") {
+    a.push("--profiles", q(c.profiles));
+  } else if (c.mode === "allprofiles") {
+    a.push("--all-profiles");
+  }
+  if (c.profileLocation && ["single", "profiles", "allprofiles"].includes(c.mode)) a.push("--profile-location", q(c.profileLocation));
+  if (c.govcloud) a.push("--partition", "govcloud");
+  if (c.regionToQuery) a.push("--region-to-query", q(c.regionToQuery));
+  if (c.regions) a.push("--regions", q(c.regions));
+  const isDefault = c.services.length === DEFAULT_SERVICES.length && DEFAULT_SERVICES.every(s => c.services.includes(s));
+  if (c.services.length > 0 && !isDefault) a.push("--services", c.services.join(","));
+  if (c.noCost) a.push("--no-cost");
+  if (c.noCapacity) a.push("--no-capacity");
+  if (c.noBackupCapacity) a.push("--no-backup-capacity");
+  if (c.noCsv) a.push("--no-csv");
+  if (c.preflightOnly) a.push("--preflight-only");
+  if (c.mode === "single" && c.keepArtifacts && !c.preflightOnly) a.push("--keep-artifacts");
+  if (c.skipBucketTags) a.push("--skip-bucket-tags");
+  if (c.rpMinutes !== undefined && c.rpMinutes !== "" && Number(c.rpMinutes) !== 60) a.push("--backup-recovery-point-timeout-minutes", String(Number(c.rpMinutes)));
+  if (c.anonymize) {
+    a.push("--anonymize");
+    if (c.anonymizeFields) a.push("--anonymize-fields", q(c.anonymizeFields));
+    if (c.notAnonymizeFields) a.push("--not-anonymize-fields", q(c.notAnonymizeFields));
+  }
+  if (c.verbose) a.push("--verbose");
+  if (c.outDir) a.push("--output", c.outShell || q(c.outDir));
+  return a;
+}
+
+function buildCommand(c) {
+  const prefix = c.profile ? "AWS_PROFILE=" + q(c.profile) + " " : "";
+  return prefix + ["python main.py"].concat(buildArgs(c)).join(" ");
+}
+
+function buildNotes(c) {
+  const n = [];
+  if (c.noCapacity && c.services.includes("s3")) n.push("--no-capacity removes the S3 collector, so S3 will not be scanned even though it is ticked.");
+  if (c.mode !== "single") n.push("This mode scans more than one account. Run a single account first and check the results.");
+  if (c.mode === "org") n.push("Org mode assumes a role in each account and needs that role to exist (default name RubrikDiscoveryRole; PowerShell's default is OrganizationAccountAccessRole).");
+  if (c.mode === "cross") n.push("Named-account mode assumes the role in each listed account; it does not call Organizations.");
+  if (c.mode === "sso" && !c.profile) n.push("If no aws sso login is cached, the tool prints a link and a code and waits for you to sign in.");
+  if (c.govcloud) n.push("GovCloud was tested with fakes only, not a real GovCloud account. Cost Explorer is skipped there.");
+  if (c.anonymize) n.push("Anonymized run: the zip has no raw JSON. The file mapping labels back to real values and the real log are written beside the zip, not inside it.");
+  if (c.keepArtifacts && c.mode !== "single") n.push("--keep-artifacts applies to a single account only; this mode writes just the zip, so it is left out of the command.");
+  if (c.keepArtifacts && c.mode === "single" && c.anonymize) n.push("--keep-artifacts with --anonymize also leaves the raw JSON, which holds the real names, beside the zip.");
+  if (c.preflightOnly) n.push("Access check only: nothing is collected. The zip holds aws_preflight_check-<timestamp>.csv and the log; accounts that cannot be signed in to get a 'sign in' row and are listed at the end.");
+  if (c.preflightOnly && c.keepArtifacts) n.push("--keep-artifacts has no effect with --preflight-only, so it is left out of the command.");
+  if (c.outDir) n.push("The zip and the run log go to " + c.outDir + (c.outDir.startsWith("/") ? "" : ", next to the downloaded script") + (c.mode === "single" ? "." : ", with the progress folder of an unfinished run."));
+  if (!c.noCost) n.push("Cost Explorer requests are billed per request and need ce:GetCostAndUsage.");
+  return n;
+}
+
+function buildScript(c) {
+  const profileExport = c.profile ? "export AWS_PROFILE=" + q(c.profile) + "\n" : "";
+  const login = c.profile && c.mode === "sso" ? "aws sso login --profile " + q(c.profile) + "\n" : "";
+  const profileOnly = ["profiles", "allprofiles"].includes(c.mode);
+  const cmd = ["python main.py"].concat(buildArgs({ ...c, outShell: '"$OUT_DIR"' })).join(" ");
+  const queryRegion = c.regionToQuery || (c.govcloud ? "us-gov-east-1" : "us-east-1");
+  const zipGlob = c.preflightOnly ? "aws_access_check_*.zip" : "aws_sizing_results_*.zip";
+  const finder = 'ZIP="$(ls -t "$OUT_DIR"/' + zipGlob + ' 2>/dev/null | head -1 || true)"';
+  const what = c.preflightOnly ? "Access report" : "Results";
+  const identity = profileOnly
+    ? ['echo "You are about to scan the accounts behind the local profiles you chose."']
+    : [
+      'echo "You are about to scan with this AWS identity, as the Python tool sees it:"',
+      "python - <<'PY'",
+      "import sys",
+      "import boto3",
+      "try:",
+      '    who = boto3.client("sts", region_name="' + queryRegion + '").get_caller_identity()',
+      "except Exception as exc:",
+      '    print("The Python tool cannot use your AWS credentials: " + type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:200])',
+      `    print('If you signed in with "aws login", run:  eval "$(aws configure export-credentials --format env)"')`,
+      `    print('or install the extra it needs:  pip install "botocore[crt]"')`,
+      "    sys.exit(1)",
+      'print("  Account: " + who["Account"])',
+      'print("  ARN:     " + who["Arn"])',
+      "PY"
+    ];
+  return [
+    "#!/usr/bin/env bash",
+    c.preflightOnly
+      ? "# Generated by aws-run-guide.html. Access check only: read-only, and nothing is collected."
+      : c.anonymize
+        ? "# Generated by aws-run-guide.html. Read-only discovery; the CSV files in the zip are anonymized."
+        : "# Generated by aws-run-guide.html. Read-only discovery; output is not anonymized.",
+    "set -euo pipefail",
+    "",
+    "# Which repo to use, in order: REPO_DIR if set; the rubrik-sizing-scripts checkout this script sits in;",
+    "# the checkout your current folder is in; otherwise ./rubrik-sizing-scripts in the folder you run it from",
+    "# (cloned after asking).",
+    'TOOL_REL="CLOUD/python/aws"',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"',
+    'if [ -z "${REPO_DIR:-}" ]; then',
+    '  for dir in "$SCRIPT_DIR" "$PWD"; do',
+    '    TOP="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"',
+    '    if [ -n "$TOP" ] && [ -d "$TOP/$TOOL_REL" ]; then REPO_DIR="$TOP"; break; fi',
+    "  done",
+    '  REPO_DIR="${REPO_DIR:-$PWD/rubrik-sizing-scripts}"',
+    "fi",
+    'if [ ! -d "$REPO_DIR/$TOOL_REL" ]; then',
+    '  if [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then',
+    '    echo "$REPO_DIR exists but has no $TOOL_REL (wrong branch or not rubrik-sizing-scripts?)."',
+    '    echo "Switch it to branch master, or set REPO_DIR to another checkout."',
+    "    exit 1",
+    "  fi",
+    '  echo "No rubrik-sizing-scripts checkout found."',
+    '  read -r -p "Clone rubrikinc/rubrik-sizing-scripts into $REPO_DIR now (sparse)? [y/N] " clone',
+    '  case "$clone" in [yY]*) ;; *) echo "Aborted. Set REPO_DIR to an existing checkout."; exit 1 ;; esac',
+    '  git clone --depth 1 --filter=blob:none --sparse --branch master \\',
+    '    https://github.com/rubrikinc/rubrik-sizing-scripts.git "$REPO_DIR"',
+    '  git -C "$REPO_DIR" sparse-checkout set CLOUD',
+    "fi",
+    'echo "Using repo: $REPO_DIR"',
+    "echo \"Code: $(git -C \"$REPO_DIR\" log -n1 --format='%h %ad' --date=short 2>/dev/null || echo unknown)\"",
+    "",
+    "# The script never updates an existing checkout, so say if it is behind (SKIP_UPDATE_CHECK=1 skips this).",
+    'if [ -z "${SKIP_UPDATE_CHECK:-}" ]; then',
+    '  if git -C "$REPO_DIR" fetch -q origin master 2>/dev/null; then',
+    '    if ! git -C "$REPO_DIR" merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then',
+    '      echo "WARNING: this checkout does not have the latest master."',
+    '      echo "Update it with: git -C \\"$REPO_DIR\\" pull --ff-only"',
+    '      read -r -p "Run with the code you have anyway? [y/N] " old',
+    '      case "$old" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac',
+    "    fi",
+    "  else",
+    '    echo "(could not check for a newer version; continuing)"',
+    "  fi",
+    "fi",
+    "",
+    "# The output folder; a relative path is taken next to this script.",
+    "OUT_DIR=" + outPath(c.outDir || "output"),
+    'cd "$REPO_DIR/$TOOL_REL"',
+    "",
+    "python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' || { echo \"Python 3.9 or newer is required.\"; exit 1; }",
+    profileExport + login + "python3 -m venv .venv",
+    "source .venv/bin/activate",
+    "pip install -q -r requirements.txt",
+    "",
+    ...identity,
+    'read -r -p "Continue? [y/N] " ans',
+    'case "$ans" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac',
+    "",
+    cmd,
+    "",
+    finder,
+    c.anonymize
+      ? 'if [ -n "$ZIP" ]; then echo "' + what + ': $ZIP (anonymized). The key file and the real log are beside it; keep those local."; fi'
+      : 'if [ -n "$ZIP" ]; then echo "' + what + ': $ZIP (contains account and resource names; keep it local)"; fi',
+    ""
+  ].join("\n");
+}
+
+if (typeof module !== "undefined") module.exports = { q, outPath, validate, buildArgs, buildCommand, buildNotes, buildScript, SERVICES };
+
+if (typeof document !== "undefined") {
+  const $ = id => document.getElementById(id);
+  const svcBox = $("services");
+  SERVICES.forEach(s => {
+    const l = document.createElement("label");
+    const i = document.createElement("input");
+    i.type = "checkbox"; i.value = s;
+    l.append(i, " " + s);
+    svcBox.appendChild(l);
+  });
+  const svcInputs = () => Array.from(svcBox.querySelectorAll("input"));
+  const setServices = list => svcInputs().forEach(i => { i.checked = list.includes(i.value); });
+  setServices(["ec2", "rds"]);
+
+  function config() {
+    return {
+      mode: $("mode").value, profile: $("profile").value.trim(), regions: $("regions").value.trim().replace(/\s+/g, ""),
+      ssoUrl: $("ssoUrl").value.trim(), roleName: $("roleName").value.trim(), accounts: $("accounts").value.trim().replace(/\s+/g, ""),
+      orgRole: $("orgRole").value.trim(), outDir: $("outDir").value.trim(),
+      ssoRegion: $("ssoRegion").value.trim(), accountsFile: $("accountsFile").value.trim(), crossRole: $("crossRole").value.trim(),
+      profiles: $("profiles").value.trim().replace(/\s+/g, ""), profileLocation: $("profileLocation").value.trim(),
+      regionToQuery: $("regionToQuery").value.trim(), rpMinutes: $("rpMinutes").value.trim(),
+      anonymizeFields: $("anonymizeFields").value.trim().replace(/\s+/g, ""), notAnonymizeFields: $("notAnonymizeFields").value.trim().replace(/\s+/g, ""),
+      skipBucketTags: $("skipBucketTags").checked, govcloud: $("govcloud").checked, anonymize: $("anonymize").checked,
+      services: svcInputs().filter(i => i.checked).map(i => i.value),
+      noCost: $("noCost").checked, noCapacity: $("noCapacity").checked, noBackupCapacity: $("noBackupCapacity").checked, noCsv: $("noCsv").checked, preflightOnly: $("preflightOnly").checked, keepArtifacts: $("keepArtifacts").checked, verbose: $("verbose").checked
+    };
+  }
+
+  function render() {
+    const c = config();
+    $("ssoFields").hidden = c.mode !== "sso";
+    $("orgFields").hidden = c.mode !== "org";
+    $("crossFields").hidden = c.mode !== "cross";
+    $("acctFields").hidden = !["sso", "org", "cross"].includes(c.mode);
+    $("profileFields").hidden = c.mode !== "profiles";
+    $("locationFields").hidden = !["single", "profiles", "allprofiles"].includes(c.mode);
+    $("anonFields").hidden = !c.anonymize;
+    const errs = validate(c);
+    $("errs").replaceChildren(...errs.map(t => { const d = document.createElement("div"); d.textContent = t; return d; }));
+    $("notes").replaceChildren(...buildNotes(c).map(t => { const d = document.createElement("div"); d.className = "box warn"; d.textContent = t; return d; }));
+    $("cmd").textContent = errs.length ? "Fix the problems above to generate the command." : buildCommand(c);
+    $("dl").disabled = errs.length > 0;
+  }
+
+  document.querySelectorAll("input[type=text], input[type=number], select, #services input, #noCost, #noCapacity, #noBackupCapacity, #noCsv, #preflightOnly, #keepArtifacts, #verbose, #skipBucketTags, #govcloud, #anonymize").forEach(el => el.addEventListener("input", render));
+  $("svcAll").onclick = () => { setServices(DEFAULT_SERVICES); render(); };
+  $("svcFew").onclick = () => { setServices(["ec2", "rds"]); render(); };
+
+  $("dl").onclick = () => {
+    const blob = new Blob([buildScript(config())], { type: "text/x-shellscript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "run-aws-sizing.sh"; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  document.addEventListener("click", ev => {
+    const b = ev.target.closest("button.copy");
+    if (!b) return;
+    const sel = b.dataset.copy;
+    const el = sel === "next" ? b.parentElement.querySelector("pre") : document.querySelector(sel);
+    const text = el.textContent;
+    const done = () => { const o = b.textContent; b.textContent = "Copied"; setTimeout(() => { b.textContent = o; }, 1200); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
+    else { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); done(); }
+  });
+
+  let state = {};
+  try { state = JSON.parse(localStorage.getItem("aws-run-guide") || "{}"); } catch (e) {}
+  document.querySelectorAll(".stage").forEach(st => {
+    const id = st.dataset.stage, cb = st.querySelector("h3 input");
+    cb.checked = !!state[id]; st.classList.toggle("done", cb.checked);
+    cb.addEventListener("change", () => {
+      state[id] = cb.checked; st.classList.toggle("done", cb.checked);
+      try { localStorage.setItem("aws-run-guide", JSON.stringify(state)); } catch (e) {}
+    });
+  });
+
+  render();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run the Azure sizing tool (Python)</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#59636e; --line:#d0d7de; --code:#f6f8fa; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --warnbg:#fff8c5; --badbg:#ffebe9; --okbg:#dafbe1; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --code:#161b22; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --warnbg:#3b2e00; --badbg:#4b1113; --okbg:#0f2d1a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 20px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; } h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  .box { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:12px 0; background:var(--code); }
+  .box.warn { background:var(--warnbg); border-color:var(--warn); } .box.bad { background:var(--badbg); border-color:var(--bad); } .box.ok { background:var(--okbg); border-color:var(--ok); }
+  .box b:first-child { display:block; margin-bottom:2px; }
+  code, pre { font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px; }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; margin:8px 0; white-space:pre-wrap; word-break:break-word; }
+  .cmd { position:relative; } .cmd button.copy { position:absolute; top:8px; right:8px; }
+  button { font:inherit; font-size:13px; padding:5px 11px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); } button.primary:hover { color:#fff; opacity:.9; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  label { display:block; font-weight:600; font-size:13px; margin:0 0 3px; } .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:10px 0; }
+  input[type=text], select { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .hint { color:var(--muted); font-size:12px; font-weight:400; }
+  .checks { display:flex; flex-wrap:wrap; gap:6px 16px; } .checks label { font-weight:400; display:inline-flex; gap:5px; align-items:center; margin:0; }
+  .stage { border:1px solid var(--line); border-radius:8px; padding:10px 14px 4px; margin:14px 0; } .stage.done { border-color:var(--ok); } .stage h3 { margin:0 0 4px; font-size:16px; display:flex; gap:8px; align-items:center; }
+  .stage h3 label { margin:0 0 0 auto; font-weight:400; font-size:13px; display:inline-flex; gap:5px; align-items:center; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; } th, td { text-align:left; padding:6px 9px; border:1px solid var(--line); vertical-align:top; } th { background:var(--code); }
+  #errs { color:var(--bad); font-size:13px; margin:6px 0; } #errs div::before { content:"\2022 "; } .small { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Run the Azure sizing tool (Python)</h1>
+  <p class="sub">Branch <code>master</code> &middot; <code>CLOUD/python/azure</code> &middot; a runbook and command builder. This page does not run anything: it builds commands and a script that you run in your own terminal or Azure Cloud Shell.</p>
+
+  <div class="box warn"><b>Before you run it</b>
+    The tool only reads (list and get calls). <b>It has not been run on a real Azure tenant yet.</b> Its CSV files were compared with the PowerShell script's own row-building code on the same inputs, with the Azure calls replaced by test data, and matched except where noted in the parity plan. Expect surprises on a real tenant: start with one subscription, <code>--no-cost</code> and <code>--no-devops</code>, and send back anything that looks wrong.
+    The zip holds subscription IDs, resource names and tags. Keep it local, or run with <code>--anonymize</code> (the zip then has no raw JSON; the file that maps the labels back to the real names stays beside it).
+    <b>Known problem on this branch:</b> <code>--dry-run</code> and <code>--manifest</code> fail with <code>No module named 'audit_manifest'</code> (that file arrives with another pull request). Do not use them yet. <code>--mock</code> works and needs no credentials.
+  </div>
+
+  <h2>1. Command builder</h2>
+  <div class="row">
+    <div><label for="mode">Subscriptions</label>
+      <select id="mode"><option value="current">The subscription of your current az login &ndash; recommended first</option><option value="subs">These subscriptions (--subs)</option><option value="all">Every enabled subscription I can read (--all)</option></select></div>
+    <div><label for="cloud">Azure cloud</label>
+      <select id="cloud"><option value="auto">Detect from az login (default)</option><option value="AzureCloud">Public cloud (AzureCloud)</option><option value="AzureUSGovernment">US Government (AzureUSGovernment)</option></select></div>
+    <div><label for="regions">Regions <span class="hint">comma-separated, like eastus,westeurope; empty = all</span></label><input type="text" id="regions" placeholder="eastus,westeurope"></div>
+  </div>
+  <div class="row" id="subFields" hidden>
+    <div><label for="subs">Subscription IDs <span class="hint">comma-separated GUIDs</span></label><input type="text" id="subs" placeholder="00000000-0000-0000-0000-000000000000"></div>
+  </div>
+  <label>Skip these (each is a hard skip with no prompt; its CSV file is not written)</label>
+  <div class="checks" id="skips"></div>
+  <div class="checks" style="margin:10px 0">
+    <label><input type="checkbox" id="noCost" checked> <code>--no-cost</code> skip Cost Management (6-month spend)</label>
+    <label><input type="checkbox" id="noCapacity"> <code>--no-capacity</code> skip the storage metrics pass (used capacity and object counts)</label>
+    <label><input type="checkbox" id="noSecurity"> <code>--no-security</code> skip Defender security posture</label>
+    <label><input type="checkbox" id="noBackupJobs"> <code>--no-backup-jobs</code> skip the 60-day backup job history</label>
+    <label><input type="checkbox" id="getContainerDetails"> <code>--get-container-details</code> list every blob of every container: sizes and counts per access tier (needs Storage Blob Data Reader; slow on large accounts)</label>
+    <label><input type="checkbox" id="getKeyVaultAmounts"> <code>--get-key-vault-amounts</code> count the certificates, secrets and keys in each Key Vault (needs Key Vault Reader)</label>
+    <label><input type="checkbox" id="noDevops" checked> <code>--no-devops</code> skip Azure DevOps repositories (otherwise it contacts dev.azure.com for every org you belong to)</label>
+    <label><input type="checkbox" id="noCsv"> <code>--no-csv</code> JSON only, no PowerShell-style CSV files</label>
+    <label><input type="checkbox" id="keepArtifacts"> <code>--keep-artifacts</code> leave the loose JSON and log beside the zip</label>
+    <label><input type="checkbox" id="preflightOnly"> <code>--preflight-only</code> only check what the sign-in can read in each subscription and write <code>azure_access_check_&lt;timestamp&gt;.zip</code>; nothing is collected</label>
+    <label><input type="checkbox" id="anonymize"> <code>--anonymize</code> replace names, IDs and tags in the CSV files (the zip has no raw JSON)</label>
+    <label><input type="checkbox" id="verbose"> <code>--verbose</code> extra terminal output and debug logging</label>
+    <label><input type="checkbox" id="mock"> <code>--mock</code> try it with built-in sample data (no Azure credentials)</label>
+  </div>
+  <div class="row" id="devopsFields" hidden>
+    <div><label for="devopsOrgs">Only these Azure DevOps organizations <span class="hint">(optional, comma-separated; empty = every org you belong to)</span></label><input type="text" id="devopsOrgs" placeholder="my-org"></div>
+  </div>
+  <div class="row" id="anonFields" hidden>
+    <div><label for="anonymizeFields">Also anonymize these fields <span class="hint">(optional, comma-separated)</span></label><input type="text" id="anonymizeFields" placeholder="Location,VmSize"></div>
+    <div><label for="notAnonymizeFields">Leave these alone <span class="hint">(optional; <code>Tags</code> keeps all tag columns)</span></label><input type="text" id="notAnonymizeFields" placeholder="Name,Tags"></div>
+  </div>
+  <div class="row"><div><label for="outDir">Output directory <span class="hint">(a relative path is next to the downloaded script)</span></label><input type="text" id="outDir" value="./output"></div></div>
+  <div id="errs"></div>
+  <div id="notes"></div>
+  <div class="cmd"><button class="copy" data-copy="#cmd">Copy</button><pre id="cmd"></pre></div>
+  <p><button class="primary" id="dl">Download run-azure-sizing.sh</button> <span class="small">Run <code>bash run-azure-sizing.sh</code>. It uses the <code>rubrik-sizing-scripts</code> checkout the script sits in, or the one your current folder is in. If there is none, it offers to clone into <code>./rubrik-sizing-scripts</code> in the folder you run it from. <code>REPO_DIR=/path bash run-azure-sizing.sh</code> overrides all of this. It then sets up a virtualenv, shows which subscription you are about to scan, asks you to confirm, and runs the command above. You must already be signed in (<code>az login</code>); in Azure Cloud Shell you are.</span></p>
+
+  <h2>2. Step by step</h2>
+  <p class="small">Tick each stage when done (saved in this browser). Do not move on if a stage looks wrong.</p>
+
+  <div class="stage" data-stage="s0"><h3>Stage 0 &ndash; Confirm which subscription you are in <label><input type="checkbox"> done</label></h3>
+    <p>Run <code>az login</code> first (not needed in Cloud Shell). Without <code>--subs</code> or <code>--all</code> the tool scans the subscription shown here, so make sure it is the one you intend. For a Government cloud first run <code>az cloud set --name AzureUSGovernment</code>.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>az account show --query "{name:name, id:id, tenant:tenantId, cloud:environmentName}" -o table</pre></div></div>
+
+  <div class="stage" data-stage="s1"><h3>Stage 1 &ndash; Get the code and install <label><input type="checkbox"> done</label></h3>
+    <p>Python 3.10 or newer. A sparse clone fetches only <code>CLOUD</code>. The downloaded script does this for you. There is no installable package for Azure yet, so run <code>python main.py</code> from the <code>azure</code> folder; <code>run.sh</code> in that folder downloads from a Rubrik storage account and is not used here. <code>requirements.txt</code> also lists test and build tools, so the install is bigger than the tool needs.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>git clone --depth 1 --filter=blob:none --sparse --branch master \
+  https://github.com/rubrikinc/rubrik-sizing-scripts.git ~/rubrik-sizing-scripts
+git -C ~/rubrik-sizing-scripts sparse-checkout set CLOUD
+cd ~/rubrik-sizing-scripts/CLOUD/python/azure
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --help</pre></div></div>
+
+  <div class="stage" data-stage="s2"><h3>Stage 2 &ndash; Try it with sample data (no credentials) <label><input type="checkbox"> done</label></h3>
+    <p>Proves the install works and shows the output files. Nothing is sent to Azure.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --mock --output ./output</pre></div>
+    <p>Writes <code>./output/azure_sizing_results_&lt;yyyy-MM-dd_HHmm&gt;.zip</code> with the sample data's CSV files and a log.</p></div>
+
+  <div class="stage" data-stage="s3"><h3>Stage 3 &ndash; Smallest real run <label><input type="checkbox"> done</label></h3>
+    <p>The subscription you are logged in to, no cost data, no DevOps. Use the builder above, or:</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --no-cost --no-devops --output ./output</pre></div>
+    <p>Writes <code>./output/azure_sizing_results_&lt;timestamp&gt;.zip</code>: <code>rubrik-discovery-&lt;timestamp&gt;.json</code>, the PowerShell-style CSV files, and <code>output_azure_&lt;timestamp&gt;.log</code>.</p></div>
+
+  <div class="stage" data-stage="s4"><h3>Stage 4 &ndash; Inspect the result <label><input type="checkbox"> done</label></h3>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>unzip -o output/azure_sizing_results_*.zip -d output/last
+python3 - &lt;&lt;'PY'
+import glob, json
+paths = glob.glob('output/last/rubrik-discovery-*.json')
+if not paths:
+    raise SystemExit('No JSON in the zip (an --anonymize run leaves it out); open the CSV files in output/last instead.')
+d = json.load(open(paths[0]))
+print('subscriptions :', len(d['subscriptions']))
+print('regions       :', d['regions_in_scope'] or 'all')
+print('vms           :', d['total_vms'], ' disk TB:', d['total_disk_tb'])
+print('protected vms :', d['total_protected_vms'], ' unprotected:', d['total_unprotected_vms'])
+print('storage accts :', d['total_storage_accounts'], ' GB:', d['total_storage_gb'])
+print('sql databases :', d['total_sql_databases'], ' managed instances:', d['total_sql_mi_instances'])
+print('aks / cosmos  :', d['total_aks_clusters'], '/', d['total_cosmos_accounts'])
+print('skipped       :', d['skipped'])
+PY
+ls -l output/last/*.csv</pre></div>
+    <p><b>Check:</b> the counts match the Azure portal for that subscription; the log has no <code>403</code> or <code>AuthorizationFailed</code> lines (see Troubleshooting); a CSV file with no rows is a 0-byte file (that is what PowerShell does too). The JSON has no list of errors, so look in the log for collector failures. If you can, run <code>Get-AzureSizingInfo.ps1</code> on the same subscription and compare.</p></div>
+
+  <div class="stage" data-stage="s5"><h3>Stage 5 &ndash; Add cost data and DevOps <label><input type="checkbox"> done</label></h3>
+    <p>Drops <code>--no-cost</code> and <code>--no-devops</code>. Cost needs <b>Cost Management Reader</b>; Azure throttles that API, so the tool retries and the run can take longer. DevOps discovery contacts <code>dev.azure.com</code> for every organization your identity belongs to; limit it with <code>--devops-orgs</code>.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --output ./output</pre></div></div>
+
+  <div class="stage" data-stage="s6"><h3>Stage 6 &ndash; More subscriptions (only after one looks right) <label><input type="checkbox"> done</label></h3>
+    <p>Use the builder's <b>These subscriptions</b> or <b>Every enabled subscription</b>. Try two subscriptions first. The identity needs Reader on each.</p></div>
+
+  <div class="stage" data-stage="s7"><h3>Stage 7 &ndash; Anonymized run (when the files must leave your hands) <label><input type="checkbox"> done</label></h3>
+    <p>Tick <code>--anonymize</code> in the builder. Besides the zip you get <code>azure_anonymized_keys_to_actual_values-&lt;timestamp&gt;.csv</code> and <code>output_azure_not_anonymized_&lt;timestamp&gt;.log</code> beside it. They hold the real names: keep them, do not send them.</p></div>
+
+  <h2>3. Troubleshooting</h2>
+  <table>
+    <tr><th>You see</th><th>Meaning / what to do</th></tr>
+    <tr><td>An authentication error panel, or <code>DefaultAzureCredential failed</code></td><td>Not signed in or the token expired. Run <code>az login</code> (in Cloud Shell, reopen it) and run Stage 0 again. A service principal needs <code>AZURE_CLIENT_ID</code>, <code>AZURE_TENANT_ID</code> and a secret or certificate in the environment.</td></tr>
+    <tr><td>Zero VMs, disks or accounts, no error</td><td>Usually the wrong subscription (Stage 0) or no Reader role on it. Check the portal's Access control (IAM).</td></tr>
+    <tr><td><code>Subscription ... not accessible: ... &mdash; skipping</code></td><td>The sign-in cannot read that subscription (no role on it, another tenant, or a typo: both look the same). It is left out, listed at the end of the run, and has a <code>subscription</code> row with the error code in <code>azure_preflight_check-&lt;timestamp&gt;.csv</code>. Tick <code>--preflight-only</code> to check a list of IDs without scanning.</td></tr>
+    <tr><td>Log lines with <code>403</code> or <code>AuthorizationFailed</code></td><td>A missing role for that part: <b>Cost Management Reader</b> (cost), <b>Monitoring Reader</b> or Reader (storage metrics), <b>Security Reader</b> (Defender, which returns empty on 403). The run continues; add the role or skip that part.</td></tr>
+    <tr><td>Cost data missing, "throttled" or 429</td><td>Cost Management rate limit. The tool retries a few times. Re-run later or with <code>--no-cost</code>.</td></tr>
+    <tr><td>Government or China tenant finds nothing</td><td>Use <code>--cloud AzureUSGovernment</code> (or set <code>AZURE_CLOUD</code>). The default is detected from <code>az cloud show</code>.</td></tr>
+    <tr><td><code>No module named 'audit_manifest'</code></td><td>You used <code>--dry-run</code> or <code>--manifest</code>. Known problem on this branch; leave them out.</td></tr>
+    <tr><td><code>--anonymize</code> run: where is the mapping back to real names?</td><td>Beside the zip: <code>azure_anonymized_keys_to_actual_values-&lt;timestamp&gt;.csv</code> and <code>output_azure_not_anonymized_&lt;timestamp&gt;.log</code>. Neither is inside the zip.</td></tr>
+    <tr><td><code>--anonymize-fields needs --anonymize</code>, or <code>--anonymize cannot be combined with --no-csv</code></td><td>Tick <code>--anonymize</code>; anonymizing works on the CSV files.</td></tr>
+    <tr><td><code>azure-mgmt-dataprotection is not installed</code>, or a yellow line saying Backup Vaults will not be reported</td><td>The tool's environment is missing a package from <code>requirements.txt</code>. Run the generated script again (it installs <code>requirements.txt</code>), or run <code>pip install -r requirements.txt</code> in the <code>azure</code> folder with its <code>.venv</code> active. Until then the three Backup Vault files are not written and Blob and PostgreSQL backup shows as not protected.</td></tr>
+    <tr><td>ModuleNotFoundError for an <code>azure.*</code> package</td><td>The virtualenv is not active or the install did not finish. <code>source .venv/bin/activate</code>, then <code>pip install -r requirements.txt</code>.</td></tr>
+  </table>
+
+  <h2>4. Reference</h2>
+  <details open><summary><b>Roles the tool uses</b> (read-only)</summary>
+    <table>
+      <tr><th>Role</th><th>Scope</th><th>For</th></tr>
+      <tr><td>Reader</td><td>each subscription</td><td>Everything inventoried: VMs, disks, storage accounts, SQL, PostgreSQL, vaults (Recovery Services and Backup Vaults), AKS, Cosmos DB, and, unless a narrower role is given, storage metrics.</td></tr>
+      <tr><td>Cost Management Reader</td><td>each subscription</td><td>6-month spend and backup costs (skip with <code>--no-cost</code>).</td></tr>
+      <tr><td>Monitoring Reader (or Reader)</td><td>each subscription</td><td>Storage used capacity and object counts (skip with <code>--no-capacity</code>).</td></tr>
+      <tr><td>Security Reader</td><td>each subscription</td><td>Defender plans (skip with <code>--no-security</code>).</td></tr>
+      <tr><td>Member of the Azure DevOps organization</td><td>each org</td><td>Repository discovery (skip with <code>--no-devops</code>).</td></tr>
+    </table>
+    <p class="small">The tool's help refers to a least-privilege custom role file (<code>docs/rubrik-discovery-reader-role.json</code>); it is not in the repository yet. For a first test, Reader plus Cost Management Reader and Security Reader covers everything.</p></details>
+  <details><summary><b>Files in the zip</b></summary>
+    <table>
+      <tr><th>File</th><th>Skipped by</th></tr>
+      <tr><td><code>azure_vmdisk_info-&lt;stamp&gt;.csv</code></td><td><code>--skip-vms</code></td></tr>
+      <tr><td><code>azure_storage_account_info-&lt;stamp&gt;.csv</code></td><td><code>--skip-storage-accounts</code></td></tr>
+      <tr><td><code>azure_file_share_info-&lt;stamp&gt;.csv</code></td><td><code>--skip-files</code> or <code>--skip-storage-accounts</code></td></tr>
+      <tr><td><code>azure_storage_account_container_info-&lt;stamp&gt;.csv</code> (only with <code>--get-container-details</code>)</td><td><code>--skip-storage-accounts</code></td></tr>
+      <tr><td><code>azure_key_vault-&lt;stamp&gt;.csv</code> (only with <code>--get-key-vault-amounts</code>)</td><td>leave the option off</td></tr>
+      <tr><td><code>azure_sql_info-&lt;stamp&gt;.csv</code> (databases and elastic pools), <code>azure_mi_sql_info-&lt;stamp&gt;.csv</code> (managed instances), <code>azure_mi_db_items-&lt;stamp&gt;.json</code> (their databases and retention policies; left out of an <code>--anonymize</code> run)</td><td><code>--skip-sql-mi</code></td></tr>
+      <tr><td><code>azure_backup_vault_info-&lt;stamp&gt;.csv</code>, <code>azure_backup_costs-&lt;stamp&gt;.csv</code></td><td><code>--skip-backup</code></td></tr>
+      <tr><td><code>azure_backup_data_protection_vaults-&lt;stamp&gt;.csv</code>, <code>azure_backup_data_protection_items-&lt;stamp&gt;.csv</code>, <code>azure_backup_data_protection_policies-&lt;stamp&gt;.json</code> (Backup Vaults: Blob and PostgreSQL backup; only the ones that have rows)</td><td><code>--skip-backup</code></td></tr>
+      <tr><td><code>azure_aks_info-&lt;stamp&gt;.csv</code></td><td><code>--skip-aks</code></td></tr>
+      <tr><td><code>azure_cosmos_db-&lt;stamp&gt;.csv</code></td><td><code>--skip-cosmos-db</code></td></tr>
+      <tr><td><code>azure_postgres_info-&lt;stamp&gt;.csv</code> (PostgreSQL flexible servers; written only when there is one)</td><td><code>--skip-postgresql</code></td></tr>
+      <tr><td><code>azure_sizing_summary-&lt;stamp&gt;.csv</code></td><td>never (always written)</td></tr>
+      <tr><td><code>rubrik-discovery-&lt;timestamp&gt;.json</code>, <code>output_azure_&lt;timestamp&gt;.log</code></td><td>the JSON is left out of an <code>--anonymize</code> zip</td></tr>
+    </table>
+    <p class="small">The zip is named <code>azure_sizing_results_&lt;yyyy-MM-dd_HHmm&gt;.zip</code>, like the PowerShell script's. Not written by the Python tool yet: Key Vault, containers, and the Recovery Services backup item and policy files.</p></details>
+  <details><summary><b>Flags</b></summary>
+    <table>
+      <tr><td><code>--subs ID,ID</code> / <code>--all</code></td><td>Scan these subscriptions, or every enabled one. With neither, the subscription of the current az login.</td></tr>
+      <tr><td><code>--regions a,b</code></td><td>Limit to these regions (default: all).</td></tr>
+      <tr><td><code>--cloud NAME</code></td><td>AzureCloud or AzureUSGovernment. Default: detected from <code>az cloud show</code>, or <code>AZURE_CLOUD</code>.</td></tr>
+      <tr><td><code>--skip-vms</code>, <code>--skip-sql-mi</code>, <code>--skip-storage-accounts</code>, <code>--skip-files</code>, <code>--skip-backup</code>, <code>--skip-aks</code>, <code>--skip-cosmos-db</code>, <code>--skip-postgresql</code></td><td>PowerShell's <code>-SkipAzureVMandManagedDisks</code>, <code>-SkipAzureSQLandMI</code>, <code>-SkipAzureStorageAccounts</code>, <code>-SkipAzureFiles</code>, <code>-SkipAzureBackup</code>, <code>-SkipAKS</code>, <code>-SkipAzureCosmosDB</code>, <code>-SkipAzurePostgreSQL</code>. No prompt.</td></tr>
+      <tr><td><code>--no-cost</code>, <code>--no-capacity</code>, <code>--no-security</code>, <code>--no-backup-jobs</code></td><td>Skip Cost Management, the storage metrics pass, Defender, or the backup job history.</td></tr>
+      <tr><td><code>--get-container-details</code>, <code>--get-key-vault-amounts</code></td><td>Off by default, as in PowerShell (<code>-GetContainerDetails</code>, <code>-GetKeyVaultAmounts</code>): write <code>azure_storage_account_container_info</code> (needs Storage Blob Data Reader) or <code>azure_key_vault</code> (needs Key Vault Reader).</td></tr>
+      <tr><td><code>--no-devops</code>, <code>--devops-orgs a,b</code></td><td>Skip Azure DevOps, or limit it to these organizations.</td></tr>
+      <tr><td><code>--anonymize</code> [<code>--anonymize-fields a,b</code>] [<code>--not-anonymize-fields a,b</code>]</td><td>Replace names, IDs and tags in the CSV files with labels. <code>Tags</code> in <code>--not-anonymize-fields</code> leaves tag columns alone. Not combinable with <code>--no-csv</code>.</td></tr>
+      <tr><td><code>--no-csv</code>, <code>--keep-artifacts</code></td><td>JSON only; keep the loose JSON and log beside the zip.</td></tr>
+      <tr><td><code>--preflight-only</code></td><td>Only run the access check in each subscription and write <code>azure_access_check_&lt;timestamp&gt;.zip</code> with <code>azure_preflight_check-&lt;timestamp&gt;.csv</code> and the log. Nothing is collected. A subscription named with <code>--subs</code> that cannot be read gets a <code>subscription</code> row. Not with <code>--no-csv</code> or <code>--mock</code>.</td></tr>
+      <tr><td><code>--output DIR</code>, <code>--verbose</code>, <code>--mock</code>, <code>--config FILE</code></td><td>Output directory (default <code>~/clouddrive</code> in Cloud Shell, else <code>./output</code>); extra output; sample data; settings file (flags win).</td></tr>
+    </table></details>
+  <p class="small">The PowerShell script <code>Get-AzureSizingInfo.ps1</code> remains the reference for output files. Plan and known differences: <code>CLOUD/python/docs/azure-parity-plan.md</code>; flag mapping: <code>docs/powershell-parameter-mapping.md</code>.</p>
+
+</main>
+
+<script>
+
+const SAFE = /^[A-Za-z0-9._@:\/=+,-]*$/;
+function q(v) { return "'" + String(v).replace(/'/g, "'\\''") + "'"; }
+
+// The output folder as the script writes it: a relative path is taken next to the script itself.
+function outPath(dir) {
+  const d = String(dir).replace(/\/+$/, "") || "/";
+  return d.startsWith("/") ? q(d) : '"$SCRIPT_DIR"/' + q(d.replace(/^(\.\/)+/, "") || ".");
+}
+
+function repoLines(rel, outDir) {
+  return [
+    "# Which repo to use, in order: REPO_DIR if set; the rubrik-sizing-scripts checkout this script sits in;",
+    "# the checkout your current folder is in; otherwise ./rubrik-sizing-scripts in the folder you run it from",
+    "# (cloned after asking).",
+    'TOOL_REL="' + rel + '"',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"',
+    'if [ -z "${REPO_DIR:-}" ]; then',
+    '  for dir in "$SCRIPT_DIR" "$PWD"; do',
+    '    TOP="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"',
+    '    if [ -n "$TOP" ] && [ -d "$TOP/$TOOL_REL" ]; then REPO_DIR="$TOP"; break; fi',
+    "  done",
+    '  REPO_DIR="${REPO_DIR:-$PWD/rubrik-sizing-scripts}"',
+    "fi",
+    'if [ ! -d "$REPO_DIR/$TOOL_REL" ]; then',
+    '  if [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then',
+    '    echo "$REPO_DIR exists but has no $TOOL_REL (wrong branch or not rubrik-sizing-scripts?)."',
+    '    echo "Switch it to branch master, or set REPO_DIR to another checkout."',
+    "    exit 1",
+    "  fi",
+    '  echo "No rubrik-sizing-scripts checkout found."',
+    '  read -r -p "Clone rubrikinc/rubrik-sizing-scripts into $REPO_DIR now (sparse)? [y/N] " clone',
+    '  case "$clone" in [yY]*) ;; *) echo "Aborted. Set REPO_DIR to an existing checkout."; exit 1 ;; esac',
+    '  git clone --depth 1 --filter=blob:none --sparse --branch master \\',
+    '    https://github.com/rubrikinc/rubrik-sizing-scripts.git "$REPO_DIR"',
+    '  git -C "$REPO_DIR" sparse-checkout set CLOUD',
+    "fi",
+    'echo "Using repo: $REPO_DIR"',
+    "# The output folder; a relative path is taken next to this script.",
+    "OUT_DIR=" + outPath(outDir),
+    'cd "$REPO_DIR/$TOOL_REL"',
+    "",
+    "python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || { echo \"Python 3.10 or newer is required.\"; exit 1; }",
+    "python3 -m venv .venv",
+    "source .venv/bin/activate",
+    "pip install -q -r requirements.txt",
+    ""
+  ];
+}
+
+
+const SKIPS = [
+  ["skipVms", "--skip-vms", "VMs and managed disks"],
+  ["skipSqlMi", "--skip-sql-mi", "SQL databases, pools, managed instances"],
+  ["skipStorage", "--skip-storage-accounts", "storage accounts and their file shares"],
+  ["skipFiles", "--skip-files", "Azure Files shares"],
+  ["skipBackup", "--skip-backup", "vaults, Backup Vaults, backup items, jobs, backup costs"],
+  ["skipAks", "--skip-aks", "AKS clusters"],
+  ["skipCosmos", "--skip-cosmos-db", "Cosmos DB accounts"],
+  ["skipPostgres", "--skip-postgresql", "PostgreSQL flexible servers"]
+];
+const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function validate(c) {
+  const e = [];
+  const text = {regions:c.regions, subs:c.subs, devopsOrgs:c.devopsOrgs, anonymizeFields:c.anonymizeFields,
+    notAnonymizeFields:c.notAnonymizeFields, outDir:c.outDir};
+  for (const [k, v] of Object.entries(text)) {
+    if (!SAFE.test(v || "")) e.push(k + ": only letters, digits and . _ @ : / = + , - are allowed (no spaces or ~)");
+  }
+  if (c.regions && !/^[a-z0-9]+(,[a-z0-9]+)*$/.test(c.regions)) e.push("regions: use region names like eastus,westeurope");
+  if (c.mode === "subs" && !c.subs) e.push("give at least one subscription ID");
+  if (c.subs && !c.subs.split(",").every(s => GUID.test(s))) e.push("subscription IDs must be GUIDs like 00000000-0000-0000-0000-000000000000");
+  if (c.devopsOrgs && !/^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$/.test(c.devopsOrgs)) e.push("DevOps organizations: names separated by commas");
+  if ((c.anonymizeFields || c.notAnonymizeFields) && !c.anonymize) e.push("the anonymize field lists need --anonymize ticked");
+  if (c.anonymize && c.noCsv) e.push("--anonymize works on the CSV files, so it cannot be combined with --no-csv");
+  if (c.preflightOnly && c.noCsv) e.push("--preflight-only writes only the access-check CSV, so it cannot be combined with --no-csv");
+  if (c.preflightOnly && c.mock) e.push("--preflight-only checks real access, so it cannot be combined with --mock");
+  if (!c.outDir) e.push("give an output directory");
+  return e;
+}
+
+function buildArgs(c) {
+  const a = [];
+  if (c.mode === "subs") a.push("--subs", q(c.subs));
+  if (c.mode === "all") a.push("--all");
+  if (c.cloud && c.cloud !== "auto") a.push("--cloud", c.cloud);
+  if (c.regions) a.push("--regions", q(c.regions));
+  for (const [id, flag] of SKIPS) if (c[id]) a.push(flag);
+  if (c.noCost) a.push("--no-cost");
+  if (c.noCapacity) a.push("--no-capacity");
+  if (c.noSecurity) a.push("--no-security");
+  if (c.noBackupJobs) a.push("--no-backup-jobs");
+  if (c.getContainerDetails && !c.skipStorage) a.push("--get-container-details");
+  if (c.getKeyVaultAmounts) a.push("--get-key-vault-amounts");
+  if (c.noDevops) a.push("--no-devops");
+  else if (c.devopsOrgs) a.push("--devops-orgs", q(c.devopsOrgs));
+  if (c.noCsv) a.push("--no-csv");
+  if (c.preflightOnly) a.push("--preflight-only");
+  if (c.keepArtifacts && !c.preflightOnly) a.push("--keep-artifacts");
+  if (c.anonymize) {
+    a.push("--anonymize");
+    if (c.anonymizeFields) a.push("--anonymize-fields", q(c.anonymizeFields));
+    if (c.notAnonymizeFields) a.push("--not-anonymize-fields", q(c.notAnonymizeFields));
+  }
+  if (c.verbose) a.push("--verbose");
+  if (c.mock) a.push("--mock");
+  a.push("--output", c.outShell || q(c.outDir));
+  return a;
+}
+
+function buildCommand(c) { return ["python main.py"].concat(buildArgs(c)).join(" "); }
+
+function buildNotes(c) {
+  const n = [];
+  if (c.mock) { n.push("--mock uses built-in sample data: nothing is read from Azure, and the other options only change which files are written."); return n; }
+  if (c.preflightOnly) n.push("Access check only: nothing is collected. The zip holds azure_preflight_check-<timestamp>.csv and the log; a subscription named with --subs that cannot be read gets a 'subscription' row and is listed at the end.");
+  if (c.preflightOnly && c.keepArtifacts) n.push("--keep-artifacts has no effect with --preflight-only, so it is left out of the command.");
+  if (c.getContainerDetails && c.skipStorage) n.push("--get-container-details needs the storage accounts, so it is left out of the command with --skip-storage-accounts.");
+  else if (c.getContainerDetails) n.push("--get-container-details lists every blob of every container, which can take a long time. It needs Storage Blob Data Reader (Reader is not enough); PowerShell uses the account key instead.");
+  if (c.getKeyVaultAmounts) n.push("--get-key-vault-amounts needs Key Vault Reader on each vault (or the List permission in its access policies); a count it cannot read is left blank.");
+  if (c.mode === "all") n.push("This scans every enabled subscription the identity can read. Run one subscription first and check the results.");
+  if (c.mode === "subs" && c.subs.split(",").length > 1) n.push("More than one subscription. The identity needs Reader on each.");
+  if (c.mode === "current") n.push("With no --subs or --all the tool scans only the subscription of your current az login. Check it in Stage 0.");
+  if (c.cloud === "AzureUSGovernment") n.push("Government cloud: sign in with az cloud set --name AzureUSGovernment, then az login. Not tested on a real Government tenant.");
+  if (!c.noDevops) n.push("Azure DevOps discovery contacts dev.azure.com for every organization the identity belongs to" + (c.devopsOrgs ? " (limited to the ones you listed)." : "."));
+  if (!c.noCost) n.push("Cost Management needs the Cost Management Reader role. Azure throttles it, so the run can take longer.");
+  if (c.skipStorage && !c.skipFiles) n.push("--skip-storage-accounts also skips the file shares.");
+  if (c.anonymize) n.push("Anonymized run: the zip has no raw JSON. The file mapping labels back to real values and the real log are written beside the zip, not inside it.");
+  if (c.outDir) n.push("The zip and the run log go to " + c.outDir + (c.outDir.startsWith("/") ? "." : ", next to the downloaded script."));
+  return n;
+}
+
+// The --subs mode scans the IDs given, which need not be the subscription the table above shows.
+// Say which IDs, and whether the az login knows each one. The IDs are validated GUIDs.
+function subsLines(c) {
+  return [
+    'echo "This run will scan these subscription IDs (the --subs value below), not the subscription in the table above:"',
+    "for id in " + c.subs.split(",").join(" ") + "; do",
+    '  if az account show --subscription "$id" -o none 2>/dev/null; then echo "  $id  (in the subscription list of your az login)"; else echo "  $id  (NOT in the subscription list of your az login, so the scan will skip it)"; fi',
+    "done",
+    'echo "If one is marked NOT, run az login --tenant TENANT_ID, or az account list --refresh if access was just granted, or edit --subs in this script."'
+  ];
+}
+
+function buildScript(c) {
+  const cmd = ["python main.py"].concat(buildArgs({ ...c, outShell: '"$OUT_DIR"' })).join(" ");
+  const confirm = c.mock ? ['echo "Mock run: no Azure credentials are used."']
+    : [
+      'az account show --query "{subscription:name, id:id, tenant:tenantId}" -o table || { echo "Not signed in. Run az login first."; exit 1; }',
+      ...(c.mode === "subs" ? subsLines(c)
+        : [c.mode === "all" ? 'echo "You are about to scan EVERY enabled subscription this identity can read."'
+          : 'echo "You are about to scan the subscription shown above."']),
+      'read -r -p "Continue? [y/N] " ans',
+      'case "$ans" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac'
+    ];
+  return [
+    "#!/usr/bin/env bash",
+    c.preflightOnly
+      ? "# Generated by azure-run-guide.html. Access check only: read-only, and nothing is collected."
+      : c.anonymize
+      ? "# Generated by azure-run-guide.html. Read-only discovery; the CSV files in the zip are anonymized."
+      : "# Generated by azure-run-guide.html. Read-only discovery; output is not anonymized.",
+    "set -euo pipefail",
+    "",
+    ...repoLines("CLOUD/python/azure", c.outDir),
+    ...confirm,
+    "",
+    cmd,
+    "",
+    'ZIP="$(ls -t "$OUT_DIR"/' + (c.preflightOnly ? "azure_access_check_" : "azure_sizing_results_") + '*.zip 2>/dev/null | head -1 || true)"',
+    c.anonymize
+      ? 'if [ -n "$ZIP" ]; then echo "' + (c.preflightOnly ? "Access report" : "Results") + ': $ZIP (anonymized). The key file and the real log are beside it; keep those local."; fi'
+      : 'if [ -n "$ZIP" ]; then echo "' + (c.preflightOnly ? "Access report" : "Results") + ': $ZIP (contains subscription and resource names; keep it local)"; fi',
+    ""
+  ].join("\n");
+}
+
+
+if (typeof module !== "undefined") module.exports = { q, outPath, validate, buildArgs, buildCommand, buildNotes, buildScript, subsLines };
+
+if (typeof document !== "undefined") {
+  const $ = id => document.getElementById(id);
+
+  const skipBox = $("skips");
+  SKIPS.forEach(([id, flag, what]) => {
+    const l = document.createElement("label");
+    const i = document.createElement("input");
+    i.type = "checkbox"; i.id = id;
+    const code = document.createElement("code"); code.textContent = flag;
+    l.append(i, " ", code, " " + what);
+    skipBox.appendChild(l);
+  });
+
+  function config() {
+    const c = {
+      mode: $("mode").value, cloud: $("cloud").value, regions: $("regions").value.trim().replace(/\s+/g, ""),
+      subs: $("subs").value.trim().replace(/\s+/g, ""), devopsOrgs: $("devopsOrgs").value.trim().replace(/\s+/g, ""),
+      anonymizeFields: $("anonymizeFields").value.trim().replace(/\s+/g, ""), notAnonymizeFields: $("notAnonymizeFields").value.trim().replace(/\s+/g, ""),
+      outDir: $("outDir").value.trim(),
+      noCost: $("noCost").checked, noCapacity: $("noCapacity").checked, noSecurity: $("noSecurity").checked,
+      noBackupJobs: $("noBackupJobs").checked, noDevops: $("noDevops").checked, noCsv: $("noCsv").checked,
+      getContainerDetails: $("getContainerDetails").checked, getKeyVaultAmounts: $("getKeyVaultAmounts").checked,
+      keepArtifacts: $("keepArtifacts").checked, preflightOnly: $("preflightOnly").checked, anonymize: $("anonymize").checked, verbose: $("verbose").checked, mock: $("mock").checked
+    };
+    SKIPS.forEach(([id]) => { c[id] = $(id).checked; });
+    return c;
+  }
+
+  function render() {
+    const c = config();
+    $("subFields").hidden = c.mode !== "subs";
+    $("devopsFields").hidden = c.noDevops;
+    $("anonFields").hidden = !c.anonymize;
+    const errs = validate(c);
+    $("errs").replaceChildren(...errs.map(t => { const d = document.createElement("div"); d.textContent = t; return d; }));
+    $("notes").replaceChildren(...buildNotes(c).map(t => { const d = document.createElement("div"); d.className = "box warn"; d.textContent = t; return d; }));
+    $("cmd").textContent = errs.length ? "Fix the problems above to generate the command." : buildCommand(c);
+    $("dl").disabled = errs.length > 0;
+  }
+
+  document.querySelectorAll("input[type=text], select, input[type=checkbox]").forEach(el => el.addEventListener("input", render));
+
+  $("dl").onclick = () => {
+    const blob = new Blob([buildScript(config())], { type: "text/x-shellscript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "run-azure-sizing.sh"; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+
+  document.addEventListener("click", ev => {
+    const b = ev.target.closest("button.copy");
+    if (!b) return;
+    const sel = b.dataset.copy;
+    const el = sel === "next" ? b.parentElement.querySelector("pre") : document.querySelector(sel);
+    const text = el.textContent;
+    const done = () => { const o = b.textContent; b.textContent = "Copied"; setTimeout(() => { b.textContent = o; }, 1200); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
+    else { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); done(); }
+  });
+
+  let state = {};
+  try { state = JSON.parse(localStorage.getItem("azure-run-guide") || "{}"); } catch (e) {}
+  document.querySelectorAll(".stage").forEach(st => {
+    const id = st.dataset.stage, cb = st.querySelector("h3 input");
+    cb.checked = !!state[id]; st.classList.toggle("done", cb.checked);
+    cb.addEventListener("change", () => {
+      state[id] = cb.checked; st.classList.toggle("done", cb.checked);
+      try { localStorage.setItem("azure-run-guide", JSON.stringify(state)); } catch (e) {}
+    });
+  });
+
+  render();
+}
+</script>
+</body>
+</html>

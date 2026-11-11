@@ -1,0 +1,22 @@
+# Canonical dev/lint toolchain for the whole repo. Install from the repo root:
+#   pip install -r requirements-dev.txt
+# Runtime deps still live per-tool (aws/requirements.txt, azure/requirements.txt, ...).
+# Pinned to EXACTLY match the ruff-pre-commit rev in .pre-commit-config.yaml. ruff's
+# formatter + isort change between versions, so an unpinned ruff in CI drifts from the
+# pinned pre-commit hook and fails `ruff check`/`ruff format --check` on files the other
+# calls clean (bit us on #15/#18/#22). Keep these two pins in lockstep — bump together.
+ruff==0.15.17
+mypy>=1.11.0
+pytest>=8.0.0
+pytest-mock>=3.12.0
+pytest-cov>=5.0.0
+pre-commit>=3.7.0
+# Optional runtime dep for the OPT-IN LLM-narrative path (analysis_service/narrative.py
+# LlmNarrative). The default TemplatedNarrative needs nothing; LlmNarrative lazy-imports
+# anthropic and falls back to templated when it's absent. Listed here so the LLM path is
+# exercisable in dev/CI; it is not required for the default report.
+anthropic>=0.40.0
+# Mock AWS for the cloud-mode storage backend tests (DynamoOppStore / S3ArtifactStore).
+# No live AWS in CI — moto stands up in-process Dynamo/S3 fakes. boto3 is the SDK they drive.
+boto3>=1.34
+moto[dynamodb,s3]>=5.0

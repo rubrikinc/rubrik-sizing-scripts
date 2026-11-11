@@ -1,0 +1,21 @@
+# Runtime dependencies for the repo-root, in-process services
+# (portal / explorer / reporting / analysis_service). Install from the repo root:
+#   pip install -r requirements.txt
+#
+# Dev/lint tooling lives in requirements-dev.txt; the pricing service keeps its own
+# pricing_service/requirements.txt; each cloud CLI ships its own aws|azure|gcp/requirements.txt.
+flask>=3.0          # portal (Flask app + opp blueprint)
+duckdb>=1.0         # explorer (in-process query engine)
+openpyxl>=3.1       # reporting / Excel workbooks + legacy XLSX parsers
+python-pptx>=0.6.21 # reporting / AE customer-facing slide deck (.pptx) export
+pyyaml>=6.0         # config + pricing YAML loading
+gunicorn>=21.2      # production WSGI server (container entrypoint; dev uses Flask's server)
+# boto3 is OPTIONAL — only the cloud-mode storage backends (DynamoOppStore / S3ArtifactStore
+# in opp/) need it, and they lazy-import it. File/local backends (the default) run without it.
+boto3>=1.34         # cloud-mode OppStore (DynamoDB) + ArtifactStore (S3)
+anthropic>=0.34      # portal/opp/chat.py — opp brief + chat streaming (was runtime-dev-only; portal.opp.routes imports it directly, so it belongs here)
+playwright>=1.40.0   # portal/aws/routes.py + shared/sizing_scraper.py — browser automation for
+                     # sizing.rubrik.com SSO login/token capture on the Pricing tab. Was only listed
+                     # in portal/requirements.txt (an orphaned file nothing actually installs from),
+                     # not the root requirements.txt the README tells you to run. NOTE: pip install
+                     # alone is not enough -- also run:  playwright install chromium

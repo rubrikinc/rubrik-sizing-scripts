@@ -1,0 +1,3 @@
+# Kept so scripts and commands that install this file still work: every package it listed is now in
+# requirements.txt.
+-r requirements.txt

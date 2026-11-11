@@ -1,0 +1,1673 @@
+#!/usr/bin/env python3
+"""Rubrik Discovery — GCP Edition
+
+Lightweight GCP inventory + backup posture assessment for Rubrik SE
+conversations.  Run it from Google Cloud Shell, a GCE VM with Workload
+Identity, or any machine with ``gcloud auth application-default login`` active.
+
+Usage examples:
+    # All accessible projects (default)
+    python main.py
+
+    # Specific project IDs
+    python main.py --projects my-project-1,my-project-2
+
+    # Project IDs from a file, one per line
+    python main.py --project-file projects.txt
+
+    # Only the project from gcloud config / ADC default
+    python main.py --current-project
+
+    # Org-scale run: org-wide asset spine (one CAI sweep) + more parallelism
+    python main.py --org 123456789012 --workers 24
+
+    # All projects, filtered to specific regions
+    python main.py --regions us-central1,us-east1
+
+    # Offline demo with mock data (no GCP credentials needed)
+    python main.py --mock
+
+    # Preview scope without running collectors
+    python main.py --dry-run
+
+    # Debug logging
+    python main.py --verbose
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import pathlib
+import sys
+import shutil
+import tempfile
+import zipfile
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from models.inventory import DiscoveryResult
+
+from rich import box
+from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
+
+import manifest_core
+import preflight
+import preflight_core
+import runlog
+import totals
+from anonymize import KEY_FILE_PREFIX, Anonymizer, anonymized_log_note
+
+console = runlog.LoggedConsole(width=max(120, Console().width))
+
+logger = logging.getLogger(__name__)
+
+# Above this many projects, stream the JSON output to disk one project at a time
+# (bounded memory) instead of building one in-memory DiscoveryResult.
+_STREAMING_THRESHOLD = 50
+
+# Core collectors, in run order. Selectable via --collectors; default is all.
+# "asset" is the Cloud Asset Inventory breadth spine; the rest add per-service
+# sizing depth. Optional add-ons (cost/iac/filestore/security) are gated separately.
+_CORE_COLLECTORS = ["asset", "compute", "storage", "database", "bigquery", "backup"]
+
+_DRY_RUN_API_CALLS = [
+    (
+        "asset",
+        "AssetServiceClient.list_assets()",
+        "roles/cloudasset.viewer",
+        "Enumerate all resources",
+    ),
+    ("compute", "InstancesClient.aggregated_list()", "roles/compute.viewer", "GCE instances"),
+    ("compute", "DisksClient.aggregated_list()", "roles/compute.viewer", "GCE persistent disks"),
+    (
+        "storage",
+        "storage.Client.list_buckets()",
+        "roles/storage.objectViewer",
+        "GCS bucket metadata",
+    ),
+    ("database", "sqladmin.instances.list()", "roles/cloudsql.viewer", "Cloud SQL instances"),
+    (
+        "database",
+        "InstanceAdminClient.list_instances()",
+        "roles/spanner.viewer",
+        "Cloud Spanner instances",
+    ),
+    ("database", "AlloyDBAdminClient.list_clusters()", "roles/alloydb.viewer", "AlloyDB clusters"),
+    ("database", "bigtable.Client.list_instances()", "roles/bigtable.viewer", "Bigtable instances"),
+    (
+        "bigquery",
+        "bigquery.datasets.list() / datasets.get()",
+        "roles/bigquery.metadataViewer",
+        "BigQuery datasets",
+    ),
+    (
+        "bigquery",
+        "bigquery.tables.list() / tables.get()",
+        "roles/bigquery.metadataViewer",
+        "BigQuery tables, views and their sizes",
+    ),
+    (
+        "backup",
+        "BackupDRClient.list_backup_plans()",
+        "roles/backupdr.viewer",
+        "Backup and DR plans",
+    ),
+    (
+        "backup",
+        "BackupDRClient.list_backup_plan_associations()",
+        "roles/backupdr.viewer",
+        "Protected workloads",
+    ),
+]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="rubrik-gcp-discovery",
+        description="Rubrik Discovery — GCP Edition",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--config",
+        action="append",
+        type=pathlib.Path,
+        metavar="FILE",
+        help="Path to rubrik.yaml (see docs/config_schema.md).  Pass twice "
+        "for base + overlay.  Values from the config are overridden "
+        "by explicit flags.",
+    )
+    scope = p.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--projects",
+        metavar="ID,...",
+        help="Comma-separated project IDs to scan",
+    )
+    scope.add_argument(
+        "--project-file",
+        metavar="FILE",
+        type=pathlib.Path,
+        help="File with one project ID per line (blank lines and # comments ignored)",
+    )
+    scope.add_argument(
+        "--current-project",
+        action="store_true",
+        help="Scan only the project from gcloud config / ADC default "
+        "(default: all accessible projects)",
+    )
+    scope.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan all accessible projects (this is the default; kept for compatibility)",
+    )
+    p.add_argument(
+        "--include-system-projects",
+        action="store_true",
+        help="Also scan Google's auto-created sys-<number> projects when discovering all "
+        "projects (default: left out; they hold nothing to size). Has no effect with "
+        "--projects or --project-file, which scan what they name.",
+    )
+    p.add_argument(
+        "--regions",
+        metavar="REGION,...",
+        help="Comma-separated regions to include (default: all)",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        metavar="N",
+        help="Parallel project-collection threads (default: 8). Raise for "
+        "org-scale runs with many projects.",
+    )
+    p.add_argument(
+        "--org",
+        dest="org_id",
+        metavar="ORG_ID",
+        help="Organization ID (e.g. 123456789012). Enables the org-wide Cloud "
+        "Asset Inventory spine: one paginated sweep enumerates assets for all "
+        "projects instead of one list_assets call per project.",
+    )
+    p.add_argument(
+        "--folder",
+        dest="folder_id",
+        metavar="FOLDER_ID",
+        help="Folder ID to scope the org-wide asset spine (alternative to --org).",
+    )
+    p.add_argument(
+        "--output",
+        metavar="DIR",
+        help="Output directory for JSON discovery file (default: ~/ or ./output)",
+    )
+    p.add_argument(
+        "--mock",
+        action="store_true",
+        help="Run with built-in mock data — no GCP credentials required",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview scope + GCP APIs that would be called, then exit.  "
+        "No collection is performed.  Safe to show a security team before "
+        "approving a real run.",
+    )
+    p.add_argument(
+        "--security",
+        action="store_true",
+        help="Enable Security Command Center findings collection "
+        "(requires roles/securitycenter.findingsViewer at org level).",
+    )
+    depth = p.add_mutually_exclusive_group()
+    depth.add_argument(
+        "--collectors",
+        metavar="LIST",
+        help="Comma-separated subset of core collectors to run "
+        f"(choices: {','.join(_CORE_COLLECTORS)}; default: all). "
+        "e.g. --collectors asset,compute,storage",
+    )
+    depth.add_argument(
+        "--inventory-only",
+        action="store_true",
+        help="Breadth scan only: run just the Cloud Asset Inventory spine "
+        "(equivalent to --collectors asset). Minimal API enablement; no per-service "
+        "sizing depth.",
+    )
+    p.add_argument(
+        "--anonymize",
+        action="store_true",
+        help="Anonymize names, ids and labels in the CSV files (PowerShell's -Anonymize). The ZIP "
+        "then has no raw JSON; the file that maps the labels back to the real values and the real "
+        "run log are written next to the ZIP, not into it.",
+    )
+    p.add_argument(
+        "--anonymize-fields",
+        default="",
+        metavar="FIELDS",
+        help="Comma-separated extra fields to anonymize (with --anonymize). "
+        "Same as PowerShell -AnonymizeFields.",
+    )
+    p.add_argument(
+        "--not-anonymize-fields",
+        default="",
+        metavar="FIELDS",
+        help="Comma-separated fields to leave as they are (with --anonymize); 'Tags' leaves all "
+        "label columns alone. Same as PowerShell -NotAnonymizeFields.",
+    )
+    p.add_argument(
+        "--no-csv",
+        action="store_true",
+        help="Write only the JSON. By default the ZIP also holds the PowerShell-style CSV files "
+        "that Get-GCPSizingInfo.ps1 writes.",
+    )
+    p.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="Skip the pre-flight access check that runs before the scan. The check makes one "
+        "read-only call per service in each project and writes "
+        "gcp_preflight_check-<timestamp>.csv, which lists what will be captured and what "
+        "will be dropped.",
+    )
+    p.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Only run the access check: resolve the projects, check what the sign-in can read "
+        "in each, write gcp_preflight_check-<timestamp>.csv into "
+        "gcp_access_check_<timestamp>.zip and stop. Nothing is collected. A project named with "
+        "--projects or --project-file that cannot be read gets a row of its own.",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show SE-focused terminal output + debug logging from collectors.",
+    )
+    return p
+
+
+def _parse_csv(value: Optional[str]) -> Optional[list[str]]:
+    if not value:
+        return None
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _read_project_file(path: pathlib.Path) -> list[str]:
+    """Project IDs from a newline-separated file; blanks and ``#`` comments skipped."""
+    try:
+        lines = path.expanduser().read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise SystemExit(f"Cannot read project file {path}: {exc}")
+    ids: list[str] = []
+    for line in lines:
+        pid = line.strip()
+        if pid and not pid.startswith("#") and pid not in ids:
+            ids.append(pid)
+    if not ids:
+        raise SystemExit(f"Project file {path} contains no project IDs.")
+    return ids
+
+
+def _current_project_only(args, cfg) -> bool:
+    """True to scan only the current project.
+
+    CLI flags win. Otherwise an explicit ``scope.all`` / ``scope.all_projects`` in the config
+    file decides, so a config that says ``all_projects: false`` keeps its meaning. With
+    neither, the default is all accessible projects.
+    """
+    if args.current_project:
+        return True
+    if args.all or args.projects or args.project_file:
+        return False
+    scope = cfg.scope
+    if scope.all is not None or "all_projects" in scope.model_fields_set:
+        return not scope.effective_all_projects()
+    return False
+
+
+def _resolve_collectors(args) -> set[str]:
+    """Resolve which core collectors to run from --collectors / --inventory-only.
+
+    Default (neither flag) = all core collectors (full depth). ``--inventory-only``
+    is sugar for the CAI breadth spine alone. Unknown names raise SystemExit.
+    """
+    if getattr(args, "inventory_only", False):
+        return {"asset"}
+    raw = _parse_csv(args.collectors)
+    if not raw:
+        return set(_CORE_COLLECTORS)
+    selected = {name.lower() for name in raw}
+    unknown = selected - set(_CORE_COLLECTORS)
+    if unknown:
+        raise SystemExit(
+            f"Unknown collector(s): {','.join(sorted(unknown))}. "
+            f"Valid choices: {','.join(_CORE_COLLECTORS)}."
+        )
+    return selected
+
+
+def _resolve_output_dir(override: Optional[str]) -> pathlib.Path:
+    """Return the output directory, creating it if necessary.
+
+    Priority: explicit --output flag > ~/ (Cloud Shell home) > ./output.
+    """
+    if override:
+        path = pathlib.Path(override).expanduser()
+    else:
+        path = pathlib.Path("./output")
+
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _configure_logging(verbose: bool) -> None:
+    # Thin wrapper around the shared per-tool convention (see logging_setup.py).
+    from logging_setup import setup_logging
+
+    setup_logging(verbose=verbose)
+
+
+def _start_run_log() -> tuple[logging.Handler, str]:
+    """Begin the run log: a transcript of the screen, in a temp file.
+
+    Independent of --verbose (which only gates the console); the file is bundled
+    into the result ZIP so the SE can debug a failed or partial scan.
+    """
+    from logging_setup import add_log_file
+
+    fd, tmp = tempfile.mkstemp(prefix="gcp-sizing-run-", suffix=".log")
+    os.close(fd)
+    return add_log_file(tmp), tmp
+
+
+def _run_access_check(
+    projects: list[str], credentials, selected: set[str], workers: int
+) -> list[dict]:
+    """Check what the sign-in can read in each project, print the result, return its rows.
+
+    A blocked service is one line that lists the projects it affects, however many there are. A
+    refusal by the quota project (the project every call is charged to) is reported once, not
+    per project, and its rows say "could not be checked" rather than "not enabled".
+    """
+    import auth
+
+    quota_project, quota_source = auth.effective_quota_project(credentials)
+    console.print(f"[dim]{escape(runlog.quota_source_line(quota_project, quota_source))}[/dim]")
+    with console.status("[bold]Checking access…[/bold]"):
+        per_project = preflight.run_all(projects, credentials, selected, workers)
+    checks = preflight.attribute(
+        [check for project_checks in per_project for check in project_checks], quota_project
+    )
+    if not checks:
+        return []
+    label = f"{len(projects)} project(s)"
+    headline = preflight.report_lines(checks, label)[0]
+    console.print(f"[dim]{escape(headline)}[/dim]")
+    for line in preflight.table_lines(checks):
+        console.print(escape(line))
+    quota = preflight.quota_problems(checks)
+    if quota:
+        console.print("  [yellow]⚠[/yellow] The quota project blocked the check:")
+        for line in runlog.quota_block(quota, len(projects), quota_source):
+            console.print(escape(line))
+    blocked = preflight.project_groups(checks)
+    if blocked:
+        console.print("  [yellow]⚠[/yellow] Problems found by the pre-flight check:")
+        for line in runlog.problem_block(blocked):
+            console.print(escape(line))
+    console.print()
+    return [check.to_row() for check in checks]
+
+
+def _scope_for_manifest(facts) -> Optional[dict]:
+    """The scope record of ``manifest.json``: the mode and counts, never a project name.
+
+    The manifest is safe in an anonymized run, so it holds no IDs and no account.  ``facts`` is
+    ``auth.ScopeFacts``, or None for a mock run, which has no scope to report.
+    """
+    if facts is None:
+        return None
+    return {
+        "mode": facts.mode,
+        "scanned": facts.scanned,
+        "named": facts.named,
+        "left_out_system_projects": facts.left_out_system,
+        # None means "not looked up or the lookup failed", which is not the same as 0.
+        "other_visible_projects": facts.visible_not_scanned,
+    }
+
+
+def _manifest_text(files: dict, scope: Optional[dict] = None) -> Optional[str]:
+    """The manifest.json of a results zip, or None when it could not be built.
+
+    ``files`` maps each file name in the zip to its text or bytes. Never raises: a problem with the
+    manifest must not cost the zip, so it is only logged.
+    """
+    try:
+        return manifest_core.build(
+            files,
+            tool="gcp",
+            tool_version=manifest_core.installed_version("rubrik-discovery-gcp"),
+            code_version=runlog.core.code_version(runlog.HERE),
+            generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            scope=scope,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not build %s: %s", manifest_core.FILE_NAME, exc)
+        return None
+
+
+# The end of a run names this many projects that were not scanned; the CSV has all of them.
+_NOT_SCANNED_SHOWN = 20
+
+
+def _print_not_scanned(not_scanned: list[dict], heading: str) -> None:
+    """Each project that is not in the results and why, on the screen and in the log."""
+    if not not_scanned:
+        return
+    console.print()
+    console.print(f"[yellow]{escape(heading)}[/yellow]")
+    ordered = sorted(not_scanned, key=lambda e: (e["why"], e["id"]))
+    for entry in ordered[:_NOT_SCANNED_SHOWN]:
+        console.print(f"   {escape(entry['id'])}  {escape(entry['why'])}")
+    if len(not_scanned) > _NOT_SCANNED_SHOWN:
+        console.print(
+            f"   ... and {len(not_scanned) - _NOT_SCANNED_SHOWN} more; every one is in "
+            f"{preflight.FILE_PREFIX}-<timestamp>.csv"
+        )
+
+
+def _finish_access_check(
+    output_dir: pathlib.Path,
+    log_handler: logging.Handler,
+    log_tmp: str,
+    started: datetime,
+    access_rows: list[dict],
+    not_scanned: list[dict],
+    checked: int,
+    anonymizer: Optional[Anonymizer] = None,
+    scope: Optional[dict] = None,
+) -> pathlib.Path:
+    """End a --preflight-only run: the pre-flight CSV and the run log in
+    ``gcp_access_check_<stamp>.zip``. Nothing was collected."""
+    import csv_export
+
+    _print_not_scanned(not_scanned, "Not checked:")
+    console.print(
+        f"\n[bold]Access check complete:[/bold] {checked} project(s) checked, "
+        f"{len(not_scanned)} could not be read. Nothing was collected."
+    )
+    logger.info("Access check complete — bundling the report.")
+    runlog.finish(console)
+    logging.getLogger().removeHandler(log_handler)
+    log_handler.close()
+
+    stamp = started.strftime(csv_export.FILE_TIMESTAMP_FORMAT)
+    zip_path = output_dir / f"gcp_access_check_{stamp}.zip"
+    rows = [*access_rows, *(row for entry in not_scanned for row in entry["rows"])]
+    in_zip: dict = {}
+    if rows:
+        in_zip[preflight_core.file_name(preflight.FILE_PREFIX, stamp)] = preflight.csv_for(
+            rows, anonymizer
+        )
+    manifest_text = _manifest_text(dict(in_zip), scope)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, text in in_zip.items():
+            zf.writestr(name, text)
+        if manifest_text is not None:
+            zf.writestr(manifest_core.FILE_NAME, manifest_text)
+        if anonymizer is not None:
+            zf.writestr(f"output_gcp_{stamp}.log", anonymized_log_note())
+        elif os.path.exists(log_tmp):
+            zf.write(log_tmp, f"output_gcp_{stamp}.log")
+    if anonymizer is not None:
+        key_path = output_dir / f"{KEY_FILE_PREFIX}-{stamp}.csv"
+        key_path.write_text(anonymizer.key_file_text(), encoding="utf-8", newline="")
+        kept_log = output_dir / f"output_gcp_not_anonymized_{stamp}.log"
+        if os.path.exists(log_tmp):
+            shutil.copyfile(log_tmp, kept_log)
+        console.print(f"[green]Keys:[/green] {key_path}  [dim](not in the ZIP)[/dim]")
+        console.print(f"[green]Log: [/green] {kept_log}  [dim](not in the ZIP)[/dim]")
+    try:
+        pathlib.Path(log_tmp).unlink()
+    except OSError as exc:
+        logger.debug("Could not remove %s after zipping: %s", log_tmp, exc)
+    console.print()
+    console.print(f"[green]Access check complete.[/green]  Report: [cyan]{zip_path}[/cyan]")
+    return zip_path
+
+
+def _finalise_zip(
+    out_path: pathlib.Path,
+    log_handler: logging.Handler,
+    log_tmp: str,
+    started: Optional[datetime] = None,
+    write_csv: bool = True,
+    anonymizer: Optional[Anonymizer] = None,
+    access_rows: Optional[list[dict]] = None,
+    scope: Optional[dict] = None,
+) -> pathlib.Path:
+    """Bundle the discovery JSON, the PowerShell-style CSV files and the run log into one ZIP,
+    leaving a single file.
+
+    The ZIP and the log are named as the PowerShell script names them
+    (``gcp_sizing_results_<yyyy-MM-dd_HHmmss>.zip``, ``output_gcp_<same>.log``), with the run's
+    start time. Detaches + closes the log handler first so the file is complete, then removes the
+    loose JSON / temp log so only the ZIP remains to share.
+
+    An anonymized run's ZIP has the anonymized CSV files and a note under the log's name, and no
+    raw JSON (it holds every real name). The file that maps the labels back to the real values
+    and the real log are written beside the ZIP.
+    """
+    import csv_export
+
+    logger.info("Discovery run complete — bundling artefacts.")
+    _print_totals(out_path)
+    runlog.finish(console)
+    logging.getLogger().removeHandler(log_handler)
+    log_handler.close()
+
+    stamp = (started or datetime.now(timezone.utc)).strftime(csv_export.FILE_TIMESTAMP_FORMAT)
+    zip_path = out_path.with_name(f"gcp_sizing_results_{stamp}.zip")
+    in_zip: dict = {}  # every data file written below, for the manifest
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if anonymizer is None:
+            in_zip[out_path.name] = out_path.read_bytes()
+            zf.writestr(out_path.name, in_zip[out_path.name])
+        if write_csv:
+            with out_path.open(encoding="utf-8") as f:
+                for name, text in csv_export.build_csv_files(
+                    json.load(f), stamp, anonymizer
+                ).items():
+                    in_zip[name] = text
+                    zf.writestr(name, text)
+            if access_rows:
+                access_name = preflight_core.file_name(preflight.FILE_PREFIX, stamp)
+                in_zip[access_name] = preflight.csv_for(access_rows, anonymizer)
+                zf.writestr(access_name, in_zip[access_name])
+        manifest_text = _manifest_text(in_zip, scope)  # last, so it lists everything above
+        if manifest_text is not None:
+            zf.writestr(manifest_core.FILE_NAME, manifest_text)
+        if anonymizer is not None:
+            zf.writestr(f"output_gcp_{stamp}.log", anonymized_log_note())
+        elif os.path.exists(log_tmp):
+            zf.write(log_tmp, f"output_gcp_{stamp}.log")
+    if anonymizer is not None:
+        key_path = out_path.with_name(f"{KEY_FILE_PREFIX}-{stamp}.csv")
+        key_path.write_text(anonymizer.key_file_text(), encoding="utf-8", newline="")
+        kept_log = out_path.with_name(f"output_gcp_not_anonymized_{stamp}.log")
+        if os.path.exists(log_tmp):
+            shutil.copyfile(log_tmp, kept_log)
+        console.print(f"[green]Keys:[/green] {key_path}  [dim](not in the ZIP)[/dim]")
+        console.print(f"[green]Log: [/green] {kept_log}  [dim](not in the ZIP)[/dim]")
+        console.print("[dim]Keep these two files; they hold the real names.[/dim]")
+
+    for stale in (out_path, pathlib.Path(log_tmp)):
+        try:
+            stale.unlink()
+        except OSError as exc:
+            logger.debug("Could not remove %s after zipping: %s", stale, exc)
+    return zip_path
+
+
+def _print_totals(json_path: pathlib.Path) -> None:
+    """The per-resource totals, as the PowerShell script prints them, on the screen and in the log.
+
+    Worked out from the discovery JSON the CSV files are built from, so the two agree. It holds
+    counts and sizes only, so it is safe in an anonymized run. A failure here is a warning.
+    """
+    import csv_export
+
+    try:
+        with json_path.open(encoding="utf-8") as f:
+            result = json.load(f)
+        bigquery = result.get("bigquery") or []
+        lines = totals.summary_lines(
+            csv_export.rows_by_file(result),
+            sum(int(b.get("dataset_count") or 0) for b in bigquery),
+            sum(
+                1 for e in result.get("collection_errors") or [] if e.get("collector") == "bigquery"
+            ),
+            bool(bigquery),
+        )
+    except Exception as exc:  # noqa: BLE001 - the totals must never stop the run
+        logger.warning("Could not work out the totals: %s", exc)
+        return
+    console.print()
+    for line in lines:
+        console.print(line, markup=False, highlight=False, style="green")
+
+
+def _move_run_log(log_handler: logging.Handler, output_dir: pathlib.Path, started: datetime) -> str:
+    """Continue the run log in the output folder, named as it is inside the zip.
+
+    The log starts in a temp file because the output folder can come from the config file, which is
+    read after the log opens. From here a run that stops, is killed or crashes leaves its log in the
+    folder the results go to, written up to that moment. Returns the log's path.
+    """
+    import csv_export
+
+    name = f"output_gcp_{started.strftime(csv_export.FILE_TIMESTAMP_FORMAT)}.log"
+    return log_handler.move(str(output_dir / name))
+
+
+def _discard_run_log(log_handler: logging.Handler, log_tmp: str) -> None:
+    """Detach the run-log handler and drop its temp file — no artefact produced."""
+    logging.getLogger().removeHandler(log_handler)
+    log_handler.close()
+    try:
+        os.remove(log_tmp)
+    except OSError:
+        pass
+
+
+def _print_banner(projects: list[str], regions: Optional[list[str]]) -> None:
+    region_str = ", ".join(regions) if regions else "all regions"
+    project_str = ", ".join(projects[:3]) + (
+        f" … +{len(projects) - 3} more" if len(projects) > 3 else ""
+    )
+    console.print()
+    console.print(
+        Panel(
+            f"[bold white]Rubrik Discovery — GCP Edition[/bold white]\n"
+            f"[dim]Projects:[/dim] [cyan]{project_str}[/cyan]\n"
+            f"[dim]Regions:[/dim]  [cyan]{region_str}[/cyan]",
+            border_style="bold blue",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+
+
+def _print_who_and_scope(
+    credentials,
+    projects: list[str],
+    *,
+    named: int,
+    current_only: bool,
+    include_system_projects: bool,
+) -> tuple:
+    """Say who the scan runs as and how the project list was chosen; return ``(facts, account)``.
+
+    Both lines go to the screen and so to the run log.  The account is not kept anywhere else:
+    the manifest and the anonymized log leave it out.
+    """
+    import auth
+
+    account = auth.identity_of(credentials)
+    console.print(f"[dim]{escape(runlog.account_line(account))}[/dim]")
+    mode = "named" if named else "current" if current_only else "all"
+    facts = auth.describe_scope(
+        credentials,
+        mode=mode,
+        scanned=projects,
+        named=named,
+        include_system_projects=include_system_projects,
+    )
+    for line in runlog.scope_lines(facts):
+        style = "yellow" if "WARNING" in line else "dim"
+        console.print(f"[{style}]{escape(line)}[/{style}]")
+    return facts, account
+
+
+def _print_dry_run(
+    projects: list[str], regions: Optional[list[str]], selected: Optional[set[str]] = None
+) -> None:
+    console.print(Rule("[bold]Dry Run — No GCP APIs will be called[/bold]"))
+    console.print()
+
+    sel = selected if selected is not None else set(_CORE_COLLECTORS)
+
+    t = Table(box=box.ROUNDED, show_lines=False, title="In-scope projects")
+    t.add_column("Project ID", style="cyan")
+    for pid in projects:
+        t.add_row(pid)
+    console.print(t)
+    console.print()
+
+    t2 = Table(box=box.ROUNDED, show_lines=False, title="GCP APIs that would be called")
+    t2.add_column("Collector", style="cyan", min_width=14)
+    t2.add_column("API call", min_width=40)
+    t2.add_column("Required IAM role", style="dim", min_width=30)
+    t2.add_column("Purpose")
+    for collector, api_call, iam, purpose in _DRY_RUN_API_CALLS:
+        if collector not in sel:
+            continue
+        t2.add_row(collector, api_call, iam, purpose)
+    console.print(t2)
+    if sel != set(_CORE_COLLECTORS):
+        console.print(
+            f"[dim]Collector selection: {','.join(c for c in _CORE_COLLECTORS if c in sel)} "
+            f"(others skipped via --collectors/--inventory-only).[/dim]"
+        )
+    console.print()
+    console.print("[dim]Re-run without --dry-run to perform the actual collection.[/dim]")
+
+
+def _collect_project(
+    project_id: str,
+    credentials,
+    regions: Optional[list[str]],
+    enable_security: bool = False,
+    precomputed_asset=None,
+    selected: Optional[set[str]] = None,
+    switched_off: Optional[set[str]] = None,
+) -> dict:
+    """Run all Phase 2 collectors for one project.
+
+    Returns a dict keyed by collector name with the inventory result.  Safe to
+    run concurrently across projects — it shares only the (thread-safe, already
+    refreshed) credentials and prints nothing (progress is printed by the
+    orchestrator as each future completes, keeping parallel output ordered).
+
+    If ``precomputed_asset`` is supplied (from the org-wide CAI spine), the
+    per-project ``AssetCollector`` call is skipped — that's the whole point of
+    the org spine: one sweep instead of one list_assets per project.
+    """
+    from collectors.asset import AssetCollector
+    from collectors.backup import BackupCollector
+    from collectors.bigquery import BigQueryCollector
+    from collectors.compute import ComputeCollector
+    from collectors.database import DatabaseCollector
+    from collectors.storage import StorageCollector
+    from collectors.utils import collection_error
+
+    sel = selected if selected is not None else set(_CORE_COLLECTORS)
+    # Collectors the pre-flight found switched off here (API or billing off) are not run: every
+    # call would fail the same way. Nothing is lost, because there is nothing to read.
+    if switched_off:
+        sel = sel - switched_off
+    result: dict = {}
+    # Per-project collector failures (API disabled, missing permission, etc.).
+    # Captured so a partial scan is visible downstream instead of silent zeros.
+    errors: list[dict] = []
+
+    # Asset enumeration — the spine
+    if "asset" in sel:
+        if precomputed_asset is not None:
+            result["asset"] = precomputed_asset
+        else:
+            collector = AssetCollector(project_id, credentials)
+            try:
+                result["asset"] = collector.collect()
+            except Exception as exc:
+                logger.error("Asset collector failed for %s: %s", project_id, exc)
+                errors.append(collection_error("asset", exc))
+            errors.extend(collector.errors)
+
+    # Compute
+    if "compute" in sel:
+        collector = ComputeCollector(project_id, credentials, regions)
+        try:
+            compute_inv = collector.collect()
+            result["compute"] = compute_inv
+            logger.debug(
+                "Project %s: compute done (%d instances)", project_id, compute_inv.total_instances
+            )
+        except Exception as exc:
+            logger.error("Compute collector failed for %s: %s", project_id, exc)
+            errors.append(collection_error("compute", exc))
+        errors.extend(collector.errors)
+
+    # Storage
+    if "storage" in sel:
+        collector = StorageCollector(project_id, credentials)
+        try:
+            storage_inv = collector.collect()
+            result["storage"] = storage_inv
+            logger.debug(
+                "Project %s: storage done (%d buckets)", project_id, storage_inv.total_buckets
+            )
+        except Exception as exc:
+            logger.error("Storage collector failed for %s: %s", project_id, exc)
+            errors.append(collection_error("storage", exc))
+        errors.extend(collector.errors)
+
+    # Database
+    if "database" in sel:
+        collector = DatabaseCollector(project_id, credentials)
+        try:
+            db_inv = collector.collect()
+            result["database"] = db_inv
+            logger.debug("Project %s: database done (%d total)", project_id, db_inv.total_databases)
+        except Exception as exc:
+            logger.error("Database collector failed for %s: %s", project_id, exc)
+            errors.append(collection_error("database", exc))
+        errors.extend(collector.errors)
+
+    # BigQuery
+    if "bigquery" in sel:
+        collector = BigQueryCollector(project_id, credentials)
+        try:
+            bq_inv = collector.collect()
+            result["bigquery"] = bq_inv
+            logger.debug(
+                "Project %s: bigquery done (%d datasets, %d tables)",
+                project_id,
+                bq_inv.dataset_count,
+                len(bq_inv.tables),
+            )
+        except Exception as exc:
+            logger.error("BigQuery collector failed for %s: %s", project_id, exc)
+            errors.append(collection_error("bigquery", exc))
+        errors.extend(collector.errors)
+
+    # Backup and DR — pass instance names for gap analysis
+    if "backup" in sel:
+        gce_names = (
+            [inst.name for inst in result["compute"].instances] if "compute" in result else []
+        )
+        collector = BackupCollector(
+            project_id, credentials, gce_instance_names=gce_names, regions=regions
+        )
+        try:
+            backup_inv = collector.collect()
+            result["backup"] = backup_inv
+            logger.debug(
+                "Project %s: backup done (%.1f%% coverage)",
+                project_id,
+                backup_inv.protection_coverage_pct,
+            )
+        except Exception as exc:
+            logger.error("Backup collector failed for %s: %s", project_id, exc)
+            errors.append(collection_error("backup", exc))
+        errors.extend(collector.errors)
+
+    # Stamp the project onto each error so the aggregated list is self-describing.
+    for e in errors:
+        e["project_id"] = project_id
+    if errors:
+        result["errors"] = errors
+
+    return result
+
+
+def _print_project_line(
+    project_id: str, result: dict, idx: int, total: int, switched_off: Optional[set] = None
+) -> None:
+    """Print one project's completion line (called in the main thread, in order)."""
+    counter = f"[dim]{idx}/{total}[/dim]"
+    asset = result.get("asset")
+    if not result and switched_off:
+        console.print(
+            f"  [dim]-[/dim] {counter} {project_id[:40]:<40}  "
+            f"[dim]nothing enabled to read ({', '.join(sorted(switched_off))} off)[/dim]"
+        )
+        return
+    if asset is not None and asset.failed:
+        # Unknown, not zero: the listing could not be read, so say so instead of "0 assets".
+        why = "rate limited" if asset.failure_category == "RATE_LIMITED" else "could not be read"
+        console.print(
+            f"  [yellow]⚠[/yellow] {counter} {project_id[:40]:<40}  "
+            f"[yellow]asset listing {why}[/yellow]  [dim](other collectors ran)[/dim]"
+        )
+    elif asset is not None:
+        console.print(
+            f"  [green]✓[/green] {counter} {project_id[:40]:<40}  "
+            f"[cyan]{asset.total_assets}[/cyan] assets  "
+            f"[dim]({len(asset.assets_by_type)} types)[/dim]"
+        )
+    elif result:
+        console.print(
+            f"  [green]✓[/green] {counter} {project_id[:40]:<40}  [dim](no asset spine)[/dim]"
+        )
+    else:
+        console.print(
+            f"  [red]✗[/red] {counter} {project_id[:40]:<40}  [red]collection failed[/red]"
+        )
+
+
+def _summarise_project(project_id: str, result: dict) -> dict:
+    """Reduce a full collector result to the slim numbers the summary table needs.
+
+    Kept tiny so org-scale runs can hold one per project (1000 of these) without
+    retaining the heavy inventories.
+    """
+    compute = result.get("compute")
+    storage = result.get("storage")
+    database = result.get("database")
+    bigquery = result.get("bigquery")
+    backup = result.get("backup")
+    backup_known = bool(backup) and backup.available
+    return {
+        "project_id": project_id,
+        "instances": compute.total_instances if compute else None,
+        "disk_tb": compute.total_disk_tb if compute else None,
+        "buckets": storage.total_buckets if storage else None,
+        "bq_datasets": bigquery.dataset_count if bigquery else None,
+        "bq_counts": dict(bigquery.table_counts) if bigquery else None,
+        "bq_protectable_bytes": bigquery.protectable_logical_bytes if bigquery else None,
+        "dbs": database.total_databases if database else None,
+        "protected": backup.protected_instance_count if backup_known else None,
+        "coverage_pct": backup.protection_coverage_pct if backup_known else None,
+        "coverage_unavailable": bool(backup) and not backup.available,
+        "instances_for_coverage": (
+            (compute.total_instances if compute else 0) if backup_known else 0
+        ),
+        "incomplete": bool(result.get("errors")),
+    }
+
+
+def _run_mock() -> tuple[list[str], Optional[list[str]], dict]:
+    """Return mock scope + per-project results for --mock mode.
+
+    No GCP APIs are called; all data comes from inline fixture definitions.
+    """
+    mock_projects = ["mock-project-prod", "mock-project-dev"]
+    mock_regions = None  # all regions
+
+    from collectors.asset import AssetInventory
+    from models.inventory import (
+        BackupPostureInventory,
+        BigQueryInventory,
+        BigQueryTable,
+        ComputeInventory,
+        DatabaseInventory,
+        StorageInventory,
+    )
+
+    mock_results: dict[str, dict] = {
+        "mock-project-prod": {
+            "asset": AssetInventory(
+                project_id="mock-project-prod",
+                total_assets=142,
+                assets_by_type={
+                    "compute.googleapis.com/Instance": 28,
+                    "storage.googleapis.com/Bucket": 15,
+                    "sqladmin.googleapis.com/Instance": 6,
+                    "compute.googleapis.com/Disk": 56,
+                    "compute.googleapis.com/Firewall": 12,
+                    "iam.googleapis.com/ServiceAccount": 25,
+                },
+            ),
+            "compute": ComputeInventory(
+                project_id="mock-project-prod",
+                total_instances=28,
+                total_disk_tb=round(56 * 200 / 1024, 2),
+                os_breakdown={"linux": 22, "windows": 6},
+                machine_family_breakdown={"n2": 14, "e2": 10, "c2": 4},
+                disk_type_breakdown={"pd-ssd": 30, "pd-balanced": 26},
+                region_breakdown={"us-central1": 20, "us-east1": 8},
+                status_breakdown={"RUNNING": 25, "TERMINATED": 3},
+            ),
+            "storage": StorageInventory(
+                project_id="mock-project-prod",
+                total_buckets=15,
+                class_breakdown={"STANDARD": 10, "NEARLINE": 3, "COLDLINE": 2},
+                location_type_breakdown={"region": 12, "multi-region": 3},
+                soft_delete_enabled_count=8,
+                soft_delete_pct=53.3,
+                versioning_enabled_count=6,
+                versioning_pct=40.0,
+            ),
+            "database": DatabaseInventory(
+                project_id="mock-project-prod",
+                total_databases=6,
+                engine_breakdown={"MYSQL": 3, "POSTGRES": 2, "SQLSERVER": 1},
+            ),
+            "bigquery": BigQueryInventory(
+                project_id="mock-project-prod",
+                dataset_count=2,
+                tables=[
+                    BigQueryTable(
+                        dataset_id="analytics",
+                        location="US",
+                        table_id="events",
+                        table_type="TABLE",
+                        num_rows=1_200_000,
+                        number_of_columns=14,
+                        total_logical_bytes=5_000_000_000,
+                        long_term_logical_bytes=2_000_000_000,
+                        creation_time="2026-01-15T09:30:00Z",
+                        last_modified_time="2026-10-01T04:00:00Z",
+                        dataset_labels={"team": "data"},
+                    ),
+                    BigQueryTable(
+                        dataset_id="analytics",
+                        location="US",
+                        table_id="events_view",
+                        table_type="VIEW",
+                        number_of_columns=6,
+                        creation_time="2026-01-16T09:30:00Z",
+                        last_modified_time="2026-01-16T09:30:00Z",
+                        dataset_labels={"team": "data"},
+                    ),
+                ],
+                table_counts={"TABLE": 1, "VIEW": 1},
+                protectable_logical_bytes=5_000_000_000,
+            ),
+            "backup": BackupPostureInventory(
+                project_id="mock-project-prod",
+                total_associations=22,
+                protected_instance_count=22,
+                unprotected_instance_count=6,
+                unprotected_instances=[
+                    "vm-legacy-1",
+                    "vm-legacy-2",
+                    "vm-dev-3",
+                    "vm-dev-4",
+                    "vm-test-5",
+                    "vm-test-6",
+                ],
+                protection_coverage_pct=78.6,
+            ),
+        },
+        "mock-project-dev": {
+            "asset": AssetInventory(
+                project_id="mock-project-dev",
+                total_assets=37,
+                assets_by_type={
+                    "compute.googleapis.com/Instance": 8,
+                    "storage.googleapis.com/Bucket": 7,
+                    "compute.googleapis.com/Disk": 16,
+                    "iam.googleapis.com/ServiceAccount": 6,
+                },
+            ),
+            "compute": ComputeInventory(
+                project_id="mock-project-dev",
+                total_instances=8,
+                total_disk_tb=round(16 * 100 / 1024, 2),
+                os_breakdown={"linux": 8},
+                machine_family_breakdown={"e2": 8},
+                disk_type_breakdown={"pd-standard": 16},
+                region_breakdown={"us-central1": 8},
+                status_breakdown={"RUNNING": 6, "TERMINATED": 2},
+            ),
+            "storage": StorageInventory(
+                project_id="mock-project-dev",
+                total_buckets=7,
+                class_breakdown={"STANDARD": 7},
+                location_type_breakdown={"region": 7},
+                soft_delete_enabled_count=0,
+                soft_delete_pct=0.0,
+                versioning_enabled_count=0,
+                versioning_pct=0.0,
+            ),
+            "database": DatabaseInventory(
+                project_id="mock-project-dev",
+                total_databases=0,
+                engine_breakdown={},
+            ),
+            "backup": BackupPostureInventory(
+                project_id="mock-project-dev",
+                total_associations=0,
+                protected_instance_count=0,
+                unprotected_instance_count=8,
+                unprotected_instances=[f"vm-dev-{i}" for i in range(1, 9)],
+                protection_coverage_pct=0.0,
+            ),
+        },
+    }
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold white]Rubrik Discovery — GCP Edition[/bold white]  "
+            "[yellow](MOCK MODE — no GCP credentials required)[/yellow]",
+            border_style="yellow",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+    console.print(Rule("[bold]Collecting assets[/bold]"))
+    for pid, res in mock_results.items():
+        asset_inv = res["asset"]
+        console.print(
+            f"  [green]✓[/green] {pid:<40}  "
+            f"[cyan]{asset_inv.total_assets}[/cyan] assets  "
+            f"[dim]({len(asset_inv.assets_by_type)} types)[/dim]"
+        )
+
+    return mock_projects, mock_regions, mock_results
+
+
+def _build_result(
+    projects: list[str],
+    regions: Optional[list[str]],
+    per_project: dict[str, dict],
+    organization_id: Optional[str] = None,
+    collection_errors: Optional[list[dict]] = None,
+    access_check: Optional[list[dict]] = None,
+) -> "DiscoveryResult":
+    import dataclasses
+
+    from models.inventory import DiscoveryResult
+
+    def _to_dict(obj):
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
+        return obj
+
+    asset_counts: dict = {}
+    compute_list = []
+    storage_list = []
+    databases_list = []
+    bigquery_list = []
+    backup_list = []
+
+    for pid, res in per_project.items():
+        # A failed listing has no counts; leave the project out rather than record a zero.
+        if "asset" in res and not res["asset"].failed:
+            inv = res["asset"]
+            asset_counts[pid] = {"total": inv.total_assets, **inv.assets_by_type}
+        if "compute" in res:
+            compute_list.append(_to_dict(res["compute"]))
+        if "storage" in res:
+            storage_list.append(_to_dict(res["storage"]))
+        if "database" in res:
+            databases_list.append(_to_dict(res["database"]))
+        if "bigquery" in res:
+            bigquery_list.append(_to_dict(res["bigquery"]))
+        if "backup" in res:
+            backup_list.append(_to_dict(res["backup"]))
+
+    if collection_errors is None:
+        collection_errors = []
+        for res in per_project.values():
+            collection_errors.extend(res.get("errors", []))
+
+    return DiscoveryResult(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        organization_id=organization_id,
+        projects_scanned=projects,
+        regions_in_scope=regions,
+        asset_counts=asset_counts,
+        compute=compute_list,
+        storage=storage_list,
+        databases=databases_list,
+        bigquery=bigquery_list,
+        backup_posture=backup_list,
+        collection_errors=collection_errors,
+        access_check=access_check or [],
+    )
+
+
+def _write_output(result: "DiscoveryResult", output_dir: pathlib.Path) -> pathlib.Path:
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"gcp-sizing-discovery-{ts}.json"
+    out_path = output_dir / filename
+
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(result.to_json_dict(), f, indent=2, default=str)
+
+    return out_path
+
+
+_SUMMARY_TABLE_CAP = 50
+"""Above this many projects, show only the org totals — a 1000-row table is noise."""
+
+
+def _print_summary(summaries: list[dict], collection_errors: Optional[list[dict]] = None) -> None:
+    console.print()
+    console.print(Rule("[bold]Discovery Summary[/bold]"))
+    console.print()
+
+    total_instances = 0
+    total_disk_tb = 0.0
+    total_buckets = 0
+    total_dbs = 0
+    total_protected = 0
+
+    for s in summaries:
+        total_instances += s["instances"] or 0
+        total_disk_tb += s["disk_tb"] or 0.0
+        total_buckets += s["buckets"] or 0
+        total_dbs += s["dbs"] or 0
+        total_protected += s["protected"] or 0
+
+    show_rows = len(summaries) <= _SUMMARY_TABLE_CAP
+
+    t = Table(box=box.ROUNDED, show_lines=False)
+    t.add_column("Project", style="cyan", min_width=30)
+    t.add_column("Instances", justify="right", min_width=10)
+    t.add_column("Disk TB", justify="right", min_width=8)
+    t.add_column("Buckets", justify="right", min_width=9)
+    t.add_column("Databases", justify="right", min_width=10)
+    t.add_column("Protected", justify="right", min_width=10)
+
+    if show_rows:
+        for s in summaries:
+            instances = str(s["instances"]) if s["instances"] is not None else "-"
+            disk_tb = f"{s['disk_tb']:.2f}" if s["disk_tb"] is not None else "-"
+            buckets = str(s["buckets"]) if s["buckets"] is not None else "-"
+            dbs = str(s["dbs"]) if s["dbs"] is not None else "-"
+
+            if s.get("coverage_unavailable"):
+                protected = "[yellow]n/a[/yellow]"
+            elif s["coverage_pct"] is not None:
+                protected = str(s["protected"])
+            else:
+                protected = "-"
+
+            name = (
+                f"[yellow]⚠[/yellow] {s['project_id']}" if s.get("incomplete") else s["project_id"]
+            )
+            t.add_row(name, instances, disk_tb, buckets, dbs, protected)
+        t.add_section()
+    else:
+        console.print(
+            f"[dim]{len(summaries)} projects scanned — per-project rows omitted "
+            f"(> {_SUMMARY_TABLE_CAP}); see the JSON output for detail.[/dim]"
+        )
+        console.print()
+
+    unavailable = sum(1 for s in summaries if s.get("coverage_unavailable"))
+    readable = any(s["coverage_pct"] is not None for s in summaries)
+    total_protected_str = "n/a" if unavailable and not readable else str(total_protected)
+    t.add_row(
+        "[bold]TOTAL[/bold]",
+        f"[bold]{total_instances}[/bold]",
+        f"[bold]{total_disk_tb:.2f}[/bold]",
+        f"[bold]{total_buckets}[/bold]",
+        f"[bold]{total_dbs}[/bold]",
+        f"[bold]{total_protected_str}[/bold]",
+    )
+
+    console.print(t)
+
+    bq = [s for s in summaries if s.get("bq_counts") is not None]
+    if bq:
+        kinds: dict[str, int] = {}
+        for s in bq:
+            for kind, n in s["bq_counts"].items():
+                kinds[kind] = kinds.get(kind, 0) + n
+        protectable_tb = round(sum(s["bq_protectable_bytes"] or 0 for s in bq) / 1e12, 4)
+        console.print()
+        console.print(
+            f"[bold]BigQuery:[/bold] {sum(s['bq_datasets'] or 0 for s in bq)} datasets · "
+            f"{kinds.get('TABLE', 0)} tables · {kinds.get('MATERIALIZED_VIEW', 0)} materialized "
+            f"views · {kinds.get('VIEW', 0)} views · {kinds.get('EXTERNAL', 0)} external tables · "
+            f"{kinds.get('SNAPSHOT', 0)} snapshots"
+        )
+        console.print(
+            f"  [dim]Logical size of the data in BigQuery (tables and materialized views): "
+            f"{protectable_tb} TB, decimal. Views, external tables and snapshots are not "
+            f"counted.[/dim]"
+        )
+
+    # Surface partial coverage loudly — a project we couldn't fully read shows as
+    # zeros above and would otherwise silently undercount the sizing estimate.
+    errs = collection_errors or []
+    if errs:
+        affected = {e.get("project_id") for e in errs}
+        cats: dict[str, int] = {}
+        for e in errs:
+            cats[e.get("category", "OTHER")] = cats.get(e.get("category", "OTHER"), 0) + 1
+        cat_str = " · ".join(f"{k}: {v}" for k, v in sorted(cats.items()))
+        console.print()
+        console.print(
+            f"[yellow]⚠ {len(affected)} of {len(summaries)} projects had incomplete "
+            f"collection[/yellow] [dim]— affected metrics undercount.[/dim]"
+        )
+        console.print(f"  [dim]{cat_str}[/dim]")
+        if unavailable:
+            console.print(
+                f"  [dim]Protected is n/a for {unavailable} project(s): Backup and DR could not be "
+                "read, so they are left out of the Protected total (the JSON lists their VMs as "
+                "unprotected, with available=false).[/dim]"
+            )
+        console.print(
+            "  [dim]See [bold]collection_errors[/bold] in the discovery JSON for "
+            "per-project detail.[/dim]"
+        )
+
+
+def main() -> None:
+    try:
+        _main()
+    except BaseException as exc:
+        runlog.crashed(exc)
+        raise
+
+
+def _main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+    if (args.anonymize_fields or args.not_anonymize_fields) and not args.anonymize:
+        parser.error("--anonymize-fields and --not-anonymize-fields need --anonymize")
+    if args.anonymize and args.no_csv:
+        parser.error("--anonymize works on the CSV files, so it cannot be used with --no-csv")
+    if args.preflight_only and args.no_preflight:
+        parser.error("--preflight-only runs only the access check, so it cannot skip it")
+    if args.preflight_only and args.no_csv:
+        parser.error("--preflight-only writes only the access-check CSV, so it cannot use --no-csv")
+    if args.preflight_only and args.dry_run:
+        parser.error("--preflight-only already collects nothing; use it or --dry-run, not both")
+    if args.preflight_only and args.mock:
+        parser.error("--preflight-only checks real access, so it cannot be used with --mock")
+    anonymizer = (
+        Anonymizer.from_options(args.anonymize_fields, args.not_anonymize_fields)
+        if args.anonymize
+        else None
+    )
+    _configure_logging(args.verbose)
+
+    # Capture a full DEBUG run log to disk; bundled into the result ZIP below.
+    log_handler, log_tmp = _start_run_log()
+    runlog.start(sys.argv[1:])
+    runlog.install_stop_handlers()
+    started = datetime.now(timezone.utc)
+    logger.info("Discovery run started (mock=%s)", bool(args.mock))
+
+    from config import load_config
+
+    cfg = load_config(args.config)
+    if not args.dry_run:
+        log_tmp = _move_run_log(
+            log_handler, _resolve_output_dir(args.output or cfg.discovery.output_dir), started
+        )
+
+    # Validate collector selection early — fail fast on a typo before we touch
+    # credentials or call any GCP API.
+    selected = _resolve_collectors(args)
+
+    # ── Mock mode ──────────────────────────────────────────────────────────────
+    if args.mock or cfg.discovery.mock:
+        projects, regions, per_project = _run_mock()
+        result = _build_result(projects, regions, per_project)
+        output_dir = _resolve_output_dir(args.output or cfg.discovery.output_dir)
+        out_path = _write_output(result, output_dir)
+        _print_summary([_summarise_project(pid, per_project[pid]) for pid in projects])
+        zip_path = _finalise_zip(
+            out_path,
+            log_handler,
+            log_tmp,
+            started=started,
+            write_csv=not args.no_csv,
+            anonymizer=anonymizer,
+        )
+        console.print()
+        console.print(f"[green]Discovery complete.[/green]  Output: [cyan]{zip_path}[/cyan]")
+        console.print(
+            "[dim]Share this ZIP with your Rubrik SE, who will run "
+            "generate_report.py to produce the HTML + Excel report.[/dim]"
+        )
+        return
+
+    # ── Live run ───────────────────────────────────────────────────────────────
+    import auth
+
+    if args.project_file:
+        project_ids = _read_project_file(args.project_file)
+    else:
+        project_ids = _parse_csv(args.projects) if args.projects else None
+
+    credentials = auth.get_credentials()
+    regions_raw = _parse_csv(args.regions) if args.regions else None
+    regions = auth.normalise_regions(regions_raw)
+
+    if cfg.scope.projects and not project_ids:
+        logger.warning(
+            "scope.projects in the config file is not used for project selection; "
+            "pass --projects or --project-file. Scanning: %s",
+            "current project" if _current_project_only(args, cfg) else "all accessible projects",
+        )
+    skipped_projects: list = []
+    projects = auth.resolve_projects(
+        credentials,
+        project_ids,
+        all_projects=not _current_project_only(args, cfg),
+        skipped=skipped_projects,
+        include_system_projects=args.include_system_projects,
+    )
+    # Projects that are not in the results, and why: each keeps rows in the pre-flight CSV and is
+    # named at the end.
+    not_scanned: list[dict] = []
+    for pid, exc in skipped_projects:
+        check = preflight.unreadable_check(pid, exc)
+        not_scanned.append(
+            {"id": pid, "why": f"cannot read the project: {check.code}", "rows": [check.to_row()]}
+        )
+
+    _print_banner(projects, regions)
+    scope_facts, account = _print_who_and_scope(
+        credentials,
+        projects,
+        named=len(project_ids) if project_ids else 0,
+        current_only=_current_project_only(args, cfg),
+        include_system_projects=args.include_system_projects,
+    )
+
+    if args.dry_run:
+        _discard_run_log(log_handler, log_tmp)
+        _print_dry_run(projects, regions, selected)
+        return
+
+    workers = args.workers or cfg.discovery.workers
+    scope = auth.normalise_scope(
+        args.org_id or cfg.discovery.org_id,
+        args.folder_id or cfg.discovery.folder_id,
+    )
+    enable_security = args.security or cfg.discovery.collectors.security
+    if selected != set(_CORE_COLLECTORS):
+        console.print(
+            f"[dim]Collectors:[/dim] running [cyan]"
+            f"{','.join(c for c in _CORE_COLLECTORS if c in selected)}[/cyan] "
+            f"[dim](subset — other core collectors skipped)[/dim]"
+        )
+
+    access_rows: list[dict] = []
+    if not args.no_preflight:
+        access_rows = _run_access_check(projects, credentials, selected, workers)
+
+    if args.preflight_only:
+        _finish_access_check(
+            _resolve_output_dir(args.output or cfg.discovery.output_dir),
+            log_handler,
+            log_tmp,
+            started,
+            access_rows,
+            not_scanned,
+            checked=len(projects),
+            anonymizer=anonymizer,
+            scope=_scope_for_manifest(scope_facts),
+        )
+        return
+
+    # ── Org-wide asset spine (Feature: one CAI sweep instead of N list_assets) ──
+    # Only worth a sweep when the asset collector is actually selected.
+    org_assets = _maybe_org_asset_spine(scope, credentials, projects) if "asset" in selected else {}
+
+    # ── Per-project collection, parallelised across `workers` threads ───────────
+    console.print(Rule(f"[bold]Collecting assets[/bold]  [dim]({workers} workers)[/dim]"))
+    console.print()
+
+    output_dir = _resolve_output_dir(args.output or cfg.discovery.output_dir)
+    failed_projects: list = []
+    out_path = _collect_and_write(
+        projects=projects,
+        regions=regions,
+        credentials=credentials,
+        enable_security=enable_security,
+        workers=workers,
+        org_assets=org_assets,
+        output_dir=output_dir,
+        selected=selected,
+        access_rows=access_rows,
+        failed=failed_projects,
+    )
+    for pid, exc in failed_projects:
+        check = preflight.scan_failed_check(pid, exc)
+        not_scanned.append(
+            {"id": pid, "why": f"collection failed: {check.code}", "rows": [check.to_row()]}
+        )
+    _print_not_scanned(not_scanned, "Not scanned:")
+
+    zip_path = _finalise_zip(
+        out_path,
+        log_handler,
+        log_tmp,
+        started=started,
+        write_csv=not args.no_csv,
+        anonymizer=anonymizer,
+        access_rows=[*access_rows, *(row for entry in not_scanned for row in entry["rows"])],
+        scope=_scope_for_manifest(scope_facts),
+    )
+
+    console.print()
+    console.print(f"[green]Discovery complete.[/green]  Output: [cyan]{zip_path}[/cyan]")
+    console.print(
+        "[dim]Share this ZIP with your Rubrik SE, who will run "
+        "generate_report.py to produce the HTML + Excel report.[/dim]"
+    )
+
+
+def _maybe_org_asset_spine(scope, credentials, projects: list[str]) -> dict:
+    """Run the org-wide CAI spine when a scope is set; return {project_id: AssetInventory}.
+
+    Returns an empty dict (per-project fallback) when no scope is given or the
+    org sweep fails / yields nothing.
+    """
+    if not scope:
+        return {}
+
+    import auth
+    from collectors.asset import OrgAssetCollector
+
+    console.print(
+        f"[dim]Org spine:[/dim] enumerating assets for [cyan]{len(projects)}[/cyan] "
+        f"projects under [cyan]{scope}[/cyan] in one Cloud Asset Inventory sweep…"
+    )
+    number_map = auth.build_project_number_map(credentials, projects)
+    org_assets = OrgAssetCollector(scope, credentials, number_map).collect()
+    if org_assets:
+        console.print(
+            f"[green]✓[/green] Org spine covered [cyan]{len(org_assets)}[/cyan] projects "
+            f"[dim](skipping per-project list_assets)[/dim]\n"
+        )
+    else:
+        console.print(
+            "[yellow]Org spine returned no data — falling back to per-project "
+            "asset collection.[/yellow]\n"
+        )
+    return org_assets
+
+
+def _collect_and_write(
+    *,
+    projects: list[str],
+    regions: Optional[list[str]],
+    credentials,
+    enable_security: bool,
+    workers: int,
+    org_assets: dict,
+    output_dir: pathlib.Path,
+    selected: Optional[set[str]] = None,
+    access_rows: Optional[list[dict]] = None,
+    failed: Optional[list] = None,
+) -> pathlib.Path:
+    """Collect all projects in parallel and write the discovery JSON.
+
+    ``failed``, when given, gets ``(project_id, exception)`` for each project whose collection
+    stopped on an error as a whole (one collector failing is recorded in the project's errors).
+
+    Above ``_STREAMING_THRESHOLD`` projects the output is streamed to disk one
+    project at a time (bounded memory); below it the simple in-memory path is
+    used so small runs keep producing byte-identical output.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    total = len(projects)
+    use_streaming = total > _STREAMING_THRESHOLD
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+    summaries: list[dict] = []
+    per_project: dict[str, dict] = {}
+    all_errors: list[dict] = []
+    off_by_project = preflight.switched_off_collectors(access_rows or [])
+    writer = None
+    if use_streaming:
+        from streaming_writer import StreamingDiscoveryWriter, slice_from_result
+
+        writer = StreamingDiscoveryWriter(output_dir, ts)
+        console.print(
+            f"[dim]Streaming output (> {_STREAMING_THRESHOLD} projects) — bounded memory.[/dim]\n"
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                _collect_project,
+                pid,
+                credentials,
+                regions,
+                enable_security,
+                org_assets.get(pid),
+                selected,
+                **({"switched_off": off_by_project[pid]} if pid in off_by_project else {}),
+            ): pid
+            for pid in projects
+        }
+        for idx, future in enumerate(as_completed(futures), 1):
+            pid = futures[future]
+            try:
+                res = future.result()
+            except Exception as exc:  # a project that died entirely
+                from collectors.utils import collection_error
+
+                logger.error("Project %s collection failed: %s", pid, exc)
+                if failed is not None:
+                    failed.append((pid, exc))
+                err = collection_error("*", exc)
+                err["project_id"] = pid
+                res = {"errors": [err]}
+
+            all_errors.extend(res.get("errors", []))
+            _print_project_line(pid, res, idx, total, off_by_project.get(pid))
+            summaries.append(_summarise_project(pid, res))
+
+            if writer is not None:
+                writer.add(pid, slice_from_result(pid, res))
+            else:
+                per_project[pid] = res
+
+    # Keep the summary table in scan order regardless of completion order.
+    order = {pid: i for i, pid in enumerate(projects)}
+    summaries.sort(key=lambda s: order.get(s["project_id"], 0))
+
+    if writer is not None:
+        meta = {
+            "schema_version": _schema_version(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "organization_id": None,
+            "projects_scanned": projects,
+            "regions_in_scope": regions,
+            "collection_errors": all_errors,
+            "access_check": access_rows or [],
+        }
+        out_path = writer.finalize(meta=meta, filename=f"gcp-sizing-discovery-{ts}.json")
+    else:
+        result = _build_result(
+            projects, regions, per_project, collection_errors=all_errors, access_check=access_rows
+        )
+        out_path = _write_output(result, output_dir)
+
+    _print_summary(summaries, all_errors)
+    if off_by_project:
+        every = {c for api in preflight.APIS for c in (api.collector,)} & (
+            selected if selected is not None else set(_CORE_COLLECTORS)
+        )
+        empty = [p for p, off in off_by_project.items() if every and every <= off]
+        console.print()
+        console.print(
+            f"[dim]The pre-flight check found services switched off (API or billing) in "
+            f"{len(off_by_project)} of {total} project(s); {len(empty)} had nothing enabled to "
+            f"read. Those services were not queried and are not counted as incomplete. "
+            f"See the pre-flight CSV in the zip for which.[/dim]"
+        )
+    return out_path
+
+
+def _schema_version() -> str:
+    from models.inventory import CURRENT_SCHEMA_VERSION
+
+    return CURRENT_SCHEMA_VERSION
+
+
+if __name__ == "__main__":
+    main()

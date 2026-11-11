@@ -1,0 +1,10 @@
+# Everything the test suites install: the three tools and the test tooling. Edit the tools'
+# requirements.in or this file, then run ./update_requirements.sh to regenerate
+# requirements-test.txt, one pinned set that each tool's requirements.txt agrees with.
+
+-r aws/requirements.in
+-r azure/requirements.in
+-r gcp/requirements.in
+pytest>=8.0.0
+moto[all]>=5.0
+responses>=0.25

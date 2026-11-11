@@ -1,0 +1,10 @@
+# The packages this tool needs, with the versions it supports. Edit this file, then run
+# ../update_requirements.sh to regenerate requirements.txt, which pins every package to an exact,
+# tested version and is what `pip install -r requirements.txt` installs.
+
+boto3>=1.34.0
+botocore[crt]>=1.34.0
+openpyxl>=3.1.0
+pyyaml>=6.0
+requests>=2.31.0
+pyarrow>=14

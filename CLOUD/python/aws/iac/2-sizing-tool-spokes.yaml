@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Rubrik Discovery - Spoke IAM Role.
+  Deploy as a StackSet across the Organization so the management-account
+  scanner can assume this role in every member account.
+
+Parameters:
+  ManagementAccountId:
+    Type: String
+    Description: >
+      12-digit AWS Account ID of the management account that runs the
+      sizing tool from CloudShell. Only this account can assume the role.
+
+  RoleName:
+    Type: String
+    Default: RubrikDiscoveryRole
+    Description: >
+      Name of the IAM role created in each spoke account.
+      Must match --role-name when running aws-sizing.
+
+Resources:
+  RubrikDiscoveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${ManagementAccountId}:root'
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SizingReadPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RubrikDiscoveryReadOnly
+                Effect: Allow
+                Action:
+                  # Identity
+                  - 'iam:ListAccountAliases'
+                  - 'sts:GetCallerIdentity'
+                  # EC2 + EBS
+                  - 'ec2:DescribeAvailabilityZones'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeInstanceTypes'
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeSnapshots'
+                  - 'ec2:DescribeImages'
+                  # RDS
+                  - 'rds:DescribeDBInstances'
+                  - 'rds:DescribeDBSnapshots'
+                  - 'rds:DescribeDBClusterSnapshots'
+                  - 'rds:ListTagsForResource'
+                  # DynamoDB
+                  - 'dynamodb:ListTables'
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:DescribeContinuousBackups'
+                  - 'dynamodb:ListTagsOfResource'
+                  # EFS
+                  - 'elasticfilesystem:DescribeFileSystems'
+                  # FSx
+                  - 'fsx:DescribeFileSystems'
+                  - 'fsx:DescribeVolumes'
+                  # S3
+                  - 's3:GetBucketLocation'
+                  - 's3:ListAllMyBuckets'
+                  - 's3:GetBucketTagging'
+                  - 'cloudwatch:GetMetricStatistics'
+                  - 'cloudwatch:GetMetricData'
+                  - 'cloudwatch:ListMetrics'
+                  - 's3:ListStorageLensConfigurations'
+                  - 's3:GetStorageLensConfiguration'
+                  # KMS / Secrets / SQS
+                  - 'kms:ListKeys'
+                  - 'kms:DescribeKey'
+                  - 'kms:ListAliases'
+                  - 'secretsmanager:ListSecrets'
+                  - 'sqs:ListQueues'
+                  # Networking, Kubernetes, DNS, IAM counts, Redshift
+                  - 'ec2:DescribeVpcs'
+                  - 'elasticloadbalancing:DescribeLoadBalancers'
+                  - 'elasticloadbalancing:DescribeTags'
+                  - 'eks:ListClusters'
+                  - 'eks:DescribeCluster'
+                  - 'eks:ListNodegroups'
+                  - 'eks:DescribeNodegroup'
+                  - 'route53:ListHostedZones'
+                  - 'iam:ListUsers'
+                  - 'iam:ListRoles'
+                  - 'iam:ListPolicies'
+                  - 'redshift:DescribeClusters'
+                  - 'redshift:DescribeClusterSnapshots'
+                  - 'dynamodb:ListBackups'
+                  - 'fsx:DescribeBackups'
+                  # S3 Tables and the Glue Data Catalog (Iceberg tables)
+                  - 's3tables:ListTableBuckets'
+                  - 's3tables:ListTables'
+                  - 's3tables:GetTable'
+                  - 's3tables:GetTableMetadataLocation'
+                  - 's3tables:GetTableMaintenanceConfiguration'
+                  - 's3tables:ListTagsForResource'
+                  - 'glue:GetDatabases'
+                  - 'glue:GetTables'
+                  - 'glue:GetTags'
+                  # AWS Backup
+                  - 'backup:ListBackupPlans'
+                  - 'backup:ListBackupSelections'
+                  - 'backup:GetBackupPlan'
+                  - 'backup:GetBackupSelection'
+                  - 'backup:ListProtectedResources'
+                  - 'backup:ListBackupVaults'
+                  - 'backup:ListRecoveryPointsByBackupVault'
+                  # Cost Explorer (for consolidation savings)
+                  - 'ce:GetCostAndUsage'
+                  - 'ce:GetDimensionValues'
+                Resource: '*'
+              # Iceberg table metadata (metadata.json and manifest lists) is read to size S3 Tables
+              # and Glue Iceberg tables. Limited to keys under a metadata/ path, not whole buckets.
+              - Sid: RubrikIcebergMetadataRead
+                Effect: Allow
+                Action: 's3:GetObject'
+                Resource:
+                  - 'arn:*:s3:::*/metadata/*'
+                  - 'arn:*:s3:::*/*/metadata/*'
+              # A Storage Lens dashboard that does not publish to CloudWatch is read from its CSV
+              # export (manifest.json and report files). Limited to the StorageLens/ export keys.
+              - Sid: RubrikStorageLensExportRead
+                Effect: Allow
+                Action: 's3:GetObject'
+                Resource:
+                  - 'arn:*:s3:::*/StorageLens/*'
+                  - 'arn:*:s3:::*/*/StorageLens/*'
+              - Sid: RubrikS3TablesDataRead
+                Effect: Allow
+                Action: 's3tables:GetTableData'
+                Resource: 'arn:*:s3tables:*:*:bucket/*/table/*'
+              - Sid: RubrikIcebergMetadataDecrypt
+                Effect: Allow
+                Action: 'kms:Decrypt'
+                Resource: '*'
+
+Outputs:
+  RoleArn:
+    Description: ARN of the sizing role created in this account
+    Value: !GetAtt RubrikDiscoveryRole.Arn

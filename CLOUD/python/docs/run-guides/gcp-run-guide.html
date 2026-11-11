@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run the GCP sizing tool (Python)</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#59636e; --line:#d0d7de; --code:#f6f8fa; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --warnbg:#fff8c5; --badbg:#ffebe9; --okbg:#dafbe1; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --code:#161b22; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --warnbg:#3b2e00; --badbg:#4b1113; --okbg:#0f2d1a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 20px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; } h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  .box { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:12px 0; background:var(--code); }
+  .box.warn { background:var(--warnbg); border-color:var(--warn); } .box.bad { background:var(--badbg); border-color:var(--bad); } .box.ok { background:var(--okbg); border-color:var(--ok); }
+  .box b:first-child { display:block; margin-bottom:2px; }
+  code, pre { font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  code { background:var(--code); padding:1px 5px; border-radius:4px; }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; margin:8px 0; white-space:pre-wrap; word-break:break-word; }
+  .cmd { position:relative; } .cmd button.copy { position:absolute; top:8px; right:8px; }
+  button { font:inherit; font-size:13px; padding:5px 11px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); } button.primary:hover { color:#fff; opacity:.9; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  label { display:block; font-weight:600; font-size:13px; margin:0 0 3px; } .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:10px 0; }
+  input[type=text], select { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .hint { color:var(--muted); font-size:12px; font-weight:400; }
+  .checks { display:flex; flex-wrap:wrap; gap:6px 16px; } .checks label { font-weight:400; display:inline-flex; gap:5px; align-items:center; margin:0; }
+  .stage { border:1px solid var(--line); border-radius:8px; padding:10px 14px 4px; margin:14px 0; } .stage.done { border-color:var(--ok); } .stage h3 { margin:0 0 4px; font-size:16px; display:flex; gap:8px; align-items:center; }
+  .stage h3 label { margin:0 0 0 auto; font-weight:400; font-size:13px; display:inline-flex; gap:5px; align-items:center; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; } th, td { text-align:left; padding:6px 9px; border:1px solid var(--line); vertical-align:top; } th { background:var(--code); }
+  #errs { color:var(--bad); font-size:13px; margin:6px 0; } #errs div::before { content:"\2022 "; } .small { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Run the GCP sizing tool (Python)</h1>
+  <p class="sub">Branch <code>master</code> &middot; <code>CLOUD/python/gcp</code> &middot; a runbook and command builder. This page does not run anything: it builds commands and a script that you run in your own terminal or Google Cloud Shell.</p>
+
+  <div class="box warn"><b>Before you run it</b>
+    The tool only reads (list and get calls). <b>It has not been run on a real GCP project yet.</b> The VM, disk, Cloud SQL, Spanner and BigQuery CSV files, and their anonymization, were compared with the PowerShell script's own code on the same inputs, with <code>gcloud</code> and <code>bq</code> replaced by test data. <b>No call to the real BigQuery API has been made yet.</b> The Cloud Asset, AlloyDB and Bigtable parts, <code>--org</code> and <code>--security</code> were not compared with anything. Start with one project and send back anything that looks wrong.
+    <b>With no scope option the tool scans every project the credentials can see.</b> The builder's default is the current project only.
+    The zip holds project IDs, resource names and labels. Keep it local, or run with <code>--anonymize</code> (the zip then has no raw JSON; the file that maps the labels back to the real names stays beside it).
+  </div>
+
+  <h2>1. Command builder</h2>
+  <div class="row">
+    <div><label for="mode">Projects</label>
+      <select id="mode"><option value="current">Current project only (gcloud config) &ndash; recommended first</option><option value="projects">These projects (--projects)</option><option value="file">Projects listed in a file (--project-file)</option><option value="all">Every project I can see (--all)</option></select></div>
+    <div><label for="regions">Regions <span class="hint">comma-separated, like us-central1,europe-west1; empty = all</span></label><input type="text" id="regions" placeholder="us-central1"></div>
+    <div><label for="workers">Projects in parallel <span class="hint">(--workers, default 8)</span></label><input type="number" id="workers" value="8" min="1"></div>
+  </div>
+  <div class="row" id="projFields" hidden>
+    <div><label for="projects">Project IDs <span class="hint">comma-separated, like my-project-1,my-project-2</span></label><input type="text" id="projects" placeholder="my-project-1,my-project-2"></div>
+  </div>
+  <div class="row" id="fileFields" hidden>
+    <div><label for="projectFile">File with one project ID per line <span class="hint">(absolute path; blank lines and # comments ignored)</span></label><input type="text" id="projectFile" placeholder="/home/me/projects.txt"></div>
+  </div>
+  <div class="row">
+    <div><label for="org">Organization ID <span class="hint">(optional; <code>--org</code>, one asset sweep instead of one call per project)</span></label><input type="text" id="org" placeholder="123456789012"></div>
+    <div><label for="folder">or Folder ID <span class="hint">(optional; <code>--folder</code>)</span></label><input type="text" id="folder" placeholder="123456789012"></div>
+  </div>
+  <label>Collectors</label>
+  <div class="checks" id="collectors"></div>
+  <div class="checks" style="margin:10px 0">
+    <label><input type="checkbox" id="inventoryOnly"> <code>--inventory-only</code> breadth scan only: the Cloud Asset spine, no per-service sizing</label>
+    <label><input type="checkbox" id="security"> <code>--security</code> Security Command Center findings (needs <code>roles/securitycenter.findingsViewer</code> at the organization)</label>
+    <label><input type="checkbox" id="noCsv"> <code>--no-csv</code> JSON only, no PowerShell-style CSV files</label>
+    <label><input type="checkbox" id="preflightOnly"> <code>--preflight-only</code> only check what the sign-in can read in each project and write <code>gcp_access_check_&lt;timestamp&gt;.zip</code>; nothing is collected</label>
+    <label><input type="checkbox" id="anonymize"> <code>--anonymize</code> replace names, IDs and labels in the CSV files (the zip has no raw JSON)</label>
+    <label><input type="checkbox" id="verbose"> <code>--verbose</code> extra terminal output and debug logging</label>
+    <label><input type="checkbox" id="mock"> <code>--mock</code> try it with built-in sample data (no GCP credentials)</label>
+  </div>
+  <div class="row" id="anonFields" hidden>
+    <div><label for="anonymizeFields">Also anonymize these fields <span class="hint">(optional, comma-separated)</span></label><input type="text" id="anonymizeFields" placeholder="Zone,Region"></div>
+    <div><label for="notAnonymizeFields">Leave these alone <span class="hint">(optional; <code>Tags</code> keeps all label columns)</span></label><input type="text" id="notAnonymizeFields" placeholder="Name,Tags"></div>
+  </div>
+  <div class="row"><div><label for="outDir">Output directory <span class="hint">(a relative path is next to the downloaded script)</span></label><input type="text" id="outDir" value="./output"></div></div>
+  <div id="errs"></div>
+  <div id="notes"></div>
+  <div class="cmd"><button class="copy" data-copy="#cmd">Copy</button><pre id="cmd"></pre></div>
+  <p><button class="primary" id="dl">Download run-gcp-sizing.sh</button> <span class="small">Run <code>bash run-gcp-sizing.sh</code>. It uses the <code>rubrik-sizing-scripts</code> checkout the script sits in, or the one your current folder is in. If there is none, it offers to clone into <code>./rubrik-sizing-scripts</code> in the folder you run it from. <code>REPO_DIR=/path bash run-gcp-sizing.sh</code> overrides all of this. It then sets up a virtualenv, checks that Application Default Credentials work, shows the project and account, asks you to confirm, and runs the command above.</span></p>
+
+  <h2>2. Step by step</h2>
+  <p class="small">Tick each stage when done (saved in this browser). Do not move on if a stage looks wrong.</p>
+
+  <div class="stage" data-stage="s0"><h3>Stage 0 &ndash; Sign in and confirm the project <label><input type="checkbox"> done</label></h3>
+    <p>The tool uses <b>Application Default Credentials</b>, which are separate from <code>gcloud auth login</code>. Locally run <code>gcloud auth application-default login</code>; in Cloud Shell they already exist. Then check the project it will use. Output is hidden for the token check on purpose.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>gcloud auth application-default login
+gcloud auth application-default print-access-token &gt;/dev/null &amp;&amp; echo "ADC works"
+gcloud config get-value project
+gcloud auth list --filter=status:ACTIVE --format="value(account)"</pre></div></div>
+
+  <div class="stage" data-stage="s1"><h3>Stage 1 &ndash; Get the code and install <label><input type="checkbox"> done</label></h3>
+    <p>Python 3.10 or newer. A sparse clone fetches only <code>CLOUD</code>. The downloaded script does this for you. <code>run.sh</code> in the <code>gcp</code> folder downloads a Rubrik-hosted wheel with a signed link and is not used here.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>git clone --depth 1 --filter=blob:none --sparse --branch master \
+  https://github.com/rubrikinc/rubrik-sizing-scripts.git ~/rubrik-sizing-scripts
+git -C ~/rubrik-sizing-scripts sparse-checkout set CLOUD
+cd ~/rubrik-sizing-scripts/CLOUD/python/gcp
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --help</pre></div></div>
+
+  <div class="stage" data-stage="s2"><h3>Stage 2 &ndash; Try it with sample data (no credentials) <label><input type="checkbox"> done</label></h3>
+    <p>Proves the install works and shows the output files. Nothing is sent to Google.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --mock --output ./output</pre></div>
+    <p>Writes <code>./output/gcp_sizing_results_&lt;yyyy-MM-dd_HHmmss&gt;.zip</code>. The sample data has counts but no individual VMs, disks or databases, so those CSV files are empty. The BigQuery file has two sample rows.</p></div>
+
+  <div class="stage" data-stage="s3"><h3>Stage 3 &ndash; Smallest real run <label><input type="checkbox"> done</label></h3>
+    <p>Only the project from Stage 0:</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --current-project --output ./output</pre></div>
+    <p>Writes <code>./output/gcp_sizing_results_&lt;timestamp&gt;.zip</code>: <code>gcp-sizing-discovery-&lt;timestamp&gt;.json</code>, the six PowerShell-style CSV files, and <code>output_gcp_&lt;timestamp&gt;.log</code>.</p></div>
+
+  <div class="stage" data-stage="s4"><h3>Stage 4 &ndash; Inspect the result <label><input type="checkbox"> done</label></h3>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>unzip -o output/gcp_sizing_results_*.zip -d output/last
+python3 - &lt;&lt;'PY'
+import glob, json
+paths = glob.glob('output/last/gcp-sizing-discovery-*.json')
+if not paths:
+    raise SystemExit('No JSON in the zip (an --anonymize run leaves it out); open the CSV files in output/last instead.')
+d = json.load(open(paths[0]))
+total = lambda key, field: sum(p.get(field, 0) for p in d.get(key, []))
+print('projects      :', len(d['projects_scanned']))
+print('regions       :', d['regions_in_scope'] or 'all')
+print('vm instances  :', total('compute', 'total_instances'))
+print('unattached dsk:', total('compute', 'total_unattached_disks'))
+print('buckets       :', total('storage', 'total_buckets'))
+print('databases     :', total('databases', 'total_databases'))
+print('bigquery      :', total('bigquery', 'dataset_count'), 'datasets,', sum(len(p.get('tables', [])) for p in d.get('bigquery', [])), 'tables and views')
+posture = d.get('backup_posture', [])
+known = [p for p in posture if p.get('available', True)]
+print('protected     :', sum(p['protected_instance_count'] for p in known), ' unprotected:', sum(p['unprotected_instance_count'] for p in known), ' (backup coverage n/a in', len(posture) - len(known), 'project(s))')
+print('errors        :', json.dumps(d['collection_errors'], indent=1))
+PY
+ls -l output/last/*.csv</pre></div>
+    <p><b>Check:</b> the counts match the Cloud console for that project; <code>errors</code> is empty (otherwise note the collector and the message: a disabled API or a missing role). A project the tool could not fully read shows as zeros and under-counts, and the tool prints a yellow warning about it. Backup coverage shown as <code>n/a</code> (<code>available: false</code> in the JSON) means Backup and DR could not be read, which is not the same as 0%. A CSV file with no rows is a 0-byte file (that is what PowerShell does too). If you can, run <code>Get-GCPSizingInfo.ps1</code> on the same project and compare.</p></div>
+
+  <div class="stage" data-stage="s5"><h3>Stage 5 &ndash; Several projects <label><input type="checkbox"> done</label></h3>
+    <p>Use <b>These projects</b> or a project file with two or three projects first. Each project needs the roles below.</p></div>
+
+  <div class="stage" data-stage="s6"><h3>Stage 6 &ndash; Everything you can see <label><input type="checkbox"> done</label></h3>
+    <p><code>--all</code> scans every accessible project. For a large organization add <code>--org &lt;id&gt;</code> (one asset sweep instead of a call per project) and raise <code>--workers</code>.</p>
+    <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>python main.py --all --org &lt;org id&gt; --workers 16 --output ./output</pre></div></div>
+
+  <div class="stage" data-stage="s7"><h3>Stage 7 &ndash; Anonymized run (when the files must leave your hands) <label><input type="checkbox"> done</label></h3>
+    <p>Tick <code>--anonymize</code> in the builder. Besides the zip you get <code>gcp_anonymized_keys_to_actual_values-&lt;timestamp&gt;.csv</code> and <code>output_gcp_not_anonymized_&lt;timestamp&gt;.log</code> beside it. They hold the real names: keep them, do not send them.</p></div>
+
+  <h2>3. Troubleshooting</h2>
+  <table>
+    <tr><th>You see</th><th>Meaning / what to do</th></tr>
+    <tr><td>An authentication error panel, or <code>DefaultCredentialsError</code></td><td>No Application Default Credentials. Run <code>gcloud auth application-default login</code> (in Cloud Shell, reopen it). <code>gcloud auth login</code> alone is not enough. Or set <code>GOOGLE_APPLICATION_CREDENTIALS</code> to a service account key file.</td></tr>
+    <tr><td><code>PERMISSION_DENIED</code> or <code>403</code> for a collector</td><td>The identity lacks the role for it (table below). The run continues; the failure is in <code>collection_errors</code>. Grant the role, or limit <code>--collectors</code>.</td></tr>
+    <tr><td><code>Project ... not accessible: ... &mdash; skipping</code></td><td>The sign-in cannot read that project (no role on it, another organization, or a typo: both look the same). It is left out, listed at the end of the run, and has a <code>project</code> row with the error code in <code>gcp_preflight_check-&lt;timestamp&gt;.csv</code>. Tick <code>--preflight-only</code> to check a list of IDs without scanning.</td></tr>
+    <tr><td><code>SERVICE_DISABLED</code> or "API has not been used in project"</td><td>Enable that API in the project, for example <code>gcloud services enable compute.googleapis.com --project &lt;id&gt;</code>, and re-run. Enabling an API changes the project, so ask the owner first.</td></tr>
+    <tr><td>Protected shows <code>n/a</code> for a project</td><td>Backup and DR could not be read: its API is disabled or the identity lacks <code>roles/backupdr.viewer</code>. The reason is in <code>collection_errors</code> (collector <code>backup</code>). The project is left out of the Protected total, and the JSON still lists its VMs as unprotected with <code>available: false</code>.</td></tr>
+    <tr><td><code>collection_errors</code> has a <code>bigquery</code> record that ends in "(N table details calls failed)" or similar</td><td>Some BigQuery calls failed (no permission on a dataset or table, or the API is off), so the BigQuery totals may be low. One record is written per kind of failure, with the number of calls. Grant <code>roles/bigquery.metadataViewer</code> or enable the BigQuery API.</td></tr>
+    <tr><td>A project with very many BigQuery tables takes a long time</td><td>BigQuery is read with one call per table. Untick <code>bigquery</code> in the builder (or leave it out of <code>--collectors</code>) to skip it. The file is then still written, empty.</td></tr>
+    <tr><td>Many projects scanned that you did not mean to</td><td>You left the scope at <b>Every project I can see</b>. Use <b>Current project only</b> or <code>--projects</code>.</td></tr>
+    <tr><td>Fewer projects than expected</td><td>The identity cannot see them. Check <code>gcloud projects list</code> with the same account, and that Resource Manager access exists.</td></tr>
+    <tr><td><code>--security</code> returns nothing or fails</td><td>It needs <code>roles/securitycenter.findingsViewer</code> at the organization level.</td></tr>
+    <tr><td><code>--anonymize</code> run: where is the mapping back to real names?</td><td>Beside the zip: <code>gcp_anonymized_keys_to_actual_values-&lt;timestamp&gt;.csv</code> and <code>output_gcp_not_anonymized_&lt;timestamp&gt;.log</code>. Neither is inside the zip.</td></tr>
+    <tr><td><code>--anonymize-fields needs --anonymize</code>, or <code>--anonymize cannot be used with --no-csv</code></td><td>Tick <code>--anonymize</code>; anonymizing works on the CSV files.</td></tr>
+    <tr><td>ModuleNotFoundError for a <code>google.*</code> package</td><td>The virtualenv is not active or the install did not finish. <code>source .venv/bin/activate</code>, then <code>pip install -r requirements.txt</code>.</td></tr>
+  </table>
+
+  <h2>4. Reference</h2>
+  <details open><summary><b>Roles the tool uses</b> (read-only; the list the tool prints for its own calls)</summary>
+    <table>
+      <tr><th>Collector</th><th>Call</th><th>Role</th></tr>
+      <tr><td>asset</td><td>Cloud Asset <code>list_assets</code></td><td><code>roles/cloudasset.viewer</code></td></tr>
+      <tr><td>compute</td><td>instances and disks <code>aggregated_list</code></td><td><code>roles/compute.viewer</code></td></tr>
+      <tr><td>storage</td><td>Cloud Storage <code>list_buckets</code></td><td><code>roles/storage.objectViewer</code></td></tr>
+      <tr><td>database</td><td>Cloud SQL <code>instances.list</code></td><td><code>roles/cloudsql.viewer</code></td></tr>
+      <tr><td>database</td><td>Spanner <code>list_instances</code></td><td><code>roles/spanner.viewer</code></td></tr>
+      <tr><td>database</td><td>AlloyDB <code>list_clusters</code></td><td><code>roles/alloydb.viewer</code></td></tr>
+      <tr><td>database</td><td>Bigtable <code>list_instances</code></td><td><code>roles/bigtable.viewer</code></td></tr>
+      <tr><td>bigquery</td><td>BigQuery <code>datasets.list</code> and <code>get</code>, <code>tables.list</code> and <code>get</code></td><td><code>roles/bigquery.metadataViewer</code> (the role Google documents for metadata; not tried on a real project)</td></tr>
+      <tr><td>backup</td><td>Backup and DR plans and plan associations</td><td><code>roles/backupdr.viewer</code></td></tr>
+      <tr><td><code>--security</code></td><td>Security Command Center findings</td><td><code>roles/securitycenter.findingsViewer</code> at the organization</td></tr>
+    </table>
+    <p class="small">Grant them at the organization or folder, or on each project. The APIs behind these (Cloud Asset, Compute, Cloud Storage, Cloud SQL Admin, Spanner, AlloyDB, Bigtable Admin, BigQuery, Backup and DR, Resource Manager) must be enabled in the projects. The Cloud SQL database count also lists databases; whether <code>roles/cloudsql.viewer</code> allows that has not been checked on a real project.</p></details>
+  <details><summary><b>Files in the zip</b></summary>
+    <table>
+      <tr><th>File</th><th>Content</th></tr>
+      <tr><td><code>gce_vm_info-&lt;stamp&gt;.csv</code></td><td>VMs</td></tr>
+      <tr><td><code>gce_attached_disk_info-&lt;stamp&gt;.csv</code></td><td>Disks attached to a VM</td></tr>
+      <tr><td><code>gce_unattached_disk_info-&lt;stamp&gt;.csv</code></td><td>Disks with no VM</td></tr>
+      <tr><td><code>gce_cloudsql_info-&lt;stamp&gt;.csv</code></td><td>Cloud SQL instances</td></tr>
+      <tr><td><code>gce_spanner_info-&lt;stamp&gt;.csv</code></td><td>Spanner instances</td></tr>
+      <tr><td><code>gce_bigquery_info-&lt;stamp&gt;.csv</code></td><td>BigQuery tables, views, materialized views, external tables and snapshots, one row each</td></tr>
+      <tr><td><code>gcp-sizing-discovery-&lt;stamp&gt;.json</code>, <code>output_gcp_&lt;stamp&gt;.log</code></td><td>Everything collected (including buckets, AlloyDB, Bigtable, Backup and DR); the log. The JSON is left out of an <code>--anonymize</code> zip.</td></tr>
+    </table>
+    <p class="small">The zip is named <code>gcp_sizing_results_&lt;yyyy-MM-dd_HHmmss&gt;.zip</code>, like the PowerShell script's. Buckets, AlloyDB, Bigtable and Backup and DR are in the JSON only; the PowerShell script has no files for them.</p>
+    <p class="small"><b>Sizes.</b> Google counts a Compute Engine disk's <code>sizeGb</code> in binary gigabytes (1 GB is 2^30 bytes), so it is really GiB. In the disk and VM files <code>SizeGb</code> is that number. <code>SizeTb</code> and the VM totals are the same number divided by 1000, exactly as the PowerShell script writes them: neither TB nor TiB. <code>SizeGiB</code> and <code>SizeTiB</code> (the same number divided by 1024) are the exact figures. In the BigQuery file the sizes come from bytes: <code>Gb</code> and <code>Tb</code> are decimal (10^9 and 10^12 bytes), <code>GiB</code> and <code>TiB</code> binary. The unit of the Cloud SQL sizes has not been verified.</p></details>
+  <details><summary><b>Flags</b></summary>
+    <table>
+      <tr><td><code>--current-project</code> / <code>--projects a,b</code> / <code>--project-file FILE</code> / <code>--all</code></td><td>Scope; pick one. With none, every accessible project.</td></tr>
+      <tr><td><code>--org ID</code> / <code>--folder ID</code></td><td>Use the org-wide (or folder-wide) Cloud Asset sweep to find assets for all projects at once.</td></tr>
+      <tr><td><code>--regions a,b</code>, <code>--workers N</code></td><td>Limit regions (default: all); projects in parallel (default 8).</td></tr>
+      <tr><td><code>--collectors a,b</code> / <code>--inventory-only</code></td><td>Subset of <code>asset,compute,storage,database,bigquery,backup</code> (default all, BigQuery included); or only the asset spine. Not combinable.</td></tr>
+      <tr><td><code>--security</code></td><td>Security Command Center findings (organization-level role).</td></tr>
+      <tr><td><code>--anonymize</code> [<code>--anonymize-fields a,b</code>] [<code>--not-anonymize-fields a,b</code>]</td><td>Replace names, IDs and labels in the CSV files with labels. By default that includes the BigQuery <code>DatasetId</code>, <code>TableId</code> and <code>ExternalSourceUri</code>. <code>Tags</code> in <code>--not-anonymize-fields</code> leaves label columns alone. Not combinable with <code>--no-csv</code>.</td></tr>
+      <tr><td><code>--no-csv</code></td><td>Write only the JSON.</td></tr>
+      <tr><td><code>--preflight-only</code></td><td>Only run the access check in each project and write <code>gcp_access_check_&lt;timestamp&gt;.zip</code> with <code>gcp_preflight_check-&lt;timestamp&gt;.csv</code> and the log. Nothing is collected. A project named with <code>--projects</code> that cannot be read gets a <code>project</code> row. Not with <code>--no-csv</code> or <code>--mock</code>.</td></tr>
+      <tr><td><code>--output DIR</code>, <code>--verbose</code>, <code>--mock</code>, <code>--dry-run</code>, <code>--config FILE</code></td><td>Output directory (default <code>./output</code>); extra output; sample data; print scope and the calls it would make, then exit; settings file (flags win).</td></tr>
+    </table></details>
+  <p class="small">The PowerShell script <code>Get-GCPSizingInfo.ps1</code> remains the reference for output files. Plan and known differences: <code>CLOUD/python/docs/gcp-parity-plan.md</code>; flag mapping: <code>docs/powershell-parameter-mapping.md</code>.</p>
+
+</main>
+
+<script>
+
+const SAFE = /^[A-Za-z0-9._@:\/=+,-]*$/;
+function q(v) { return "'" + String(v).replace(/'/g, "'\\''") + "'"; }
+
+// The output folder as the script writes it: a relative path is taken next to the script itself.
+function outPath(dir) {
+  const d = String(dir).replace(/\/+$/, "") || "/";
+  return d.startsWith("/") ? q(d) : '"$SCRIPT_DIR"/' + q(d.replace(/^(\.\/)+/, "") || ".");
+}
+
+function repoLines(rel, outDir) {
+  return [
+    "# Which repo to use, in order: REPO_DIR if set; the rubrik-sizing-scripts checkout this script sits in;",
+    "# the checkout your current folder is in; otherwise ./rubrik-sizing-scripts in the folder you run it from",
+    "# (cloned after asking).",
+    'TOOL_REL="' + rel + '"',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"',
+    'if [ -z "${REPO_DIR:-}" ]; then',
+    '  for dir in "$SCRIPT_DIR" "$PWD"; do',
+    '    TOP="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"',
+    '    if [ -n "$TOP" ] && [ -d "$TOP/$TOOL_REL" ]; then REPO_DIR="$TOP"; break; fi',
+    "  done",
+    '  REPO_DIR="${REPO_DIR:-$PWD/rubrik-sizing-scripts}"',
+    "fi",
+    'if [ ! -d "$REPO_DIR/$TOOL_REL" ]; then',
+    '  if [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then',
+    '    echo "$REPO_DIR exists but has no $TOOL_REL (wrong branch or not rubrik-sizing-scripts?)."',
+    '    echo "Switch it to branch master, or set REPO_DIR to another checkout."',
+    "    exit 1",
+    "  fi",
+    '  echo "No rubrik-sizing-scripts checkout found."',
+    '  read -r -p "Clone rubrikinc/rubrik-sizing-scripts into $REPO_DIR now (sparse)? [y/N] " clone',
+    '  case "$clone" in [yY]*) ;; *) echo "Aborted. Set REPO_DIR to an existing checkout."; exit 1 ;; esac',
+    '  git clone --depth 1 --filter=blob:none --sparse --branch master \\',
+    '    https://github.com/rubrikinc/rubrik-sizing-scripts.git "$REPO_DIR"',
+    '  git -C "$REPO_DIR" sparse-checkout set CLOUD',
+    "fi",
+    'echo "Using repo: $REPO_DIR"',
+    "# The output folder; a relative path is taken next to this script.",
+    "OUT_DIR=" + outPath(outDir),
+    'cd "$REPO_DIR/$TOOL_REL"',
+    "",
+    "python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || { echo \"Python 3.10 or newer is required.\"; exit 1; }",
+    "python3 -m venv .venv",
+    "source .venv/bin/activate",
+    "pip install -q -r requirements.txt",
+    ""
+  ];
+}
+
+
+const COLLECTORS = ["asset", "compute", "storage", "database", "bigquery", "backup"];
+const PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+
+function validate(c) {
+  const e = [];
+  const text = {regions:c.regions, projects:c.projects, projectFile:c.projectFile, org:c.org, folder:c.folder,
+    anonymizeFields:c.anonymizeFields, notAnonymizeFields:c.notAnonymizeFields, outDir:c.outDir};
+  for (const [k, v] of Object.entries(text)) {
+    if (!SAFE.test(v || "")) e.push(k + ": only letters, digits and . _ @ : / = + , - are allowed (no spaces or ~)");
+  }
+  if (c.regions && !/^[a-z0-9-]+(,[a-z0-9-]+)*$/.test(c.regions)) e.push("regions: use region names like us-central1,europe-west1");
+  if (c.mode === "projects" && !c.projects) e.push("give at least one project ID");
+  if (c.projects && !c.projects.split(",").every(p => PROJECT_ID.test(p))) e.push("project IDs: 6 to 30 lowercase letters, digits and hyphens, starting with a letter (use the ID, not the name or number)");
+  if (c.mode === "file" && !c.projectFile) e.push("give the path of the project file");
+  if (c.org && !/^\d+$/.test(c.org)) e.push("organization ID: digits only");
+  if (c.folder && !/^\d+$/.test(c.folder)) e.push("folder ID: digits only");
+  if (c.org && c.folder) e.push("use either an organization ID or a folder ID, not both");
+  if (c.workers !== "" && !(Number.isInteger(Number(c.workers)) && Number(c.workers) >= 1)) e.push("projects in parallel: a whole number, at least 1");
+  if (!c.inventoryOnly && c.collectors.length === 0) e.push("pick at least one collector (or --inventory-only)");
+  if ((c.anonymizeFields || c.notAnonymizeFields) && !c.anonymize) e.push("the anonymize field lists need --anonymize ticked");
+  if (c.anonymize && c.noCsv) e.push("--anonymize works on the CSV files, so it cannot be combined with --no-csv");
+  if (c.preflightOnly && c.noCsv) e.push("--preflight-only writes only the access-check CSV, so it cannot be combined with --no-csv");
+  if (c.preflightOnly && c.mock) e.push("--preflight-only checks real access, so it cannot be combined with --mock");
+  if (!c.outDir) e.push("give an output directory");
+  return e;
+}
+
+function buildArgs(c) {
+  const a = [];
+  if (c.mode === "current") a.push("--current-project");
+  else if (c.mode === "projects") a.push("--projects", q(c.projects));
+  else if (c.mode === "file") a.push("--project-file", q(c.projectFile));
+  else if (c.mode === "all") a.push("--all");
+  if (c.org) a.push("--org", q(c.org));
+  if (c.folder) a.push("--folder", q(c.folder));
+  if (c.regions) a.push("--regions", q(c.regions));
+  if (c.workers !== "" && Number(c.workers) !== 8) a.push("--workers", String(Number(c.workers)));
+  if (c.inventoryOnly) a.push("--inventory-only");
+  else if (c.collectors.length !== COLLECTORS.length) a.push("--collectors", c.collectors.join(","));
+  if (c.security) a.push("--security");
+  if (c.noCsv) a.push("--no-csv");
+  if (c.preflightOnly) a.push("--preflight-only");
+  if (c.anonymize) {
+    a.push("--anonymize");
+    if (c.anonymizeFields) a.push("--anonymize-fields", q(c.anonymizeFields));
+    if (c.notAnonymizeFields) a.push("--not-anonymize-fields", q(c.notAnonymizeFields));
+  }
+  if (c.verbose) a.push("--verbose");
+  if (c.mock) a.push("--mock");
+  a.push("--output", c.outShell || q(c.outDir));
+  return a;
+}
+
+function buildCommand(c) { return ["python main.py"].concat(buildArgs(c)).join(" "); }
+
+function buildNotes(c) {
+  const n = [];
+  if (c.mock) { n.push("--mock uses built-in sample data: nothing is read from Google Cloud, and the other options only change which files are written."); return n; }
+  if (c.preflightOnly) n.push("Access check only: nothing is collected. The zip holds gcp_preflight_check-<timestamp>.csv and the log; a project named with --projects that cannot be read gets a 'project' row and is listed at the end.");
+  if (c.mode === "all") n.push("This scans every project the credentials can see. Run one project first and check the results.");
+  if (c.mode === "current") n.push("Only the project from your gcloud config (or the credentials' default) is scanned. Check it in Stage 0.");
+  if (c.org || c.folder) n.push("--org and --folder were not compared with anything yet; the identity needs roles/cloudasset.viewer at that level.");
+  if (c.inventoryOnly) n.push("--inventory-only runs only the Cloud Asset sweep: no per-service sizing, and the VM, disk and database CSV files will be empty.");
+  else if (!c.collectors.includes("compute") || !c.collectors.includes("database") || !c.collectors.includes("bigquery")) n.push("Without the compute, database or bigquery collector the matching CSV files are empty.");
+  if (!c.inventoryOnly && c.collectors.includes("bigquery")) n.push("BigQuery is read with one call per table, so a project with many tables takes longer. Untick bigquery to skip it.");
+  if (c.security) n.push("--security needs roles/securitycenter.findingsViewer at the organization level.");
+  if (c.anonymize) n.push("Anonymized run: the zip has no raw JSON. The file mapping labels back to real values and the real log are written beside the zip, not inside it.");
+  if (c.outDir) n.push("The zip and the run log go to " + c.outDir + (c.outDir.startsWith("/") ? "." : ", next to the downloaded script."));
+  return n;
+}
+
+function buildScript(c) {
+  const cmd = ["python main.py"].concat(buildArgs({ ...c, outShell: '"$OUT_DIR"' })).join(" ");
+  const confirm = c.mock ? ['echo "Mock run: no GCP credentials are used."']
+    : [
+      'gcloud auth application-default print-access-token >/dev/null 2>&1 || { echo "No Application Default Credentials. Run: gcloud auth application-default login"; exit 1; }',
+      'echo "Active gcloud account : $(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -1)"',
+      'echo "Current gcloud project: $(gcloud config get-value project 2>/dev/null)"',
+      c.mode === "all" ? 'echo "You are about to scan EVERY project these credentials can see."'
+        : c.mode === "current" ? 'echo "You are about to scan only the current project."'
+        : 'echo "You are about to scan the projects you listed (not necessarily the current one)."',
+      'read -r -p "Continue? [y/N] " ans',
+      'case "$ans" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac'
+    ];
+  return [
+    "#!/usr/bin/env bash",
+    c.preflightOnly
+      ? "# Generated by gcp-run-guide.html. Access check only: read-only, and nothing is collected."
+      : c.anonymize
+      ? "# Generated by gcp-run-guide.html. Read-only discovery; the CSV files in the zip are anonymized."
+      : "# Generated by gcp-run-guide.html. Read-only discovery; output is not anonymized.",
+    "set -euo pipefail",
+    "",
+    ...repoLines("CLOUD/python/gcp", c.outDir),
+    ...confirm,
+    "",
+    cmd,
+    "",
+    'ZIP="$(ls -t "$OUT_DIR"/' + (c.preflightOnly ? "gcp_access_check_" : "gcp_sizing_results_") + '*.zip 2>/dev/null | head -1 || true)"',
+    c.anonymize
+      ? 'if [ -n "$ZIP" ]; then echo "' + (c.preflightOnly ? "Access report" : "Results") + ': $ZIP (anonymized). The key file and the real log are beside it; keep those local."; fi'
+      : 'if [ -n "$ZIP" ]; then echo "' + (c.preflightOnly ? "Access report" : "Results") + ': $ZIP (contains project and resource names; keep it local)"; fi',
+    ""
+  ].join("\n");
+}
+
+
+if (typeof module !== "undefined") module.exports = { q, outPath, validate, buildArgs, buildCommand, buildNotes, buildScript };
+
+if (typeof document !== "undefined") {
+  const $ = id => document.getElementById(id);
+
+  const box = $("collectors");
+  COLLECTORS.forEach(s => {
+    const l = document.createElement("label");
+    const i = document.createElement("input");
+    i.type = "checkbox"; i.value = s; i.checked = true;
+    l.append(i, " " + s);
+    box.appendChild(l);
+  });
+  const collectorInputs = () => Array.from(box.querySelectorAll("input"));
+
+  function config() {
+    return {
+      mode: $("mode").value, regions: $("regions").value.trim().replace(/\s+/g, ""), workers: $("workers").value.trim(),
+      projects: $("projects").value.trim().replace(/\s+/g, ""), projectFile: $("projectFile").value.trim(),
+      org: $("org").value.trim(), folder: $("folder").value.trim(),
+      anonymizeFields: $("anonymizeFields").value.trim().replace(/\s+/g, ""), notAnonymizeFields: $("notAnonymizeFields").value.trim().replace(/\s+/g, ""),
+      outDir: $("outDir").value.trim(),
+      collectors: collectorInputs().filter(i => i.checked).map(i => i.value),
+      inventoryOnly: $("inventoryOnly").checked, security: $("security").checked, noCsv: $("noCsv").checked, preflightOnly: $("preflightOnly").checked,
+      anonymize: $("anonymize").checked, verbose: $("verbose").checked, mock: $("mock").checked
+    };
+  }
+
+  function render() {
+    const c = config();
+    $("projFields").hidden = c.mode !== "projects";
+    $("fileFields").hidden = c.mode !== "file";
+    $("anonFields").hidden = !c.anonymize;
+    collectorInputs().forEach(i => { i.disabled = c.inventoryOnly; });
+    const errs = validate(c);
+    $("errs").replaceChildren(...errs.map(t => { const d = document.createElement("div"); d.textContent = t; return d; }));
+    $("notes").replaceChildren(...buildNotes(c).map(t => { const d = document.createElement("div"); d.className = "box warn"; d.textContent = t; return d; }));
+    $("cmd").textContent = errs.length ? "Fix the problems above to generate the command." : buildCommand(c);
+    $("dl").disabled = errs.length > 0;
+  }
+
+  document.querySelectorAll("input[type=text], input[type=number], select, input[type=checkbox]").forEach(el => el.addEventListener("input", render));
+
+  $("dl").onclick = () => {
+    const blob = new Blob([buildScript(config())], { type: "text/x-shellscript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "run-gcp-sizing.sh"; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+
+  document.addEventListener("click", ev => {
+    const b = ev.target.closest("button.copy");
+    if (!b) return;
+    const sel = b.dataset.copy;
+    const el = sel === "next" ? b.parentElement.querySelector("pre") : document.querySelector(sel);
+    const text = el.textContent;
+    const done = () => { const o = b.textContent; b.textContent = "Copied"; setTimeout(() => { b.textContent = o; }, 1200); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
+    else { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); done(); }
+  });
+
+  let state = {};
+  try { state = JSON.parse(localStorage.getItem("gcp-run-guide") || "{}"); } catch (e) {}
+  document.querySelectorAll(".stage").forEach(st => {
+    const id = st.dataset.stage, cb = st.querySelector("h3 input");
+    cb.checked = !!state[id]; st.classList.toggle("done", cb.checked);
+    cb.addEventListener("change", () => {
+      state[id] = cb.checked; st.classList.toggle("done", cb.checked);
+      try { localStorage.setItem("gcp-run-guide", JSON.stringify(state)); } catch (e) {}
+    });
+  });
+
+  render();
+}
+</script>
+</body>
+</html>
