@@ -17,7 +17,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO="${1:-$(git -C "$HERE" rev-parse --show-toplevel)}"
 REF="${2:-origin/master}"
 OUT="${3:-./cloud-sizing-zips}"
-BASE="sizing_scripts/cloud/python"
+BASE="$(git -C "$HERE" rev-parse --show-prefix)"
+BASE="${BASE%/}"
+BASE="${BASE%/*}"
 DOCS="user-guide.md permissions.md troubleshooting.md logging.md powershell-parameter-mapping.md"
 
 # A remote branch is fetched first, so the zips hold what is on GitHub, not a stale local copy.
