@@ -77,17 +77,12 @@ Read the `Fix:` line under the problem in the run summary: it says what to do an
 | `docs/troubleshooting.md` | what each error means and what to do |
 | `docs/permissions.md` | the access each tool needs, and what a missing permission costs you |
 | `docs/logging.md` | how the run log and the problem summary work, and how to add a fix |
-| `docs/aws-vs-powershell.md` | how the AWS output and log differ from the PowerShell script's, and why |
-| `docs/gcp-vs-powershell.md`, `docs/azure-vs-powershell.md` | the same for GCP and Azure |
 | `docs/run-guides/` | the browser pages that generate run scripts |
-| `CLAUDE.md` | notes for developers working on the code |
 
 ## Environments
 
-Used on macOS with Python 3.13 and 3.14. Linux and the cloud shells are expected to work but have not been checked here.
-Native Windows has not been tried; use WSL or a cloud shell.
+Run the tools from a cloud shell, Linux or macOS. On Windows, try WSL. Use Python 3.13 or 3.14.
 
 ## Read-only
 
-The tools list and describe; they do not create, change or delete anything in the cloud. The one thing you can ask for
-is AWS `--bucket`, which also uploads the AWS results to an S3 bucket you own.
+The tools list and describe; they do not create, change or delete anything in the cloud.

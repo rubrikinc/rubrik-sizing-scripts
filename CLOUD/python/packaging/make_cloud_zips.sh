@@ -8,7 +8,7 @@
 #     OUT   folder the zips are written to      (default: ./cloud-sizing-zips)
 #
 # Each zip holds the tool's committed code only (no tests, caches or local output), a docs/
-# folder (user guide, permissions, troubleshooting, run log, PowerShell mapping, vs PowerShell)
+# folder (user guide, permissions, troubleshooting, run log, PowerShell mapping)
 # and a QUICKSTART.md. Re-run it to package newer code; the commit is in each zip's name.
 # Needs git, tar and python3 (the zips are made with Python's zipfile module).
 set -euo pipefail
@@ -107,7 +107,7 @@ for cloud in aws azure gcp; do
   mkdir -p "$dir/docs"
   cp -R "$WORK/$BASE/$cloud/." "$dir/"
   rm -rf "$dir/tests"
-  for doc in $DOCS "${cloud}-vs-powershell.md"; do
+  for doc in $DOCS; do
     cp "$WORK/$BASE/docs/$doc" "$dir/docs/"
   done
   quickstart "$cloud" > "$dir/QUICKSTART.md"

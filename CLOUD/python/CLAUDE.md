@@ -14,7 +14,6 @@ contract B, per-cloud AWS/AZ/GCP, anonymizer D).
 | `contract/` | Per-file CSV columns extracted from the PowerShell code, plus header checks (see its README) |
 | `docs/powershell-parameter-mapping.md` | Every PowerShell parameter and its Python flag, or the task that closes the gap |
 | `README.md`, `docs/user-guide.md`, `docs/troubleshooting.md`, `docs/permissions.md`, `docs/logging.md` | The user-facing documentation; each tool's `tests/test_docs.py` and `tests/bootstrap/test_docs.py` fail when it drifts from the code |
-| `docs/aws-vs-powershell.md`, `docs/gcp-vs-powershell.md`, `docs/azure-vs-powershell.md` | Findings from comparing each tool's output and log with the PowerShell script's |
 | `docs/run-guides/` | The browser run guides and example run scripts (private: names the private repo, not mirrored) |
 | `packaging/` | `make_cloud_zips.sh`: one shareable zip per cloud (tool, docs, quickstart), an alternative to cloning; `tests/bootstrap/test_packaging_zips.py` checks it |
 

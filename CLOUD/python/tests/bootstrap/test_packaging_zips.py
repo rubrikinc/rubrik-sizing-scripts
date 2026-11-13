@@ -62,7 +62,7 @@ def test_a_zip_holds_the_tool_its_docs_and_a_quickstart(zips, cloud):
     root = f"rubrik-cloud-sizing-{cloud}/"
     names = set(_names(zips[cloud]))
     expected = {"main.py", "requirements.txt", "QUICKSTART.md"}
-    expected |= {f"docs/{doc}" for doc in DOCS + (f"{cloud}-vs-powershell.md",)}
+    expected |= {f"docs/{doc}" for doc in DOCS}
     assert {root + name for name in expected} <= names
 
 

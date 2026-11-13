@@ -13,9 +13,6 @@ PAGES = ["README.md"] + [
         "troubleshooting",
         "permissions",
         "logging",
-        "aws-vs-powershell",
-        "gcp-vs-powershell",
-        "azure-vs-powershell",
     )
 ]
 GUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)

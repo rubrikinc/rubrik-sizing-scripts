@@ -39,7 +39,7 @@
   <p class="sub">Branch <code>master</code> &middot; <code>CLOUD/python/azure</code> &middot; a runbook and command builder. This page does not run anything: it builds commands and a script that you run in your own terminal or Azure Cloud Shell.</p>
 
   <div class="box warn"><b>Before you run it</b>
-    The tool only reads (list and get calls). <b>It has not been run on a real Azure tenant yet.</b> Its CSV files were compared with the PowerShell script's own row-building code on the same inputs, with the Azure calls replaced by test data, and matched except where noted in the parity plan. Expect surprises on a real tenant: start with one subscription, <code>--no-cost</code> and <code>--no-devops</code>, and send back anything that looks wrong.
+    The tool only reads (list and get calls). <b>It has not been run on a real Azure tenant yet.</b> Its CSV files were compared with the PowerShell script's own row-building code on the same inputs, with the Azure calls replaced by test data, and matched except for a few known differences. Expect surprises on a real tenant: start with one subscription, <code>--no-cost</code> and <code>--no-devops</code>, and send back anything that looks wrong.
     The zip holds subscription IDs, resource names and tags. Keep it local, or run with <code>--anonymize</code> (the zip then has no raw JSON; the file that maps the labels back to the real names stays beside it).
     <b>Known problem on this branch:</b> <code>--dry-run</code> and <code>--manifest</code> fail with <code>No module named 'audit_manifest'</code> (that file arrives with another pull request). Do not use them yet. <code>--mock</code> works and needs no credentials.
   </div>
@@ -201,7 +201,7 @@ ls -l output/last/*.csv</pre></div>
       <tr><td><code>--preflight-only</code></td><td>Only run the access check in each subscription and write <code>azure_access_check_&lt;timestamp&gt;.zip</code> with <code>azure_preflight_check-&lt;timestamp&gt;.csv</code> and the log. Nothing is collected. A subscription named with <code>--subs</code> that cannot be read gets a <code>subscription</code> row. Not with <code>--no-csv</code> or <code>--mock</code>.</td></tr>
       <tr><td><code>--output DIR</code>, <code>--verbose</code>, <code>--mock</code>, <code>--config FILE</code></td><td>Output directory (default <code>~/clouddrive</code> in Cloud Shell, else <code>./output</code>); extra output; sample data; settings file (flags win).</td></tr>
     </table></details>
-  <p class="small">The PowerShell script <code>Get-AzureSizingInfo.ps1</code> remains the reference for output files. Plan and known differences: <code>CLOUD/python/docs/azure-parity-plan.md</code>; flag mapping: <code>docs/powershell-parameter-mapping.md</code>.</p>
+  <p class="small">The PowerShell script <code>Get-AzureSizingInfo.ps1</code> remains the reference for output files. Flag mapping: <code>docs/powershell-parameter-mapping.md</code>.</p>
 
 </main>
 
