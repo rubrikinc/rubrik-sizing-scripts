@@ -83,10 +83,14 @@ To run the AWS sizing script, ensure you have the following:
                       "fsx:DescribeBackups",
                       "fsx:DescribeFileSystems",
                       "fsx:DescribeVolumes",
+                      "glue:GetDatabases",
+                      "glue:GetResourceTags",
+                      "glue:GetTables",
                       "iam:ListAccountAliases",
                       "iam:ListPolicies",
                       "iam:ListRoles",
                       "iam:ListUsers",
+                      "kms:Decrypt",
                       "kms:DescribeKey",
                       "kms:ListAliases",
                       "kms:ListKeys",
@@ -101,11 +105,15 @@ To run the AWS sizing script, ensure you have the following:
                       "s3:GetBucketLocation",
                       "s3:ListAllMyBuckets",
                       "s3:GetBucketTagging",
+                      "s3:GetObject",
                       "s3:ListStorageLensConfigurations",
                       "s3:GetStorageLensConfiguration",
+                      "s3tables:GetTable",
+                      "s3tables:GetTableData",
+                      "s3tables:GetTableMaintenanceConfiguration",
+                      "s3tables:GetTableMetadataLocation",
                       "s3tables:ListTableBuckets",
                       "s3tables:ListTables",
-                      "s3tables:GetTable",
                       "s3tables:ListTagsForResource",
                       "secretsmanager:ListSecrets",
                       "sqs:ListQueues"
@@ -222,7 +230,7 @@ To run the script from a local laptop or server do the following:
 1. Verify that PowerShell v7.4.5 or higher is installed.
 1. Install the AWS modules for PowerShell with the following command:
     ```powershell
-    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.S3Control,AWS.Tools.S3Tables,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift
+    Install-Module AWS.Tools.Common,AWS.Tools.EC2,AWS.Tools.S3,AWS.Tools.S3Control,AWS.Tools.S3Tables,AWS.Tools.RDS,AWS.Tools.SecurityToken,AWS.Tools.Organizations,AWS.Tools.IdentityManagement,AWS.Tools.CloudWatch,AWS.Tools.ElasticFileSystem,AWS.Tools.ElasticLoadBalancing,AWS.Tools.ElasticLoadBalancingV2,AWS.Tools.SSO,AWS.Tools.SSOOIDC,AWS.Tools.FSX,AWS.Tools.Backup,AWS.Tools.CostExplorer,AWS.Tools.DynamoDBv2,AWS.Tools.Route53,AWS.Tools.SQS,AWS.Tools.SecretsManager,AWS.Tools.KeyManagementService,AWS.Tools.EKS,AWS.Tools.Redshift,AWS.Tools.Glue
 
     ```
 1. Ensure AWS credentials are set up by using the `Set-AWSCredential` command. For example:
