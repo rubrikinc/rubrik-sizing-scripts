@@ -50,6 +50,15 @@ Every switch below can be combined with any other. All of them are optional — 
 Number of criticality groups the interactive report opens with (3-12, default 3). The **low-activity group is always one more**: 10 criticality groups gives 11 groups, and Group 11 is the low-activity group (no ABR priority, recovered by Mass Recovery). Above 3 groups the Recovery Window (RTO) targets default to **Enterprise Plus**, sized to the tenant: Group 1 at Day 1 (24 hr or less on a small tenant), the last group at the tenant's whole-tenant ABR time, and the groups in between spaced so each is a bit larger than the one before. Every target stays editable. You can also change the number live in the report under **Groups & Recovery Model -> Scoring & Recovery inputs -> Recovery modeling inputs -> Criticality groups**. The per-workload CSVs and the Summary report keep the 3-group baseline; the interactive report applies the chosen count (and Export overrides carries group names such as "Critical Group 7").
 
 ```powershell
+.\Invoke-RecoveryAssessment-M365-Full.ps1 -SiteLookup
+```
+**Opt-in.** The Graph SharePoint usage report sometimes returns a blank **Site URL** (only the owner group name and Site Id come back). Typical reasons are a Microsoft-side reporting problem or delay, or a tenant with Customer Lockbox or BYOK enabled. By default the script does not try to fix that: exports identify those sites by owner and Site Id (the CSV exports carry a `SiteId` column) and the console tells you how many sites are affected. Add `-SiteLookup` and the script looks up each active site's real URL and title through Microsoft Graph (batched 20 at a time, using the `Sites.Read.All` scope it already requests), so exports show the site URL as the identifier and the site title as the name.
+
+Sites the signed-in account cannot open (typically private Team and Microsoft 365 group sites) come back as `HTTP 403 Access denied` and stay unresolved; the console reports how many. Running with the Enterprise App (certificate, application permissions; see `-ShowEnterpriseAppGuide`) is not limited by site membership and resolves them.
+
+It adds time: an estimate, not a measured figure, is roughly a minute per 1,000-2,000 sites (more if Graph throttles), so a few hundred sites is seconds and tens of thousands can take an hour or more. `-SiteLookupGroup1Only` limits it to Group 1 sites, and `-SiteLookupMaxMinutes` (default 15) stops it at that time budget and keeps whatever resolved. Progress and a time-left estimate print as it runs. Not used in offline mode (the admin center export normally includes the URL).
+
+```powershell
 .\Invoke-RecoveryAssessment-M365-Full.ps1 -NoGroups
 ```
 Opts out of Entra ID group data collection. By default (as of v3.14.0), every run resolves each user's group membership — via its own separate bulk directory pull alongside the one the base assessment already does (Microsoft Graph only allows one property expanded per user query, so the two can't be combined) — and surfaces a "Filter to Entra ID group" bulk-selection tool on the Groups & Recovery Model tab, so you can filter to a specific department/team and mass-reassign everyone in it to a tier in one motion. This requests one additional Graph scope, `Group.Read.All`, on every run, plus that extra directory pull. Use `-NoGroups` if that's not acceptable yet (e.g. a customer's security team hasn't approved the scope), or to cut collection time/memory on a very large tenant — it drops the extra scope request, the extra pull, and the group filter/column disappear for that run.
@@ -296,6 +305,7 @@ The report carries an **"Offline run - reduced confidence"** banner and a row in
 
 - **User profile enrichment** (job title, department, manager, Entra groups): title-weight scoring and group/department filters are empty.
 - **License-based mailbox classification:** unlicensed and shared mailboxes cannot be told apart from licensed ones, so mailbox counts may be overstated.
+- **Site URLs:** if the admin center export has a blank Site URL (see `-SiteLookup` above for why this happens), offline mode cannot look it up. Sites are then identified by owner and Site Id only.
 - **Team-to-site mapping:** Team sites are matched by heuristic only, so Teams/SharePoint overlap is approximate.
 - **Archive mailbox and Recoverable Items sizes** (`-DetailedSizing` is ignored offline): Exchange sizing is understated by the Recoverable Items amount.
 

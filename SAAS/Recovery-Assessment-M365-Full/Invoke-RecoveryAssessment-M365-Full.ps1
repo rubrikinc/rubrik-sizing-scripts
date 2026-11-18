@@ -369,6 +369,14 @@ param(
     # contain the exported CSVs - see the README, 'Running offline'.
     [string]$OfflinePath = '',
 
+    # OPT-IN: look up SharePoint site URLs and titles through Microsoft Graph. Only needed when the usage report
+    # returns a blank Site URL (it can: Microsoft-side reporting problems, Customer Lockbox/BYOK). Adds roughly a
+    # minute per 1,000-2,000 sites, so it is off unless asked for. -SiteLookupGroup1Only limits it to Group 1 sites;
+    # -SiteLookupMaxMinutes stops it at that time budget and keeps whatever resolved.
+    [switch]$SiteLookup,
+    [switch]$SiteLookupGroup1Only,
+    [int]$SiteLookupMaxMinutes = 15,
+
     # NEW: number of criticality groups for the interactive report to start with (3-12, default 3).
     # The low-activity group is always one more (10 -> 11 groups, #11 = low activity). Above 3 the RTO
     # targets default to "Enterprise Plus", sized to the tenant, and everything stays editable in the
@@ -2031,6 +2039,70 @@ function Get-SignedInAccount {
 }
 #endregion
 
+function Resolve-SiteDetails {
+    <#
+        The Graph SharePoint site usage report can come back with a BLANK "Site URL" (seen on a live tenant: 0 of 213 rows had
+        one), leaving only Site Id and an "<Site name> Owners" owner group name. Sites.Read.All is already consented, so look the
+        missing URL and the real site title up with Graph $batch (20 sites per call) for the sites that matter: those in the
+        criticality groups (not the low-activity group). Best effort: a failure leaves the row as-is and is reported once.
+        Opt-in (-SiteLookup); skipped offline (no connection).
+    #>
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [array] $Sites,
+        [string[]] $OnlyTiers = @(),
+        [int] $Limit = 60000
+    )
+    if ($script:Offline) { return }
+    $missing = @($Sites | Where-Object { -not $_.SiteUrl -and $_.SiteId -and $_.Tier -ne 'Group 4' })
+    if ($missing.Count -eq 0) { return }
+    if (-not $SiteLookup) {
+        Write-Host ("{0:N0} SharePoint sites have no Site URL in the usage report. Exports will identify them by owner and Site Id. Re-run with -SiteLookup to resolve URLs and site titles through Microsoft Graph (adds time on large tenants)." -f $missing.Count) -ForegroundColor Yellow
+        return
+    }
+    $tiers = $OnlyTiers
+    if ($tiers.Count -eq 0 -and $SiteLookupGroup1Only) { $tiers = @('Critical Group 1') }
+    $todo = @($missing | Where-Object { $tiers.Count -eq 0 -or ($tiers -contains $_.Tier) })
+    if ($todo.Count -eq 0) { return }
+    if ($todo.Count -gt $Limit) { Write-Warning ("Site URL lookup limited to the first {0:N0} of {1:N0} sites without a URL." -f $Limit, $todo.Count); $todo = @($todo | Select-Object -First $Limit) }
+    Write-Host ("Site URL / name lookup via Microsoft Graph for {0:N0} SharePoint sites (the usage report returned no Site URL)..." -f $todo.Count) -ForegroundColor Gray
+    $resolved = 0; $failed = 0; $firstError = $null; $consecutiveFail = 0; $clock = [System.Diagnostics.Stopwatch]::StartNew(); $timedOut = $false
+    for ($i = 0; $i -lt $todo.Count; $i += 20) {
+        if ($SiteLookupMaxMinutes -gt 0 -and $clock.Elapsed.TotalMinutes -ge $SiteLookupMaxMinutes) { $timedOut = $true; break }
+        $chunk = @($todo[$i..([math]::Min($i + 19, $todo.Count - 1))])
+        $reqs = for ($j = 0; $j -lt $chunk.Count; $j++) { @{ id = "$j"; method = 'GET'; url = ('/sites/{0}?$select=id,displayName,webUrl' -f $chunk[$j].SiteId) } }
+        try {
+            $resp = Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/$batch' -Body (@{ requests = @($reqs) } | ConvertTo-Json -Depth 6) -ContentType 'application/json' -ErrorAction Stop
+        } catch {
+            $failed += $chunk.Count; $consecutiveFail += $chunk.Count
+            if (-not $firstError) { $firstError = $_.Exception.Message }
+            if ($consecutiveFail -ge 100) { break }
+            continue
+        }
+        foreach ($r in @($resp.responses)) {
+            $site = $chunk[[int]$r.id]
+            if ([int]$r.status -eq 200 -and $r.body.webUrl) {
+                Add-Member -InputObject $site -NotePropertyName 'SiteUrl' -NotePropertyValue ([string]$r.body.webUrl) -Force
+                if ($r.body.displayName) {
+                    Add-Member -InputObject $site -NotePropertyName 'OwnerGroupName' -NotePropertyValue ([string]$site.ObjectName) -Force
+                    $site.ObjectName = [string]$r.body.displayName
+                }
+                $resolved++; $consecutiveFail = 0
+            } else {
+                $failed++; $consecutiveFail++
+                if (-not $firstError) { $firstError = "HTTP $($r.status) $($r.body.error.message)" }
+            }
+        }
+        if ($consecutiveFail -ge 100) { break }
+        if ((($i / 20) % 25) -eq 24) {
+            $doneNow = [math]::Min($i + 20, $todo.Count); $etaMin = if ($doneNow -gt 0) { [math]::Round(($clock.Elapsed.TotalMinutes / $doneNow) * ($todo.Count - $doneNow), 1) } else { 0 }
+            Write-Host ("  ...{0:N0} of {1:N0} (about {2} min left)" -f $doneNow, $todo.Count, $etaMin) -ForegroundColor DarkGray
+        }
+    }
+    if ($timedOut) { $failed = $todo.Count - $resolved; Write-Warning ("Site URL lookup stopped after {0} minutes (-SiteLookupMaxMinutes); the remaining sites keep their owner/ID identifier. Raise -SiteLookupMaxMinutes or add -SiteLookupGroup1Only." -f $SiteLookupMaxMinutes) }
+    Write-Host ("Site URL lookup: {0:N0} resolved, {1:N0} not resolved." -f $resolved, $failed) -ForegroundColor $(if ($failed -gt 0) { 'Yellow' } else { 'Gray' })
+    if ($failed -gt 0) { Write-Warning ("Some SharePoint sites have no Site URL in the exports (first error: {0}). Their identifier stays the owner/ID value; site names fall back to the owner group name." -f $firstError) }
+}
+
 function Get-GraphReport {
     <#
         NEW v3.7.1: actually implements the fix the comment above
@@ -2059,13 +2131,15 @@ function Get-GraphReport {
         [Parameter(Mandatory)] [scriptblock] $Download,
         [Parameter(Mandatory)] [string] $OutFile,
         [Parameter(Mandatory)] [string] $Label,
-        [int] $MaxAttempts = 3,
-        [int] $RetryDelaySeconds = 10
+        [int] $MaxAttempts = 4,
+        [int] $RetryDelaySeconds = 15
     )
     if ($script:Offline) { Import-OfflineReport -Label $Label -OutFile $OutFile; return }
     $lastError = $null
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $lastError = $null
+        # A failed attempt can leave a zero-byte file behind; clear it so the next attempt starts clean.
+        if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -eq 0) { Remove-Item $OutFile -Force -ErrorAction SilentlyContinue }
         try {
             & $Download
         } catch {
@@ -2271,9 +2345,9 @@ function Get-MailboxCriticality {
     # the $Period pull. See the Methodology tab.
     $activity7dFile = Join-Path $WorkDir 'raw_email_activity_7d.csv'
 
-    Get-GraphReport -Label 'Mailbox usage' -OutFile $usageFile -Download { Get-MgReportMailboxUsageDetail -Period $Period -OutFile $usageFile -ErrorAction SilentlyContinue }
-    Get-GraphReport -Label 'Email activity' -OutFile $activityFile -Download { Get-MgReportEmailActivityUserDetail -Period $Period -OutFile $activityFile -ErrorAction SilentlyContinue }
-    Get-GraphReport -Label 'Email activity (7-day, ABR)' -OutFile $activity7dFile -Download { Get-MgReportEmailActivityUserDetail -Period 'D7' -OutFile $activity7dFile -ErrorAction SilentlyContinue }
+    Get-GraphReport -Label 'Mailbox usage' -OutFile $usageFile -Download { Get-MgReportMailboxUsageDetail -Period $Period -OutFile $usageFile -ErrorAction Stop }
+    Get-GraphReport -Label 'Email activity' -OutFile $activityFile -Download { Get-MgReportEmailActivityUserDetail -Period $Period -OutFile $activityFile -ErrorAction Stop }
+    Get-GraphReport -Label 'Email activity (7-day, ABR)' -OutFile $activity7dFile -Download { Get-MgReportEmailActivityUserDetail -Period 'D7' -OutFile $activity7dFile -ErrorAction Stop }
 
     $usage = Import-Csv $usageFile
     $activityIndex = @{}
@@ -2360,9 +2434,9 @@ function Get-OneDriveCriticality {
     # signal always uses D7, independent of -Period.
     $activity7dFile = Join-Path $WorkDir 'raw_onedrive_activity_7d.csv'
 
-    Get-GraphReport -Label 'OneDrive usage' -OutFile $usageFile -Download { Get-MgReportOneDriveUsageAccountDetail -Period $Period -OutFile $usageFile -ErrorAction SilentlyContinue }
-    Get-GraphReport -Label 'OneDrive activity' -OutFile $activityFile -Download { Get-MgReportOneDriveActivityUserDetail -Period $Period -OutFile $activityFile -ErrorAction SilentlyContinue }
-    Get-GraphReport -Label 'OneDrive activity (7-day, ABR)' -OutFile $activity7dFile -Download { Get-MgReportOneDriveActivityUserDetail -Period 'D7' -OutFile $activity7dFile -ErrorAction SilentlyContinue }
+    Get-GraphReport -Label 'OneDrive usage' -OutFile $usageFile -Download { Get-MgReportOneDriveUsageAccountDetail -Period $Period -OutFile $usageFile -ErrorAction Stop }
+    Get-GraphReport -Label 'OneDrive activity' -OutFile $activityFile -Download { Get-MgReportOneDriveActivityUserDetail -Period $Period -OutFile $activityFile -ErrorAction Stop }
+    Get-GraphReport -Label 'OneDrive activity (7-day, ABR)' -OutFile $activity7dFile -Download { Get-MgReportOneDriveActivityUserDetail -Period 'D7' -OutFile $activity7dFile -ErrorAction Stop }
 
     $usage = Import-Csv $usageFile
     $activityIndex = @{}
@@ -2427,7 +2501,7 @@ function Get-SharePointCriticality {
     )
 
     $usageFile = Join-Path $WorkDir 'raw_sharepoint_usage.csv'
-    Get-GraphReport -Label 'SharePoint site usage' -OutFile $usageFile -Download { Get-MgReportSharePointSiteUsageDetail -Period $Period -OutFile $usageFile -ErrorAction SilentlyContinue }
+    Get-GraphReport -Label 'SharePoint site usage' -OutFile $usageFile -Download { Get-MgReportSharePointSiteUsageDetail -Period $Period -OutFile $usageFile -ErrorAction Stop }
     $usage = Import-Csv $usageFile
 
     # NEW: see Get-MailboxCriticality's header comment - ABR's hot-data
@@ -2436,7 +2510,7 @@ function Get-SharePointCriticality {
     # OneDrive, there's no separate activity report), so this is a second
     # call to the identical endpoint with Period=D7 instead of $Period.
     $usage7dFile = Join-Path $WorkDir 'raw_sharepoint_usage_7d.csv'
-    Get-GraphReport -Label 'SharePoint site usage (7-day, ABR)' -OutFile $usage7dFile -Download { Get-MgReportSharePointSiteUsageDetail -Period 'D7' -OutFile $usage7dFile -ErrorAction SilentlyContinue }
+    Get-GraphReport -Label 'SharePoint site usage (7-day, ABR)' -OutFile $usage7dFile -Download { Get-MgReportSharePointSiteUsageDetail -Period 'D7' -OutFile $usage7dFile -ErrorAction Stop }
     $usage7dIndex = @{}
     foreach ($s7 in (Import-Csv $usage7dFile)) {
         $key = Get-ColumnValue $s7 @('Site Id') ''
@@ -2478,7 +2552,9 @@ function Get-SharePointCriticality {
 
         $obj = [PSCustomObject]@{
             Workload         = 'SharePoint Site'
-            ObjectName       = Get-ColumnValue $s @('Owner Display Name') $identifier
+            # Site name: the usage report has no site title, so use its owner display name (the group/site name for most sites), else the last URL segment.
+            ObjectName       = $(if ((Get-ColumnValue $s @('Owner Display Name') '')) { (Get-ColumnValue $s @('Owner Display Name') '') -replace '\s+Owners$', '' } elseif ($url) { ($url.TrimEnd('/') -split '/')[-1] } else { $identifier })
+            SiteUrl          = $url
             Identifier       = $identifier
             SiteId           = $siteId
             RootWebTemplate  = $template
@@ -2522,7 +2598,7 @@ function Get-TeamsCriticality {
     param([string]$Period, [string]$WorkDir)
 
     $teamFile = Join-Path $WorkDir 'raw_teams_team_activity.csv'
-    Get-GraphReport -Label 'Team activity' -OutFile $teamFile -Download { Get-MgReportTeamActivityDetail -Period $Period -OutFile $teamFile -ErrorAction SilentlyContinue }
+    Get-GraphReport -Label 'Team activity' -OutFile $teamFile -Download { Get-MgReportTeamActivityDetail -Period $Period -OutFile $teamFile -ErrorAction Stop }
     $teams = Import-Csv $teamFile
 
     $rows = foreach ($t in $teams) {
@@ -5430,13 +5506,13 @@ function onExecCostChange(v) {
 // "Confirm your Group 1" export (Full only)
 function exportGroup1Csv() {
   if (IS_PREVIEW || IS_SUMMARY) { return; }
-  var cols = ["Workload", "ObjectName", "Identifier", "JobTitle", "Department", "Manager", "ScorePct", "WhyInGroup1", "LastActivityDate", "ItemCount", "Storage (" + storageUnit() + ")"];
+  var cols = ["Workload", "ObjectName", "Identifier", "SiteId", "JobTitle", "Department", "Manager", "ScorePct", "WhyInGroup1", "LastActivityDate", "ItemCount", "Storage (" + storageUnit() + ")"];
   var out = [];
   WORKLOAD_DEFS.forEach(function (wd) {
     (DATA.workloads[wd.key] || []).forEach(function (r) {
       if (r.Tier !== "Critical Group 1") { return; }
       var row = {
-        "Workload": wd.label, "ObjectName": r.ObjectName || "", "Identifier": r.Identifier || "", "JobTitle": r.JobTitle || "",
+        "Workload": wd.label, "ObjectName": r.ObjectName || "", "Identifier": objIdOf(wd.key, r), "SiteId": wd.key === "sharepoint" ? (r.SiteId || "") : "", "JobTitle": r.JobTitle || "",
         "Department": r.Department || "", "Manager": r.Manager || "", "ScorePct": Math.round((r._Score || 0) * 100),
         "WhyInGroup1": r.CriteriaTags || "", "LastActivityDate": r.LastActivityDate || "",
         "ItemCount": (r.metrics && r.metrics[wd.itemField] != null) ? r.metrics[wd.itemField] : ""
@@ -6357,6 +6433,12 @@ $script:ReportJsRenderTables = @'
 var TKEY_META = {};   // tkey -> { wdKey, tier|null }
 function registerTable(tkey, wdKey, tier) { TKEY_META[tkey] = { wdKey: wdKey, tier: tier || null }; }
 function wdByKey(key) { return WORKLOAD_DEFS.filter(function (w) { return w.key === key; })[0]; }
+// SharePoint sites are identified by their site URL (falls back to the owner/ID value if no URL was available, e.g. concealed names);
+// ObjectName is the site name. Teams keep Team name + Team ID. Identifier itself stays the key used for overrides.
+function objIdOf(wdKey, r) {
+  if (wdKey === "sharepoint") { return r.SiteUrl || (/^https?:\/\//i.test(r.Identifier || "") ? r.Identifier : "") || r.Identifier || ""; }
+  return r.Identifier || "";
+}
 function tierIdOf(tierName) { return tierName === LOW_KEY ? "glow" : (tierNum(tierName) ? "g" + tierNum(tierName) : undefined); }
 function tierNameOfId(id) { if (id === "glow") { return LOW_KEY; } var m = /^g(\d+)$/.exec(id || ""); return m ? critKey(parseInt(m[1], 10)) : undefined; }
 function canEditTiers() { return !IS_PREVIEW && !IS_SUMMARY; }
@@ -6438,7 +6520,7 @@ function distinctGroupNames(rows) {
 // neither is part of the haystack), so it's safe to compute once.
 function rowSearchHaystack(row) {
   if (row._searchHaystack) { return row._searchHaystack; }
-  var parts = [row.ObjectName, row.Identifier, row.JobTitle, row.Department, row.Manager,
+  var parts = [row.ObjectName, row.Identifier, row.SiteUrl, row.JobTitle, row.Department, row.Manager,
     row.OfficeLocation, row.MailboxTypeHeuristic, row.RecipientType, row.EmployeeType, row.CriteriaTags];
   if (row.ManagerChain && row.ManagerChain.length) { parts = parts.concat(row.ManagerChain); }
   if (row.Groups && row.Groups.length) { parts = parts.concat(row.Groups); }
@@ -6511,7 +6593,7 @@ function objColumns(wdKey, hasEnrichment, hasMailboxType, hasGroups) {
   var itemsLabel = wdKey === "teams" ? "Users with recent activity" : wd.itemLabel;
   var cols = [
     { key: "name", label: "Object", type: "text", get: function (r) { return r.ObjectName || ""; }, cell: function (r) { return "<td>" + esc(r.ObjectName) + flagChipHtml(r) + "</td>"; } },
-    { key: "id", label: "Identifier", type: "text", get: function (r) { return r.Identifier || ""; }, cell: function (r) { return "<td>" + esc(r.Identifier) + "</td>"; } },
+    { key: "id", label: wdKey === "sharepoint" ? "Site URL" : "Identifier", type: "text", get: function (r) { return objIdOf(wdKey, r); }, cell: function (r) { return "<td>" + esc(objIdOf(wdKey, r)) + "</td>"; } },
     { key: "tier", label: "Tier", type: "text", get: function (r) { return r.Tier || ""; }, cell: function (r) {
         var options = TIER_ORDER.map(function (t) { return '<option value="' + t + '"' + (r.Tier === t ? " selected" : "") + ">" + TIER_META[t].named + "</option>"; }).join("");
         var sel = edit ? '<br><select class="tier-select" onchange="onTierDropdownChange(\'' + wdKey + "','" + String(r.Identifier).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + '\',this.value)">' + options + "</select>" : "";
@@ -6761,7 +6843,7 @@ function buildGroup1AllInner() {
   var combined = [];
   WORKLOAD_DEFS.forEach(function (wd) {
     (DATA.workloads[wd.key] || []).filter(function (r) { return r.Tier === "Critical Group 1"; }).forEach(function (r) {
-      combined.push({ workload: wd.label, objectName: r.ObjectName, identifier: r.Identifier, score: r._Score || 0, lastActivity: r.LastActivityDate || "", tags: r.CriteriaTags || "", flagged: !!(r._flags && r._flags.length), items: wd.storageField ? (parseFloat(r.metrics[wd.itemField]) || 0) : null, storageBytes: wd.storageField ? rowStorageBytes(wd.key, r) : null });
+      combined.push({ workload: wd.label, objectName: r.ObjectName, identifier: objIdOf(wd.key, r), score: r._Score || 0, lastActivity: r.LastActivityDate || "", tags: r.CriteriaTags || "", flagged: !!(r._flags && r._flags.length), items: wd.storageField ? (parseFloat(r.metrics[wd.itemField]) || 0) : null, storageBytes: wd.storageField ? rowStorageBytes(wd.key, r) : null });
     });
   });
   var cols = g1AllCols();
@@ -8663,7 +8745,7 @@ function rowsToCsv(rows, columns) {
 // exportCriticalityGroupsCsv()'s actual file-download side effect, so it's
 // straightforward to unit test.
 function buildCriticalityGroupsCsvText() {
-  var columns = ["Workload", "Tier", "ObjectName", "Identifier", "Overridden", "OverrideReason", "ScorePct", "ItemCount", "ItemType", "StorageAmount", "StorageUnit", "JobTitle", "Department", "Manager", "EntraGroups", "LastActivityDate", "CriteriaTags"];
+  var columns = ["Workload", "Tier", "ObjectName", "Identifier", "SiteId", "Overridden", "OverrideReason", "ScorePct", "ItemCount", "ItemType", "StorageAmount", "StorageUnit", "JobTitle", "Department", "Manager", "EntraGroups", "LastActivityDate", "CriteriaTags"];
   var rows = [];
   WORKLOAD_DEFS.forEach(function (wd) {
     var wdRows = DATA.workloads[wd.key] || [];
@@ -8674,7 +8756,8 @@ function buildCriticalityGroupsCsvText() {
         Workload: wd.label,
         Tier: tierMeta ? tierMeta.short : row.Tier,
         ObjectName: row.ObjectName || "",
-        Identifier: row.Identifier || "",
+        Identifier: objIdOf(wd.key, row),
+        SiteId: wd.key === "sharepoint" ? (row.SiteId || "") : "",
         Overridden: row.IsOverride ? "Yes" : "No",
         OverrideReason: row.IsOverride ? (row.OverrideReason || "") : "",
         ScorePct: Math.round((row._Score || 0) * 100),
@@ -8786,7 +8869,7 @@ function ConvertTo-ReportRows {
         [AllowEmptyCollection()] [Parameter(Mandatory)] [array]    $Data,
         [Parameter(Mandatory)] [string[]] $MetricFields
     )
-    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','MailboxClass','LicensePlan','HasArchiveAddon','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteId','RootWebTemplate','OwnerUpn')
+    $optionalPassthrough = @('JobTitle','Department','EmployeeType','Manager','ManagerChain','Groups','GroupIds','OfficeLocation','AccountEnabled','MailboxTypeHeuristic','MailboxClass','LicensePlan','HasArchiveAddon','RecipientType','HasArchive','HubSiteCandidate','HubSiteKeywordMatch','SiteUrl','SiteId','RootWebTemplate','OwnerUpn')
     $rows = foreach ($row in $Data) {
         $metrics = @{}
         foreach ($f in $MetricFields) {
@@ -9657,6 +9740,7 @@ $sharepointItemTotal = Get-FieldSum $sharepoint 'FileCount'
 $sharepointAvgItemSize = if ($sharepointItemTotal -gt 0) { (Get-FieldSum $sharepoint 'StorageBytes') / $sharepointItemTotal } else { 0 }
 $sharepoint = @(Add-BudgetTier -Data $sharepoint -InactiveCheckField 'TotalActivity' -AvgItemSize $sharepointAvgItemSize -SPODTier $tierSpodTier -WorkloadType 'SP' -TargetsMin $targetsMin -WindowFactor $tierWindowFactor)
 $sharepoint = @(Add-Overrides -Data $sharepoint -OverridesIndex $overridesIndex -Workload 'sharepoint')
+Resolve-SiteDetails -Sites $sharepoint
 $results['SharePoint'] = Export-WorkloadResult -Data $sharepoint -Name 'SharePointSites' -OutDir $OutputPath
 if ($sharepointExcluded.Count -gt 0) {
     $excludedPath = Join-Path $OutputPath 'SharePointSites_Excluded.csv'
@@ -9671,6 +9755,7 @@ $masterRows = foreach ($set in @($mailboxes, $onedrive, $sharepoint, $teams)) {
             Workload           = $row.Workload
             ObjectName         = $row.ObjectName
             Identifier         = $row.Identifier
+            SiteUrl            = $row.SiteUrl
             Tier               = $row.Tier
             IsOverride         = $row.IsOverride
             RankWithinWorkload = $row.RankWithinWorkload
