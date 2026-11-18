@@ -1,0 +1,4 @@
+# Keep the shell script runnable on Linux/Unix and the PowerShell script native on Windows,
+# regardless of the core.autocrlf setting of whoever checks the repo out.
+*.sh  text eol=lf
+*.ps1 text eol=crlf
