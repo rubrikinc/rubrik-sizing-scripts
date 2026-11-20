@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import gaps
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,12 +59,16 @@ def warn_once(message: str, *args: Any) -> None:
     Two messages are the same cause when they differ only in digits, so a failure repeated for 249
     accounts is one line on the screen. Failures are still counted where they happen.
     """
-    key = re.sub(r"\d+", "#", message % args if args else message)[:120]
+    text = message % args if args else message
+    # Counted for the subscription it names even when it is not shown again (see gaps.py): the same
+    # cause in a second subscription is still a gap in that subscription.
+    gaps.note(text)
+    key = re.sub(r"\d+", "#", text)[:120]
     with _warned_lock:
         if key in _warned:
             return
         _warned.add(key)
-    logger.warning(message, *args)
+    logger.warning(message, *args, extra={gaps.ALREADY_COUNTED: True})
 
 
 def latest_maximum(

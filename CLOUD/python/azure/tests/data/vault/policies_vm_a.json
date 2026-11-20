@@ -1,0 +1,142 @@
+[
+  {
+    "Tenant": "TENANT",
+    "Subscription": "SUB",
+    "Region": "centralus",
+    "ResourceGroup": "rg-backup",
+    "SnapshotRetentionInDays": 2,
+    "ProtectedItemsCount": 0,
+    "AzureBackupRGName": null,
+    "AzureBackupRGNameSuffix": null,
+    "PolicySubType": 1,
+    "TieringPolicy": null,
+    "SnapshotConsistencyType": null,
+    "SchedulePolicy": {
+      "ScheduleRunFrequency": 1,
+      "ScheduleRunDays": null,
+      "ScheduleRunTimes": [
+        "2026-10-24T06:30:00Z"
+      ],
+      "ScheduleInterval": null,
+      "ScheduleWindowStartTime": null,
+      "ScheduleWindowDuration": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "RetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2026-10-24T06:30:00Z"
+        ],
+        "BackupManagementType": "AzureIaasVM"
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": "AzureIaasVM"
+    },
+    "Name": "DefaultPolicy",
+    "WorkloadType": 1,
+    "Id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/DefaultPolicy",
+    "BackupManagementType": 1
+  },
+  {
+    "Tenant": "TENANT",
+    "Subscription": "SUB",
+    "Region": "centralus",
+    "ResourceGroup": "rg-backup",
+    "SnapshotRetentionInDays": 2,
+    "ProtectedItemsCount": 0,
+    "AzureBackupRGName": null,
+    "AzureBackupRGNameSuffix": null,
+    "PolicySubType": 2,
+    "TieringPolicy": null,
+    "SnapshotConsistencyType": null,
+    "SchedulePolicy": {
+      "ScheduleRunFrequency": 3,
+      "HourlySchedule": {
+        "Interval": 4,
+        "WindowStartTime": "2026-10-24T08:00:00Z",
+        "WindowDuration": 12
+      },
+      "DailySchedule": null,
+      "WeeklySchedule": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "RetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 30,
+        "RetentionTimes": [
+          "2026-10-24T08:00:00Z"
+        ],
+        "BackupManagementType": "AzureIaasVM"
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": "AzureIaasVM"
+    },
+    "Name": "EnhancedPolicy",
+    "WorkloadType": 1,
+    "Id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/EnhancedPolicy",
+    "BackupManagementType": 1
+  },
+  {
+    "Tenant": "TENANT",
+    "Subscription": "SUB",
+    "Region": "centralus",
+    "ResourceGroup": "rg-backup",
+    "SnapshotRetentionInDays": 2,
+    "ProtectedItemsCount": 0,
+    "AzureBackupRGName": null,
+    "AzureBackupRGNameSuffix": null,
+    "PolicySubType": 1,
+    "TieringPolicy": {
+      "TargetTier": 3,
+      "TieringMode": 3,
+      "TierAfterDuration": 0,
+      "TierAfterDurationType": "Invalid"
+    },
+    "SnapshotConsistencyType": "",
+    "SchedulePolicy": {
+      "ScheduleRunFrequency": 1,
+      "ScheduleRunDays": null,
+      "ScheduleRunTimes": [
+        "2026-10-23T23:00:00Z"
+      ],
+      "ScheduleInterval": null,
+      "ScheduleWindowStartTime": null,
+      "ScheduleWindowDuration": null,
+      "ScheduleRunTimeZone": "UTC"
+    },
+    "RetentionPolicy": {
+      "IsDailyScheduleEnabled": true,
+      "IsWeeklyScheduleEnabled": false,
+      "IsMonthlyScheduleEnabled": false,
+      "IsYearlyScheduleEnabled": false,
+      "DailySchedule": {
+        "DurationCountInDays": 7,
+        "RetentionTimes": [
+          "2026-10-23T23:00:00Z"
+        ],
+        "BackupManagementType": "AzureIaasVM"
+      },
+      "WeeklySchedule": null,
+      "MonthlySchedule": null,
+      "YearlySchedule": null,
+      "BackupManagementType": "AzureIaasVM"
+    },
+    "Name": "vm-daily-lrs",
+    "WorkloadType": 1,
+    "Id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/vm-daily-lrs",
+    "BackupManagementType": 1
+  }
+]

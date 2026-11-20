@@ -47,13 +47,15 @@
   <h2>1. Command builder</h2>
   <div class="row">
     <div><label for="mode">Subscriptions</label>
-      <select id="mode"><option value="current">The subscription of your current az login &ndash; recommended first</option><option value="subs">These subscriptions (--subs)</option><option value="all">Every enabled subscription I can read (--all)</option></select></div>
+      <select id="mode"><option value="current">The subscription of your current az login (--current-subscription) &ndash; recommended first</option><option value="subs">These subscription IDs (--subs)</option><option value="names">These subscription names (--subscriptions)</option><option value="mgs">Every subscription under these management groups (--management-groups)</option><option value="all">Every enabled subscription I can read (--all, the default)</option></select></div>
     <div><label for="cloud">Azure cloud</label>
       <select id="cloud"><option value="auto">Detect from az login (default)</option><option value="AzureCloud">Public cloud (AzureCloud)</option><option value="AzureUSGovernment">US Government (AzureUSGovernment)</option></select></div>
     <div><label for="regions">Regions <span class="hint">comma-separated, like eastus,westeurope; empty = all</span></label><input type="text" id="regions" placeholder="eastus,westeurope"></div>
   </div>
   <div class="row" id="subFields" hidden>
     <div><label for="subs">Subscription IDs <span class="hint">comma-separated GUIDs</span></label><input type="text" id="subs" placeholder="00000000-0000-0000-0000-000000000000"></div>
+    <div id="nameField" hidden><label for="subNames">Subscription names <span class="hint">comma-separated; a name that itself contains a comma is not supported</span></label><input type="text" id="subNames" placeholder="Prod-East,Prod-West"></div>
+    <div id="mgField" hidden><label for="mgs">Management groups <span class="hint">comma-separated names or IDs</span></label><input type="text" id="mgs" placeholder="mg-prod,mg-dev"></div>
   </div>
   <label>Skip these (each is a hard skip with no prompt; its CSV file is not written)</label>
   <div class="checks" id="skips"></div>
@@ -89,7 +91,7 @@
   <p class="small">Tick each stage when done (saved in this browser). Do not move on if a stage looks wrong.</p>
 
   <div class="stage" data-stage="s0"><h3>Stage 0 &ndash; Confirm which subscription you are in <label><input type="checkbox"> done</label></h3>
-    <p>Run <code>az login</code> first (not needed in Cloud Shell). Without <code>--subs</code> or <code>--all</code> the tool scans the subscription shown here, so make sure it is the one you intend. For a Government cloud first run <code>az cloud set --name AzureUSGovernment</code>.</p>
+    <p>Run <code>az login</code> first (not needed in Cloud Shell). With <code>--current-subscription</code> the tool scans the subscription shown here, so make sure it is the one you intend. With no scope flag it scans every enabled subscription you can read, as the PowerShell script does. For a Government cloud first run <code>az cloud set --name AzureUSGovernment</code>.</p>
     <div class="cmd"><button class="copy" data-copy="next">Copy</button><pre>az account show --query "{name:name, id:id, tenant:tenantId, cloud:environmentName}" -o table</pre></div></div>
 
   <div class="stage" data-stage="s1"><h3>Stage 1 &ndash; Get the code and install <label><input type="checkbox"> done</label></h3>
@@ -186,10 +188,10 @@ ls -l output/last/*.csv</pre></div>
       <tr><td><code>azure_sizing_summary-&lt;stamp&gt;.csv</code></td><td>never (always written)</td></tr>
       <tr><td><code>rubrik-discovery-&lt;timestamp&gt;.json</code>, <code>output_azure_&lt;timestamp&gt;.log</code></td><td>the JSON is left out of an <code>--anonymize</code> zip</td></tr>
     </table>
-    <p class="small">The zip is named <code>azure_sizing_results_&lt;yyyy-MM-dd_HHmm&gt;.zip</code>, like the PowerShell script's. Not written by the Python tool yet: Key Vault, containers, and the Recovery Services backup item and policy files.</p></details>
+    <p class="small">The zip is named <code>azure_sizing_results_&lt;yyyy-MM-dd_HHmm&gt;.zip</code>, like the PowerShell script's. The Recovery Services backup item and policy files (<code>azure_backup_vault_{VM,VM_SQL,Azure_SQL_Database,Azure_Files}_items</code> and <code>_policies</code>) are written when backup is not skipped; the Azure SQL Database and SQL-in-VM ones are not yet checked against a real vault. Key Vault and container files are written only with their options.</p></details>
   <details><summary><b>Flags</b></summary>
     <table>
-      <tr><td><code>--subs ID,ID</code> / <code>--all</code></td><td>Scan these subscriptions, or every enabled one. With neither, the subscription of the current az login.</td></tr>
+      <tr><td><code>--subs ID,ID</code> / <code>--subscriptions NAME,NAME</code> / <code>--management-groups GROUP,GROUP</code> / <code>--current-subscription</code> / <code>--all</code></td><td>Scope; pick one. Subscription IDs, subscription names (case ignored; two subscriptions with one name are both scanned), every subscription under the management groups (names or IDs, any depth), only the subscription of the current az login, or every enabled one. With none, every enabled subscription you can read, as PowerShell does (older versions scanned only the current az login).</td></tr>
       <tr><td><code>--regions a,b</code></td><td>Limit to these regions (default: all).</td></tr>
       <tr><td><code>--cloud NAME</code></td><td>AzureCloud or AzureUSGovernment. Default: detected from <code>az cloud show</code>, or <code>AZURE_CLOUD</code>.</td></tr>
       <tr><td><code>--skip-vms</code>, <code>--skip-sql-mi</code>, <code>--skip-storage-accounts</code>, <code>--skip-files</code>, <code>--skip-backup</code>, <code>--skip-aks</code>, <code>--skip-cosmos-db</code>, <code>--skip-postgresql</code></td><td>PowerShell's <code>-SkipAzureVMandManagedDisks</code>, <code>-SkipAzureSQLandMI</code>, <code>-SkipAzureStorageAccounts</code>, <code>-SkipAzureFiles</code>, <code>-SkipAzureBackup</code>, <code>-SkipAKS</code>, <code>-SkipAzureCosmosDB</code>, <code>-SkipAzurePostgreSQL</code>. No prompt.</td></tr>
@@ -208,6 +210,8 @@ ls -l output/last/*.csv</pre></div>
 <script>
 
 const SAFE = /^[A-Za-z0-9._@:\/=+,-]*$/;
+// A subscription name may hold spaces and parentheses ("Azure subscription 1"); q() single-quotes it. No quote, backslash, $, backtick or control character.
+const SAFE_NAMES = /^[A-Za-z0-9._@:\/=+,() -]*$/;
 function q(v) { return "'" + String(v).replace(/'/g, "'\\''") + "'"; }
 
 // The output folder as the script writes it: a relative path is taken next to the script itself.
@@ -271,13 +275,16 @@ const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 
 function validate(c) {
   const e = [];
-  const text = {regions:c.regions, subs:c.subs, devopsOrgs:c.devopsOrgs, anonymizeFields:c.anonymizeFields,
+  const text = {regions:c.regions, subs:c.subs, mgs:c.mgs, devopsOrgs:c.devopsOrgs, anonymizeFields:c.anonymizeFields,
     notAnonymizeFields:c.notAnonymizeFields, outDir:c.outDir};
   for (const [k, v] of Object.entries(text)) {
     if (!SAFE.test(v || "")) e.push(k + ": only letters, digits and . _ @ : / = + , - are allowed (no spaces or ~)");
   }
   if (c.regions && !/^[a-z0-9]+(,[a-z0-9]+)*$/.test(c.regions)) e.push("regions: use region names like eastus,westeurope");
   if (c.mode === "subs" && !c.subs) e.push("give at least one subscription ID");
+  if (c.subNames && !SAFE_NAMES.test(c.subNames)) e.push("subNames: only letters, digits, spaces and . _ @ : / = + , ( ) - are allowed (no quotes, $ or backslash)");
+  if (c.mode === "names" && !c.subNames) e.push("give at least one subscription name");
+  if (c.mode === "mgs" && !c.mgs) e.push("give at least one management group");
   if (c.subs && !c.subs.split(",").every(s => GUID.test(s))) e.push("subscription IDs must be GUIDs like 00000000-0000-0000-0000-000000000000");
   if (c.devopsOrgs && !/^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$/.test(c.devopsOrgs)) e.push("DevOps organizations: names separated by commas");
   if ((c.anonymizeFields || c.notAnonymizeFields) && !c.anonymize) e.push("the anonymize field lists need --anonymize ticked");
@@ -291,6 +298,9 @@ function validate(c) {
 function buildArgs(c) {
   const a = [];
   if (c.mode === "subs") a.push("--subs", q(c.subs));
+  if (c.mode === "names") a.push("--subscriptions", q(c.subNames));
+  if (c.mode === "mgs") a.push("--management-groups", q(c.mgs));
+  if (c.mode === "current") a.push("--current-subscription");
   if (c.mode === "all") a.push("--all");
   if (c.cloud && c.cloud !== "auto") a.push("--cloud", c.cloud);
   if (c.regions) a.push("--regions", q(c.regions));
@@ -329,7 +339,9 @@ function buildNotes(c) {
   if (c.getKeyVaultAmounts) n.push("--get-key-vault-amounts needs Key Vault Reader on each vault (or the List permission in its access policies); a count it cannot read is left blank.");
   if (c.mode === "all") n.push("This scans every enabled subscription the identity can read. Run one subscription first and check the results.");
   if (c.mode === "subs" && c.subs.split(",").length > 1) n.push("More than one subscription. The identity needs Reader on each.");
-  if (c.mode === "current") n.push("With no --subs or --all the tool scans only the subscription of your current az login. Check it in Stage 0.");
+  if (c.mode === "names") n.push("A name that matches no enabled subscription is skipped and listed at the end; two subscriptions with the same name are both scanned.");
+  if (c.mode === "mgs") n.push("Reading a management group needs the Microsoft.Management/managementGroups/read permission. A group that cannot be read is skipped and listed at the end. Not tested against a real tenant.");
+  if (c.mode === "current") n.push("--current-subscription scans only the subscription of your current az login. Check it in Stage 0. Without it, the tool scans every enabled subscription you can read.");
   if (c.cloud === "AzureUSGovernment") n.push("Government cloud: sign in with az cloud set --name AzureUSGovernment, then az login. Not tested on a real Government tenant.");
   if (!c.noDevops) n.push("Azure DevOps discovery contacts dev.azure.com for every organization the identity belongs to" + (c.devopsOrgs ? " (limited to the ones you listed)." : "."));
   if (!c.noCost) n.push("Cost Management needs the Cost Management Reader role. Azure throttles it, so the run can take longer.");
@@ -358,6 +370,8 @@ function buildScript(c) {
       'az account show --query "{subscription:name, id:id, tenant:tenantId}" -o table || { echo "Not signed in. Run az login first."; exit 1; }',
       ...(c.mode === "subs" ? subsLines(c)
         : [c.mode === "all" ? 'echo "You are about to scan EVERY enabled subscription this identity can read."'
+          : c.mode === "names" ? 'echo "You are about to scan the subscriptions with the names given by --subscriptions below."'
+          : c.mode === "mgs" ? 'echo "You are about to scan every subscription under the management groups given by --management-groups below."'
           : 'echo "You are about to scan the subscription shown above."']),
       'read -r -p "Continue? [y/N] " ans',
       'case "$ans" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac'
@@ -403,7 +417,7 @@ if (typeof document !== "undefined") {
   function config() {
     const c = {
       mode: $("mode").value, cloud: $("cloud").value, regions: $("regions").value.trim().replace(/\s+/g, ""),
-      subs: $("subs").value.trim().replace(/\s+/g, ""), devopsOrgs: $("devopsOrgs").value.trim().replace(/\s+/g, ""),
+      subs: $("subs").value.trim().replace(/\s+/g, ""), subNames: $("subNames").value.trim(), mgs: $("mgs").value.trim().replace(/\s+/g, ""), devopsOrgs: $("devopsOrgs").value.trim().replace(/\s+/g, ""),
       anonymizeFields: $("anonymizeFields").value.trim().replace(/\s+/g, ""), notAnonymizeFields: $("notAnonymizeFields").value.trim().replace(/\s+/g, ""),
       outDir: $("outDir").value.trim(),
       noCost: $("noCost").checked, noCapacity: $("noCapacity").checked, noSecurity: $("noSecurity").checked,
@@ -418,6 +432,8 @@ if (typeof document !== "undefined") {
   function render() {
     const c = config();
     $("subFields").hidden = c.mode !== "subs";
+    $("nameField").hidden = c.mode !== "names";
+    $("mgField").hidden = c.mode !== "mgs";
     $("devopsFields").hidden = c.noDevops;
     $("anonFields").hidden = !c.anonymize;
     const errs = validate(c);

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
@@ -118,13 +119,17 @@ def resolve_subscriptions(
     all_subs: bool,
     cloud: CloudEnvironment = DEFAULT_CLOUD,
     skipped: Optional[list] = None,
+    names: Optional[list[str]] = None,
+    management_groups: Optional[list[str]] = None,
 ) -> list[str]:
     """Resolve the list of subscription IDs to operate on.
 
     Priority order:
     1. Explicit ``sub_ids`` list (--subs flag) — each is validated against the API.
-    2. ``all_subs=True`` (--all flag) — enumerate every Enabled subscription.
-    3. Neither provided — auto-detect via ``az account show``.
+    2. ``names`` (--subscriptions flag) — matched to display names, ignoring case.
+    3. ``management_groups`` (--management-groups flag) — every Enabled subscription under them.
+    4. ``all_subs=True`` (--all flag) — enumerate every Enabled subscription.
+    5. None provided — auto-detect via ``az account show``.
 
     Args:
         credential: Authenticated Azure credential.
@@ -146,6 +151,12 @@ def resolve_subscriptions(
 
     if sub_ids:
         return _validate_explicit_subs(sub_client, sub_ids, skipped)
+
+    if names:
+        return _subs_by_name(sub_client, names, skipped)
+
+    if management_groups:
+        return _subs_in_management_groups(credential, sub_client, management_groups, cloud, skipped)
 
     if all_subs:
         return _enumerate_all_subs(sub_client)
@@ -329,6 +340,104 @@ def _validate_explicit_subs(
     if not validated:
         _exit_no_subs()
     return validated
+
+
+def _subs_by_name(
+    sub_client: SubscriptionClient, names: list[str], skipped: Optional[list] = None
+) -> list[str]:
+    """Subscription IDs whose display name matches one of ``names``, ignoring case.
+
+    A name that matches nothing is logged and, when ``skipped`` is given, appended to it as
+    ``(name, exception)``. Two subscriptions with the same name are both included.
+    """
+    wanted = [n.strip() for n in names if n.strip()]
+    found: dict[str, list[str]] = {n.casefold(): [] for n in wanted}
+    try:
+        for sub in sub_client.subscriptions.list():
+            key = (sub.display_name or "").casefold()
+            if key in found and sub.state == "Enabled":
+                found[key].append(sub.subscription_id)
+    except Exception as exc:
+        logger.error("Failed to enumerate subscriptions: %s", exc)
+        _exit_no_subs()
+
+    resolved: list[str] = []
+    for name in wanted:
+        ids = found[name.casefold()]
+        if not ids:
+            exc = LookupError(f"no enabled subscription is named {name!r}")
+            logger.warning("%s — skipping", exc)
+            if skipped is not None:
+                skipped.append((name, exc))
+        for sub_id in ids:
+            if sub_id not in resolved:
+                resolved.append(sub_id)
+    if not resolved:
+        _exit_no_subs()
+    return resolved
+
+
+_MANAGEMENT_API_VERSION = "2021-04-01"
+_MG_SUBSCRIPTION_TYPE = "microsoft.management/managementgroups/subscriptions"
+
+
+def _management_group_subscription_ids(
+    credential: Any, cloud: CloudEnvironment, group: str
+) -> list[str]:
+    """IDs of every subscription under a management group, at any depth (``/descendants``)."""
+    base = cloud.arm_endpoint.rstrip("/")
+    quoted = urllib.parse.quote(group, safe="")
+    path = (
+        f"/providers/Microsoft.Management/managementGroups/{quoted}/descendants"
+        f"?api-version={_MANAGEMENT_API_VERSION}"
+    )
+    ids: list[str] = []
+    for _ in range(100):
+        page = _arm_get_json(credential, cloud, path)
+        for item in page.get("value") or []:
+            if str(item.get("type") or "").casefold() == _MG_SUBSCRIPTION_TYPE and item.get("name"):
+                ids.append(str(item["name"]))
+        link = page.get("nextLink") or ""
+        if not link.startswith(base + "/"):
+            break
+        path = link[len(base) :]
+    return ids
+
+
+def _subs_in_management_groups(
+    credential: Any,
+    sub_client: SubscriptionClient,
+    groups: list[str],
+    cloud: CloudEnvironment,
+    skipped: Optional[list] = None,
+) -> list[str]:
+    """Enabled subscriptions under the given management groups (names or ids).
+
+    A group that cannot be read is logged and appended to ``skipped`` as ``(group, exception)``.
+    """
+    candidates: list[str] = []
+    for raw in groups:
+        group = raw.strip()
+        if not group:
+            continue
+        try:
+            for sub_id in _management_group_subscription_ids(credential, cloud, group):
+                if sub_id not in candidates:
+                    candidates.append(sub_id)
+        except Exception as exc:
+            logger.warning("Management group %s not accessible: %s — skipping", group, exc)
+            if skipped is not None:
+                skipped.append((group, exc))
+    if not candidates:
+        _exit_no_subs()
+    enabled = set(_enumerate_all_subs(sub_client))
+    resolved = [c for c in candidates if c in enabled]
+    for sub_id in candidates:
+        if sub_id not in enabled:
+            logger.warning("Subscription %s is not enabled or not readable — skipping", sub_id)
+    if not resolved:
+        _exit_no_subs()
+    return resolved
 
 
 def _enumerate_all_subs(sub_client: SubscriptionClient) -> list[str]:

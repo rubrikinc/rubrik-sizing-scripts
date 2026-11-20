@@ -49,6 +49,7 @@ AGGREGATED = [
     ("compute instances", "google.cloud.compute_v1.InstancesClient"),
     ("compute disks", "google.cloud.compute_v1.DisksClient"),
 ]
+MONITORING_CLIENT = "google.cloud.monitoring_v3.MetricServiceClient"
 API = {api.label: api for api in preflight.APIS}
 
 
@@ -90,6 +91,8 @@ def all_sdk(monkeypatch):
     for _label, target in AGGREGATED:
         _, call = install(monkeypatch, target, "aggregated_list")
         call.return_value = SimpleNamespace(pages=[])
+    _, call = install(monkeypatch, MONITORING_CLIENT, "list_time_series")
+    call.return_value = SimpleNamespace(pages=[])
     bigtable = MagicMock()
     bigtable.return_value.list_instances.return_value = ([], [])
     monkeypatch.setattr("google.cloud.bigtable.Client", bigtable)
@@ -187,6 +190,33 @@ def test_an_aggregated_list_reads_only_the_first_page(monkeypatch):
     _, call = install(monkeypatch, "google.cloud.compute_v1.InstancesClient", "aggregated_list")
     call.return_value = SimpleNamespace(pages=pages())
     API["compute instances"].probe(CTX)
+
+
+def test_the_bucket_size_probe_reads_one_page_of_headers_for_this_project(monkeypatch):
+    constructor, call = install(monkeypatch, MONITORING_CLIENT, "list_time_series")
+    pager = MagicMock()
+    pager.pages = iter([object()])
+    call.return_value = pager
+    # The pager says nothing about whether a bucket was seen: an empty project has no series.
+    assert API["cloud monitoring bucket sizes"].probe(CTX) is None
+    assert constructor.call_args.kwargs.get("credentials") == "credentials"
+    request = call.call_args.kwargs["request"]
+    assert request.name == f"projects/{PROJECT}" and request.page_size == 1
+    assert "storage/v2/total_bytes" in request.filter and "gcs_bucket" in request.filter
+    # Headers only: the probe checks access, it must not pull the data.
+    assert request.view.name == "HEADERS"
+
+
+def test_a_forbidden_bucket_size_read_means_denied_and_names_the_output(monkeypatch):
+    install(
+        monkeypatch,
+        MONITORING_CLIENT,
+        "list_time_series",
+        error=gexc.PermissionDenied("IAM_PERMISSION_DENIED"),
+    )
+    result = run_one("cloud monitoring bucket sizes")
+    assert (result.status, result.code) == (core.DENIED, "PermissionDenied")
+    assert "gce_storage_info" in result.affects
 
 
 def test_the_bucket_probe_is_for_this_project_and_asks_for_one(monkeypatch):

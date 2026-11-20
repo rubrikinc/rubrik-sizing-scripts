@@ -112,6 +112,10 @@ under `python/` is public.** Nothing in it may name a bucket, an internal tool o
 - **The run log adds two more**, `runlog.py` and `runlog_core.py`, to each tool (in `py-modules`; `main.py` and
   `logging_setup.py` import them unconditionally), with the same mirror requirement and the same entries in
   `PUBLISHED`.
+- **Resuming adds `checkpoint_core.py` to each tool and `resume.py` to Azure and GCP** (all in `py-modules`; `main.py`
+  imports them unconditionally). The mirror publishes the whole folder, so they are public when this merges and need no
+  allowlist entry. `test_no_published_python_file_contains_a_denied_string` scans every non-test `.py` under each tool,
+  not only the `PUBLISHED` list, so they and any later module are covered without a list to update.
 - Rollback = tighten the allowlist (filter + manifest). Emergency stop = a PR
   replacing the filter with only `- *` and emptying the manifest. **Never
   remove the folder mapping.** A manual `git rm` in the public repo is valid

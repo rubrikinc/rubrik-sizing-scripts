@@ -1,0 +1,456 @@
+{
+ "vault-a": {
+  "items": [
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupFabrics/Azure/protectionContainers/IaasVMContainer;iaasvmcontainerv2;rg-backup;vm-1/protectedItems/VM;iaasvmcontainerv2;rg-backup;vm-1",
+    "name": "VM;iaasvmcontainerv2;rg-backup;vm-1",
+    "type": "Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems",
+    "properties": {
+     "friendlyName": "vm-1",
+     "virtualMachineId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.Compute/virtualMachines/vm-1",
+     "protectionStatus": "Healthy",
+     "protectionState": "Protected",
+     "healthStatus": "Passed",
+     "healthDetails": [
+      {
+       "code": 400239,
+       "title": "IaasVmHealthGreenDefault",
+       "message": "Backup pre-check status of this virtual machine is OK.",
+       "recommendations": []
+      }
+     ],
+     "lastBackupStatus": "Completed",
+     "lastBackupTime": "2026-10-27T23:18:06.3921437Z",
+     "protectedItemDataId": "1",
+     "extendedProperties": {
+      "linuxVmApplicationName": ""
+     },
+     "policyType": "V1",
+     "protectedItemType": "Microsoft.Compute/virtualMachines",
+     "backupManagementType": "AzureIaasVM",
+     "workloadType": "VM",
+     "containerName": "iaasvmcontainerv2;rg-backup;vm-1",
+     "sourceResourceId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.Compute/virtualMachines/vm-1",
+     "policyId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/vm-daily-lrs",
+     "policyName": "vm-daily-lrs",
+     "lastRecoveryPoint": "2026-10-27T23:18:11.9824818Z",
+     "vaultId": "https://management.azure.com/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a",
+     "isArchiveEnabled": false,
+     "softDeleteRetentionPeriod": 0,
+     "sourceLocation": "centralus",
+     "sourceSideScanInfo": {
+      "sourceSideScanStatus": "NotConfigured",
+      "sourceSideScanSummary": "Unknown"
+     }
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupFabrics/Azure/protectionContainers/StorageContainer;storage;rg-backup;storage1/protectedItems/AzureFileShare;abababababababababababababababababababababababababababababababab",
+    "name": "AzureFileShare;abababababababababababababababababababababababababababababababab",
+    "type": "Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems",
+    "properties": {
+     "friendlyName": "testshare",
+     "fileShareProtocol": "SMB",
+     "protectionStatus": "Healthy",
+     "protectionState": "Protected",
+     "lastBackupStatus": "Completed",
+     "lastBackupTime": "2026-11-11T23:01:04.8191235Z",
+     "protectedItemType": "AzureFileShareProtectedItem",
+     "backupManagementType": "AzureStorage",
+     "workloadType": "AzureFileShare",
+     "containerName": "StorageContainer;storage;rg-backup;storage1",
+     "sourceResourceId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.storage/storageAccounts/storage1",
+     "policyId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/files-daily-lrs",
+     "vaultId": "https://management.azure.com/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a",
+     "isArchiveEnabled": false,
+     "softDeleteRetentionPeriod": 0,
+     "sourceLocation": "centralus",
+     "sourceSideScanInfo": {
+      "sourceSideScanStatus": "NotApplicable",
+      "sourceSideScanSummary": "NotApplicable"
+     }
+    }
+   }
+  ],
+  "policies": [
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/HourlyLogBackup",
+    "name": "HourlyLogBackup",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureWorkload",
+     "workLoadType": "SQLDataBase",
+     "settings": {
+      "timeZone": "UTC",
+      "issqlcompression": false,
+      "isCompression": false
+     },
+     "subProtectionPolicy": [
+      {
+       "policyType": "Full",
+       "schedulePolicy": {
+        "schedulePolicyType": "SimpleSchedulePolicy",
+        "scheduleRunFrequency": "Daily",
+        "scheduleRunTimes": [
+         "2026-10-24T06:30:00Z"
+        ],
+        "scheduleWeeklyFrequency": 0
+       },
+       "retentionPolicy": {
+        "retentionPolicyType": "LongTermRetentionPolicy",
+        "dailySchedule": {
+         "retentionTimes": [
+          "2026-10-24T06:30:00Z"
+         ],
+         "retentionDuration": {
+          "count": 30,
+          "durationType": "Days"
+         }
+        }
+       }
+      },
+      {
+       "policyType": "Log",
+       "schedulePolicy": {
+        "schedulePolicyType": "LogSchedulePolicy",
+        "scheduleFrequencyInMins": 60
+       },
+       "retentionPolicy": {
+        "retentionPolicyType": "SimpleRetentionPolicy",
+        "retentionDuration": {
+         "count": 30,
+         "durationType": "Days"
+        }
+       }
+      }
+     ],
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/DefaultPolicy",
+    "name": "DefaultPolicy",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "policyType": "V1",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicy",
+      "scheduleRunFrequency": "Daily",
+      "scheduleRunTimes": [
+       "2026-10-24T06:30:00Z"
+      ],
+      "scheduleWeeklyFrequency": 0
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-24T06:30:00Z"
+       ],
+       "retentionDuration": {
+        "count": 30,
+        "durationType": "Days"
+       }
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/EnhancedPolicy",
+    "name": "EnhancedPolicy",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "policyType": "V2",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicyV2",
+      "scheduleRunFrequency": "Hourly",
+      "hourlySchedule": {
+       "interval": 4,
+       "scheduleWindowStartTime": "2026-10-24T08:00:00Z",
+       "scheduleWindowDuration": 12
+      }
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-24T08:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 30,
+        "durationType": "Days"
+       }
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/vm-daily-lrs",
+    "name": "vm-daily-lrs",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "snapshotConsistencyType": "",
+     "policyType": "V1",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicy",
+      "scheduleRunFrequency": "Daily",
+      "scheduleRunTimes": [
+       "2026-10-23T23:00:00Z"
+      ],
+      "scheduleWeeklyFrequency": 0
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-23T23:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 7,
+        "durationType": "Days"
+       }
+      }
+     },
+     "tieringPolicy": {
+      "ArchivedRP": {
+       "tieringMode": "DoNotTier",
+       "duration": 0,
+       "durationType": "Invalid"
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/files-daily-lrs",
+    "name": "files-daily-lrs",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureStorage",
+     "workLoadType": "AzureFileShare",
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicy",
+      "scheduleRunFrequency": "Daily",
+      "scheduleRunTimes": [
+       "2018-07-30T23:00:00Z"
+      ],
+      "scheduleWeeklyFrequency": 0
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2018-07-30T23:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 7,
+        "durationType": "Days"
+       }
+      }
+     },
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   }
+  ]
+ },
+ "vault-b": {
+  "items": [],
+  "policies": [
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-b/backupPolicies/HourlyLogBackup",
+    "name": "HourlyLogBackup",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureWorkload",
+     "workLoadType": "SQLDataBase",
+     "settings": {
+      "timeZone": "UTC",
+      "issqlcompression": false,
+      "isCompression": false
+     },
+     "subProtectionPolicy": [
+      {
+       "policyType": "Full",
+       "schedulePolicy": {
+        "schedulePolicyType": "SimpleSchedulePolicy",
+        "scheduleRunFrequency": "Daily",
+        "scheduleRunTimes": [
+         "2026-10-24T06:30:00Z"
+        ],
+        "scheduleWeeklyFrequency": 0
+       },
+       "retentionPolicy": {
+        "retentionPolicyType": "LongTermRetentionPolicy",
+        "dailySchedule": {
+         "retentionTimes": [
+          "2026-10-24T06:30:00Z"
+         ],
+         "retentionDuration": {
+          "count": 30,
+          "durationType": "Days"
+         }
+        }
+       }
+      },
+      {
+       "policyType": "Log",
+       "schedulePolicy": {
+        "schedulePolicyType": "LogSchedulePolicy",
+        "scheduleFrequencyInMins": 60
+       },
+       "retentionPolicy": {
+        "retentionPolicyType": "SimpleRetentionPolicy",
+        "retentionDuration": {
+         "count": 30,
+         "durationType": "Days"
+        }
+       }
+      }
+     ],
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-b/backupPolicies/DefaultPolicy",
+    "name": "DefaultPolicy",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "policyType": "V1",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicy",
+      "scheduleRunFrequency": "Daily",
+      "scheduleRunTimes": [
+       "2026-10-24T06:30:00Z"
+      ],
+      "scheduleWeeklyFrequency": 0
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-24T06:30:00Z"
+       ],
+       "retentionDuration": {
+        "count": 30,
+        "durationType": "Days"
+       }
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-b/backupPolicies/vm-daily-grs",
+    "name": "vm-daily-grs",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "snapshotConsistencyType": "",
+     "policyType": "V1",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicy",
+      "scheduleRunFrequency": "Daily",
+      "scheduleRunTimes": [
+       "2026-10-23T23:00:00Z"
+      ],
+      "scheduleWeeklyFrequency": 0
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-23T23:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 14,
+        "durationType": "Days"
+       }
+      },
+      "weeklySchedule": {
+       "daysOfTheWeek": [
+        "Sunday"
+       ],
+       "retentionTimes": [
+        "2026-10-23T23:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 4,
+        "durationType": "Weeks"
+       }
+      }
+     },
+     "tieringPolicy": {
+      "ArchivedRP": {
+       "tieringMode": "DoNotTier",
+       "duration": 0,
+       "durationType": "Invalid"
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   },
+   {
+    "id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-b/backupPolicies/EnhancedPolicy",
+    "name": "EnhancedPolicy",
+    "type": "Microsoft.RecoveryServices/vaults/backupPolicies",
+    "properties": {
+     "backupManagementType": "AzureIaasVM",
+     "policyType": "V2",
+     "instantRPDetails": {},
+     "instantAccessSnapshotEnabled": false,
+     "schedulePolicy": {
+      "schedulePolicyType": "SimpleSchedulePolicyV2",
+      "scheduleRunFrequency": "Hourly",
+      "hourlySchedule": {
+       "interval": 4,
+       "scheduleWindowStartTime": "2026-10-24T08:00:00Z",
+       "scheduleWindowDuration": 12
+      }
+     },
+     "retentionPolicy": {
+      "retentionPolicyType": "LongTermRetentionPolicy",
+      "dailySchedule": {
+       "retentionTimes": [
+        "2026-10-24T08:00:00Z"
+       ],
+       "retentionDuration": {
+        "count": 30,
+        "durationType": "Days"
+       }
+      }
+     },
+     "instantRpRetentionRangeInDays": 2,
+     "timeZone": "UTC",
+     "protectedItemsCount": 0
+    }
+   }
+  ]
+ }
+}

@@ -260,3 +260,39 @@ def test_collect_project_skips_asset_when_precomputed(mock_credentials):
 
     assert res["asset"] is sentinel
     AssetCls.assert_not_called()
+
+
+def test_a_stop_request_writes_the_finished_projects_and_marks_the_rest_not_scanned(
+    tmp_path, mock_credentials
+):
+    import main
+    from collectors import utils
+    from models.inventory import ComputeInventory
+
+    projects = [f"proj-{i}" for i in range(main._STREAMING_THRESHOLD + 5)]
+    failed: list = []
+
+    def fake_collect(pid, credentials, regions, enable_security, precomputed_asset, selected=None):
+        if pid == "proj-3":
+            utils.request_stop()  # Ctrl-C arrives while this one is running
+        return {"compute": ComputeInventory(project_id=pid, total_instances=1, total_disk_tb=1.0)}
+
+    try:
+        with patch.object(main, "_collect_project", side_effect=fake_collect):
+            out_path = main._collect_and_write(
+                projects=projects,
+                regions=None,
+                credentials=mock_credentials,
+                enable_security=False,
+                workers=1,
+                org_assets={},
+                output_dir=tmp_path,
+                failed=failed,
+            )
+    finally:
+        utils.reset_stop()
+
+    data = json.loads(out_path.read_text())
+    assert len(data["compute"]) == 4  # proj-0..3 finished
+    stopped = {pid for pid, exc in failed if isinstance(exc, utils.ScanStopped)}
+    assert stopped == set(projects[4:])

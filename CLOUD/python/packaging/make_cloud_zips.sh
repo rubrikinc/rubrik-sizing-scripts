@@ -50,7 +50,9 @@ quickstart() {
       title="Azure"; cli="Azure CLI (\`az\`)"; python="3.10"
       sign_in='   az login'
       run='.venv/bin/python main.py --subs <subscription-id>,<subscription-id> --output ./output'
-      more='- All subscriptions you can see: `--all` instead of `--subs`.
+      more='- With no scope option the tool scans every enabled subscription you can read.
+- By name: `--subscriptions "Name 1,Name 2"`. Under management groups: `--management-groups GROUP,GROUP`.
+- Only the subscription of your current az login: `--current-subscription`.
 - Optional: `--get-container-details` (needs Storage Blob Data Reader) and
   `--get-key-vault-amounts` (needs Key Vault Reader).'
       ;;

@@ -58,6 +58,9 @@ py-modules = [
     "runlog",
     "runlog_core",
     "manifest_core",
+    "checkpoint_core",
+    "gaps",
+    "resume",
     "tls",
     "totals",
 ]

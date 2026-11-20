@@ -60,7 +60,9 @@ run `node check_guides.js` from this folder (it needs `node` and `bash`). It bui
 without the options that matter and checks that every one is valid bash and that `--verbose` and the optional installs
 appear only when ticked. `tests/bootstrap/test_run_guides.py` runs it when `node` is available.
 
-## Not for the public mirror
+## These files are public
 
-The guides and scripts name the private repository (they clone it). This folder is under `docs/`, which is not on the
-public-mirror allowlist, and must stay off it.
+`sizing_scripts/cloud/python` is mirrored in full to the public `rubrikinc/rubrik-sizing-scripts` repository, so these
+pages and scripts are public too. They clone that public repository, and `tests/bootstrap/test_run_guides.py` fails if
+a guide or example names anything private (an internal repository, a real account, subscription or project ID, an email
+address or a personal path).

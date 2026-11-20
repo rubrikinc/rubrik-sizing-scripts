@@ -32,5 +32,6 @@ py-modules = [
     "runlog",
     "runlog_core",
     "manifest_core",
+    "checkpoint_core",
 ]
 packages = ["collectors", "models"]

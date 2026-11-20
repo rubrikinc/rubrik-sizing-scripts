@@ -23,6 +23,10 @@ def _asdict_safe(obj: Any) -> Any:
     Handles the ``Optional[TagSummary]`` / ``Optional[str]`` fields that live
     inside the collector inventory dataclasses.
     """
+    saved = getattr(type(obj), "SAVED_DATA_ATTR", None)
+    if saved is not None:
+        # An inventory read back from a saved run (resume.Saved): its data is already plain JSON.
+        return _asdict_safe(object.__getattribute__(obj, saved))
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         return {k: _asdict_safe(v) for k, v in dataclasses.asdict(obj).items()}
     if isinstance(obj, list):

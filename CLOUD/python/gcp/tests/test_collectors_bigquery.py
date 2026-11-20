@@ -18,7 +18,7 @@ class _Request:
     def __init__(self, payload):
         self._payload = payload
 
-    def execute(self):
+    def execute(self, num_retries=0):
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._payload
@@ -159,6 +159,61 @@ def test_an_external_table_gives_its_format_and_its_uris_joined_with_semicolons(
     assert table.external_source_uri == "gs://b/x/*.parquet; gs://b/y/*.parquet"
 
 
+def test_a_biglake_table_gives_the_connection_it_reads_its_data_with():
+    info = {
+        "externalDataConfiguration": {
+            "sourceFormat": "PARQUET",
+            "sourceUris": ["gs://lake/events/*"],
+            "connectionId": "my-proj.us.lake-conn",
+        }
+    }
+    service = _simple(
+        table_pages={"analytics": [[_ref("lake_events", "EXTERNAL")]]},
+        table_info={("analytics", "lake_events"): info},
+    )
+    (table,) = _collect(service)[0].tables
+    assert table.connection_id == "my-proj.us.lake-conn"
+    # BigQuery does not store this data, so it reports no size of its own for it.
+    assert table.total_logical_bytes == 0
+
+
+def test_a_bigquery_iceberg_table_gives_its_bucket_folder_and_connection():
+    info = {
+        "numBytes": "42",
+        "biglakeConfiguration": {
+            "connectionId": "my-proj.us.ice-conn",
+            "storageUri": "gs://iceberg-data/warehouse/t1/",
+            "fileFormat": "PARQUET",
+            "tableFormat": "ICEBERG",
+        },
+    }
+    service = _simple(
+        table_pages={"analytics": [[_ref("ice")]]}, table_info={("analytics", "ice"): info}
+    )
+    (table,) = _collect(service)[0].tables
+    assert table.biglake_storage_uri == "gs://iceberg-data/warehouse/t1/"
+    assert table.connection_id == "my-proj.us.ice-conn"
+    assert table.external_source_uri == ""
+
+
+def test_the_external_connection_wins_over_the_biglake_one_when_both_are_given():
+    info = {
+        "externalDataConfiguration": {"sourceUris": ["gs://a/x"], "connectionId": "ext-conn"},
+        "biglakeConfiguration": {"connectionId": "lake-conn", "storageUri": "gs://b/y/"},
+    }
+    service = _simple(
+        table_pages={"analytics": [[_ref("both", "EXTERNAL")]]},
+        table_info={("analytics", "both"): info},
+    )
+    (table,) = _collect(service)[0].tables
+    assert table.connection_id == "ext-conn"
+
+
+def test_a_plain_table_has_no_connection_and_no_bucket_link():
+    (table,) = _collect(_simple())[0].tables
+    assert table.connection_id == "" and table.biglake_storage_uri == ""
+
+
 def test_a_view_has_no_size_and_stays_at_zero_with_empty_dates():
     service = _simple(
         table_pages={"analytics": [[_ref("v", "VIEW")]]}, table_info={("analytics", "v"): {}}
@@ -288,3 +343,63 @@ def test_a_client_that_cannot_be_built_is_recorded_and_gives_an_empty_inventory(
         inventory = collector.collect()
     assert inventory.tables == [] and inventory.incomplete_calls == 1
     assert [e["category"] for e in collector.errors] == ["SDK_MISSING"]
+
+
+# ── large projects: parallel details, time budget, stop request ──────────────
+
+
+def _many(count, datasets=1):
+    names = [f"d{d}" for d in range(datasets)]
+    return FakeBigQuery(
+        dataset_pages=[[_dataset(n) for n in names]],
+        dataset_info={n: {"location": "US"} for n in names},
+        table_pages={n: [[_ref(f"t{i}", dataset=n) for i in range(count)]] for n in names},
+        table_info={(n, f"t{i}"): {"numBytes": "10"} for n in names for i in range(count)},
+    )
+
+
+def test_thousands_of_tables_are_all_sized_in_listing_order():
+    inventory, errors = _collect(_many(500, datasets=4))
+    assert len(inventory.tables) == 2000 and errors == []
+    assert all(t.total_logical_bytes == 10 for t in inventory.tables)
+    assert [t.table_id for t in inventory.tables[:3]] == ["t0", "t1", "t2"]
+    assert inventory.tables[500].dataset_id == "d1"
+
+
+def test_a_project_past_its_time_budget_keeps_what_it_sized_and_says_how_many_were_not_read():
+    with patch("googleapiclient.discovery.build", return_value=_many(30)):
+        collector = BigQueryCollector(PROJECT, MagicMock(), time_budget_s=0.0001, workers=1)
+        collector._deadline = 0  # already past
+        with patch.object(BigQueryCollector, "_out_of_time", side_effect=[False] * 3 + [True] * 99):
+            inventory = collector.collect()
+    sized = [t for t in inventory.tables if t.details_available]
+    assert 0 < len(sized) < 30 and len(inventory.tables) == 30
+    (record,) = [e for e in collector.errors if "not read" in e["message"]]
+    assert "the time limit was reached" in record["message"]
+
+
+def test_a_stop_request_leaves_the_rest_unread_instead_of_hanging():
+    from collectors import utils
+
+    utils.request_stop()
+    try:
+        inventory, errors = _collect(_many(10))
+    finally:
+        utils.reset_stop()
+    assert inventory.tables == []  # the dataset was not even opened
+    assert any("the run was stopped" in e["message"] for e in errors)
+
+
+def test_every_call_has_a_network_timeout_and_retries():
+    import collectors.bigquery as bq
+
+    seen = {}
+    real = _Request.execute
+
+    def spy(self, num_retries=0):
+        seen["n"] = num_retries
+        return real(self)
+
+    with patch.object(_Request, "execute", spy):
+        _collect(_simple())
+    assert seen["n"] == bq._NUM_RETRIES and bq._HTTP_TIMEOUT_S > 0

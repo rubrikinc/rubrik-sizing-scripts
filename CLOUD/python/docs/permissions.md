@@ -111,7 +111,7 @@ reads blobs with the storage account key instead, which needs `listKeys` (for ex
 ## GCP
 
 The Viewer role on a project covers the read permissions below except where noted. The tool's own messages name the roles
-`roles/cloudasset.viewer` (asset inventory), `roles/compute.viewer`, `roles/storage.objectViewer`, and, for `--security`,
+`roles/cloudasset.viewer` (asset inventory), `roles/compute.viewer`, `roles/storage.viewer` (buckets), and, for `--security`,
 `roles/securitycenter.findingsViewer` at organization level. The names are the permissions Google documents; they have not
 been checked against a live project.
 
@@ -124,7 +124,8 @@ collecting anything.
 | `cloudasset.assets.listResource` | cloud asset inventory | `asset inventory in the JSON` |
 | `compute.instances.list` | compute instances | `gce_vm_info`, `gce_attached_disk_info` |
 | `compute.disks.list` | compute disks | `gce_attached_disk_info`, `gce_unattached_disk_info` |
-| `storage.buckets.list` | cloud storage buckets | `Cloud Storage buckets in the JSON` |
+| `storage.buckets.list` | cloud storage buckets | `gce_storage_info` (the bucket rows and their settings, including lifecycle rules; `roles/storage.viewer`) |
+| `monitoring.timeSeries.list` | cloud monitoring bucket sizes | `gce_storage_info` (the size columns; `roles/monitoring.viewer`) |
 | `cloudsql.instances.list` | cloud sql instances | `gce_cloudsql_info` |
 | `spanner.instances.list` | spanner instances | `gce_spanner_info` |
 | `alloydb.clusters.list` | alloydb clusters | `AlloyDB clusters in the JSON` |

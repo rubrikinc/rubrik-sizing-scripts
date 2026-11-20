@@ -23,10 +23,16 @@ Two rules are not kept:
     is not text (the ``True`` or ``False`` of an attached disk's ``DiskEncryptionKey``, or a number
     added with ``-AnonymizeFields``) the lookup never finds it: every row gets a new label, and the key
     file keeps only the last one, so the others cannot be mapped back. Here one value has one label.
+
+One rule is added (Python only, so the BigQuery and bucket files still join once anonymized): a
+``gs://bucket/path`` in ``ExternalSourceUri`` keeps its shape. The bucket gets the label that
+``BucketName`` gives the same bucket, and the path gets an ``ExternalSourceUri`` label. Any other
+kind of source (Drive, Bigtable) is labelled whole, as before.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 # The fields the script anonymizes unless -NotAnonymizeFields lists them.
@@ -42,10 +48,17 @@ DEFAULT_FIELDS: tuple[str, ...] = (
     "DatasetId",
     "TableId",
     "ExternalSourceUri",
+    # Python only, for gce_storage_info (the script writes no bucket file). A bucket name is a
+    # customer name, the connection ids name the project and the connection, and a key name
+    # names the project, key ring and key.
+    "BucketName",
+    "BigQueryConnections",
+    "DefaultKmsKeyName",
 )
 
 # The order the script anonymizes its lists in. The labels of a field are numbered in the order its
-# values are first met, so the order of the files decides the numbers.
+# values are first met, so the order of the files decides the numbers. ``gce_storage_info`` is not
+# in the script and comes last, so it cannot change the numbering of the files that are.
 FILE_ORDER: tuple[str, ...] = (
     "gce_vm_info",
     "gce_attached_disk_info",
@@ -53,7 +66,13 @@ FILE_ORDER: tuple[str, ...] = (
     "gce_cloudsql_info",
     "gce_spanner_info",
     "gce_bigquery_info",
+    "gce_storage_info",
 )
+
+# The BigQuery column that holds ``gs://`` sources, and the field a bucket is labelled under.
+URI_FIELD = "ExternalSourceUri"
+BUCKET_FIELD = "BucketName"
+_GS_URI = re.compile(r"gs://([^/\s;]+)(/.*)?", re.IGNORECASE)
 
 TAG_PREFIX = "Label/Tag:"
 TAG_KEY_FIELD = "Label/TagName"
@@ -108,6 +127,27 @@ class Anonymizer:
             self._actual[key] = text
         return label
 
+    def _label_uris(self, value: Any, field: str) -> str:
+        """A source URI (or several joined by ``; ``) with each ``gs://`` bucket labelled as a bucket."""
+        text = _text(value)
+        parts = [part for part in (p.strip() for p in text.split(";")) if part]
+        if not parts:
+            return self._label(value, field)  # an empty string is a value, as everywhere else
+        return "; ".join(self._label_uri(part, field) for part in parts)
+
+    def _label_uri(self, uri: str, field: str) -> str:
+        match = _GS_URI.fullmatch(uri)
+        if match is None:
+            return self._label(uri, field)
+        bucket, path = match.group(1), match.group(2) or ""
+        if BUCKET_FIELD.casefold() in self.fields:
+            bucket = self._label(bucket, BUCKET_FIELD)
+        if path in ("", "/"):
+            return f"gs://{bucket}{path}"
+        # The path is labelled with its leading "/", which no other value starts with, so it never
+        # shares a label with a name from another column. The key file shows it with that slash.
+        return f"gs://{bucket}/{self._label(path, field)}"
+
     def anonymize_row(self, row: dict[str, Any]) -> dict[str, Any]:
         """The row with its values replaced; label columns are renamed and moved to the end."""
         out: dict[str, Any] = {}
@@ -118,6 +158,8 @@ class Anonymizer:
                     out[name] = None
                 elif isinstance(value, (list, tuple)):
                     out[name] = [self._label(item, name) for item in value]
+                elif name.casefold() == URI_FIELD.casefold():
+                    out[name] = self._label_uris(value, name)
                 else:
                     out[name] = self._label(value, name)
             elif name.casefold().startswith(TAG_PREFIX.casefold()) and self.anonymize_tags:

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import accounts
+import checkpoint_core
 import csv_export
 import pytest
 from accounts import (
@@ -434,7 +435,10 @@ def test_a_rerun_resumes_and_skips_accounts_that_are_complete(runner):
     )
     runner.scanned.clear()
     runner.main.run_org(
-        zip_dir=str(runner.dir), role_name="R", account_ids=[ACCT_A, "333333333333"]
+        zip_dir=str(runner.dir),
+        role_name="R",
+        account_ids=[ACCT_A, "333333333333"],
+        resume_mode=checkpoint_core.RESUME,
     )
     assert [a for a, _ in runner.scanned] == ["333333333333"]  # only the blocked one is retried
 

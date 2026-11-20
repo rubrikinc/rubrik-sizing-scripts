@@ -53,6 +53,36 @@ def test_published_files_contain_no_denied_strings(cloud):
     assert not hits, "\n".join(hits)
 
 
+def _published_python(cloud):
+    """Every Python file the mirror publishes for a tool: the whole folder is public, tests aside."""
+    skipped = {"tests", "__pycache__", ".venv"}
+    return sorted(
+        path
+        for path in (PY_DIR / cloud).rglob("*.py")
+        if not skipped & set(path.relative_to(PY_DIR / cloud).parts)
+    )
+
+
+@pytest.mark.parametrize("cloud", sorted(PUBLISHED))
+def test_no_published_python_file_contains_a_denied_string(cloud):
+    """The mirror publishes every file under python/, not only the PUBLISHED list above, so a new module
+    (the checkpoint and resume code, the totals, the CSV export) must be scanned without anyone
+    remembering to add it to a list."""
+    files = _published_python(cloud)
+    assert len(files) > len(published_files(cloud)) - 5, "the scan found far fewer files than expected"
+    hits = []
+    for path in files:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if DENY.search(line):
+                hits.append("%s:%d: %s" % (path.relative_to(PY_DIR), lineno, line.strip()[:100]))
+    assert not hits, "\n".join(hits)
+
+
+def test_the_whole_folder_scan_covers_the_modules_the_allowlist_does_not_name():
+    names = {path.name for cloud in PUBLISHED for path in _published_python(cloud)}
+    assert {"checkpoint_core.py", "totals.py", "csv_export.py", "manifest_core.py"} <= names
+
+
 def test_the_regex_does_catch_the_strings_it_exists_for():
     for bad in ("s3://YOUR-ARTIFACTS-BUCKET/x", "aws s3 cp s3://b/install.sh -", "--template-url x",
                 "rubrikdiscoveryprod.blob.core.windows.net", "WHEEL_URL=", "see make publish"):

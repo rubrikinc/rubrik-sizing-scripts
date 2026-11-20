@@ -6,11 +6,16 @@ conversations.  Run it from Azure Cloud Shell, an Azure VM with Managed
 Identity, or any machine with ``az login`` active.
 
 Usage examples:
-    # Auto-detect subscription from current az login context
+    # Every enabled subscription the sign-in can read (the default, as in PowerShell)
     python main.py
 
-    # Explicit subscriptions
+    # Only the subscription of the current az login
+    python main.py --current-subscription
+
+    # Explicit subscriptions, by id or by name, or everything under management groups
     python main.py --subs aaaa-1111,bbbb-2222
+    python main.py --subscriptions "Prod East,Prod West"
+    python main.py --management-groups mg-prod,mg-dev
 
     # All accessible subscriptions, filtered to two regions
     python main.py --all --regions eastus,westus2
@@ -45,10 +50,13 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
+import checkpoint_core
+import gaps
 import manifest_core
 import preflight
 import preflight_core
 import progress
+import resume
 import runlog
 import totals
 from anonymize import KEY_FILE_PREFIX, Anonymizer, anonymized_log_note
@@ -119,6 +127,48 @@ SKIP_SWITCHES: dict[str, tuple[tuple[str, str], str, str]] = {
 }
 
 
+def _split_csv(value: Optional[str]) -> Optional[list[str]]:
+    items = [v.strip() for v in value.split(",") if v.strip()] if value else None
+    return items or None
+
+
+def _scope_kind(args) -> str:
+    """How the subscriptions were asked for: ``subs`` (ids), ``names``, ``groups`` (management
+    groups), ``current`` (``--current-subscription``) or ``all``, which is also what no scope flag
+    means, as in PowerShell. Both the scan scope and the resume fingerprint read this, so a resume
+    can only continue a run that asked for its subscriptions the same way."""
+    if args.all:
+        return "all"
+    if _split_csv(args.subs):
+        return "subs"
+    if _split_csv(getattr(args, "subscriptions", None)):
+        return "names"
+    if _split_csv(getattr(args, "management_groups", None)):
+        return "groups"
+    if getattr(args, "current_subscription", False):
+        return "current"
+    return "all"
+
+
+def _resolve_scope(credential, args, cloud, skipped: Optional[list] = None) -> list[str]:
+    """Subscription ids for the scope flags. With no scope flag every accessible subscription
+    is scanned, as in PowerShell; ``--current-subscription`` limits it to the current login."""
+    import auth
+
+    sub_ids = _split_csv(args.subs)
+    names = _split_csv(getattr(args, "subscriptions", None))
+    groups = _split_csv(getattr(args, "management_groups", None))
+    all_subs = _scope_kind(args) == "all"
+    extra = {}
+    if names:
+        extra["names"] = names
+    if groups:
+        extra["management_groups"] = groups
+    return auth.resolve_subscriptions(
+        credential, sub_ids, all_subs, cloud, skipped=skipped, **extra
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="rubrik-discovery",
@@ -141,9 +191,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated subscription IDs to scan",
     )
     scope.add_argument(
+        "--subscriptions",
+        metavar="NAME,...",
+        help="Comma-separated subscription names to scan (PowerShell's -Subscriptions)",
+    )
+    scope.add_argument(
+        "--management-groups",
+        metavar="GROUP,...",
+        help="Comma-separated management group names or ids; every subscription under them "
+        "is scanned (PowerShell's -ManagementGroups)",
+    )
+    scope.add_argument(
+        "--current-subscription",
+        action="store_true",
+        help="Scan only the subscription of the current az login (PowerShell's "
+        "-CurrentSubscription)",
+    )
+    scope.add_argument(
         "--all",
         action="store_true",
-        help="Scan all accessible subscriptions",
+        help="Scan all accessible subscriptions (the default when no scope flag is given)",
     )
     p.add_argument(
         "--regions",
@@ -310,6 +377,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Leave the loose JSON / log files on disk alongside the ZIP.  "
         "Default: only the single ZIP is kept (the loose files are bundled "
         "inside it).",
+    )
+    resume_group = p.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        action="store_true",
+        help="Carry on with the unfinished run in the output folder: subscriptions it finished are "
+        "not scanned again. Needs the same options as that run. Without --resume or --fresh, a "
+        "terminal is asked what to do; a run with no terminal stops until one is given.",
+    )
+    resume_group.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Delete the unfinished run in the output folder and scan everything again.",
+    )
+    p.add_argument(
+        "--keep-partial",
+        action="store_true",
+        help="With --resume, keep the subscriptions the earlier run finished with errors, "
+        "instead of scanning them again (the default). The zip then holds them with their gaps.",
     )
     return p
 
@@ -986,8 +1072,12 @@ def _scan_subscriptions(
     collect: Callable[[int, str], tuple],
     workers: int,
     on_done: Optional[Callable[[int, str, Optional[tuple], Optional[BaseException]], None]] = None,
+    on_scanned: Optional[Callable[[str, tuple], None]] = None,
 ) -> tuple[list[Optional[tuple]], dict[int, BaseException]]:
     """Run ``collect(index, sub_id)`` for every subscription, up to ``workers`` at a time.
+
+    ``on_scanned(sub_id, result)``, when given, runs in the calling thread for each subscription
+    whose scan succeeded, before ``on_done``: this is where a finished scan is saved.
 
     Returns ``(results, errors)``: ``results`` is indexed like ``subscriptions`` regardless
     of completion order (a failed slot is None); ``errors`` maps index -> exception.  One
@@ -1004,6 +1094,12 @@ def _scan_subscriptions(
             logger.error("[%s] subscription scan failed: %s", subscriptions[i], exc, exc_info=exc)
         else:
             results[i] = result
+            if on_scanned is not None:
+                # Saved the moment the scan returns: this is the expensive, parallel part.
+                try:
+                    on_scanned(subscriptions[i], result)
+                except OSError as e:  # a full disk must not end a scan that is otherwise working
+                    logger.warning("Could not save the checkpoint of %s: %s", subscriptions[i], e)
         if on_done is not None:
             on_done(i, subscriptions[i], result, exc)
 
@@ -1112,6 +1208,145 @@ def _collect_backup_vaults(sub_id: str, credential, cloud, out=None):
     return inventory
 
 
+def _open_progress(args, output_dir: pathlib.Path, request: dict):
+    """Open this run's progress folder, or resume the unfinished one in output_dir.
+
+    Returns the checkpoint store and whether it is a resumed run. A previous run that cannot be
+    resumed (different options, or no terminal to ask on) ends the run with what to do, not a
+    traceback; nothing is deleted unless --fresh or the person's answer says so.
+    """
+    try:
+        store, resumed = checkpoint_core.prepare(
+            str(output_dir),
+            prefix=resume.PREFIX,
+            tool="azure",
+            request=request,
+            mode=resume.mode_of(args),
+            code_version=runlog.core.code_version(runlog.HERE),
+            say=lambda text: console.print(f"[dim]{escape(text)}[/dim]"),
+        )
+    except checkpoint_core.ResumeRefused as exc:
+        console.print(f"[red]Cannot start:[/red] {escape(str(exc))}")
+        runlog.core.end_run("not started: an unfinished run is in the way", [str(exc)])
+        sys.exit(2)
+    runlog.core.set_stop_hint(
+        f"Subscriptions that finished are saved in {store.root}; run the same command with "
+        "--resume to carry on where this one stopped."
+    )
+    return store, resumed
+
+
+def _close_progress(store, keep: bool) -> None:
+    """The results are written: remove the progress folder, unless a subscription has no result yet.
+
+    keep is True when a subscription could not be read or its scan failed, so a later --resume can
+    scan just those. The folder is then left marked as unfinished.
+    """
+    if store is None:
+        return
+    if keep:
+        console.print(
+            f"[dim]Progress kept in {escape(store.root)}: run again with --resume to scan the "
+            "subscriptions that were not finished.[/dim]"
+        )
+        return
+    store.finish()
+
+
+def _merge_scans(
+    subscriptions: list[str],
+    todo: list[str],
+    fresh: list[Optional[tuple]],
+    fresh_errors: dict[int, BaseException],
+    store,
+) -> tuple[list[Optional[tuple]], dict[int, BaseException]]:
+    """The scan of every subscription, in the order of ``subscriptions``: ``(scanned, errors)``.
+
+    ``fresh`` and ``fresh_errors`` are indexed like ``todo`` (what was just scanned); the rest are
+    read back from the saved run. The result is indexed like ``subscriptions``, as ``_drop_failed``
+    and the code after it expect.
+    """
+    position = {sub: i for i, sub in enumerate(todo)}
+    scanned: list[Optional[tuple]] = []
+    errors: dict[int, BaseException] = {}
+    for i, sub in enumerate(subscriptions):
+        if sub in position:
+            j = position[sub]
+            scanned.append(fresh[j])
+            if j in fresh_errors:
+                errors[i] = fresh_errors[j]
+        else:
+            scanned.append(resume.restore(store.load(sub)[0]))
+    return scanned, errors
+
+
+def _subscription_gaps(store, subscriptions: list[str], names: dict) -> list:
+    """``(subscription, why)`` for each subscription with a saved scan that finished with gaps.
+
+    A subscription whose scan failed has no checkpoint and is in the not-scanned list instead.
+    ``why`` is the first failure its scan logged and how many more there were, or, when the scan
+    logged nothing, that its access check found a service it could not read (see
+    ``_is_partial``).
+    """
+    if store is None:
+        return []
+    gaps = []
+    for sub in subscriptions:
+        loaded = store.load(sub)
+        if loaded is None or not resume.valid(loaded[0]):
+            continue
+        data = loaded[0]
+        found = resume.gaps_of(data)
+        label = f"{sub} ({names[sub]})" if names.get(sub) else sub
+        if found["count"]:
+            first = found["examples"][0] if found["examples"] else "a failure was logged"
+            first = first.split("] ", 1)[-1][:110]  # the subscription is already named
+            why = first + (f" (+{found['count'] - 1} more)" if found["count"] > 1 else "")
+            gaps.append((label, why))
+        elif _is_partial(data.get("access", [])):
+            gaps.append((label, "the access check found a service it could not read"))
+    return gaps
+
+
+def _print_gaps(gaps: list, total: int, kept: bool) -> None:
+    """End the run by saying which subscriptions finished with gaps, and what to do about them.
+
+    A subscription that finished is complete as far as the scan got, not as far as the subscription
+    goes: a listing that failed or a query that was denied leaves something out, and the zip alone
+    does not say so.
+    """
+    lines = checkpoint_core.gaps_summary("subscription", gaps, total, kept=kept)
+    if not lines:
+        return
+    console.print()
+    console.print(f"[yellow]{escape(lines[0])}[/yellow]")
+    for line in lines[1:]:
+        console.print(escape(line))
+
+
+def _access_by_subscription(rows: list[dict]) -> dict:
+    """The access-check rows of each subscription, keyed by subscription id (the row's Owner)."""
+    grouped: dict = {}
+    for row in rows:
+        grouped.setdefault(row.get("Owner"), []).append(row)
+    return grouped
+
+
+def _is_partial(access_rows: list[dict], warnings: int = 0) -> bool:
+    """A subscription finished with gaps when its scan logged a failure, or the access check found a
+    service it cannot read.
+
+    Every warning in the scan collectors is something left out (a listing that failed, an item that
+    was skipped, a query that was denied), so ``warnings`` is the count of them for this
+    subscription (see gaps.py). The access check adds what a person fixes by being granted a role
+    and then wants scanned again, even when the scan did not get far enough to log it.
+    """
+    blocked = {
+        preflight_core.STATUS_TEXT[s] for s in (preflight_core.DENIED, preflight_core.NOT_ENABLED)
+    }
+    return warnings > 0 or any(row.get("Access") in blocked for row in access_rows)
+
+
 def _drop_failed(
     subscriptions: list[str],
     scanned: list[Optional[tuple]],
@@ -1141,8 +1376,13 @@ def _collect_all(
     scans: dict[str, bool],
     workers: int,
     skips: frozenset[str] = frozenset(),
+    on_scanned: Optional[Callable[[str, tuple], None]] = None,
 ) -> tuple[list[Optional[tuple]], dict[int, BaseException]]:
-    """Scan every subscription with the console UX appropriate to the worker count."""
+    """Scan every subscription with the console UX appropriate to the worker count.
+
+    ``on_scanned(sub_id, result)`` is called for each subscription whose scan succeeded, as it
+    finishes (see ``_scan_subscriptions``).
+    """
     total = len(subscriptions)
     workers = max(1, min(workers, total))
 
@@ -1161,7 +1401,9 @@ def _collect_all(
                 _print_sub_failure(sub_id, exc)
                 console.print()
 
-        return _scan_subscriptions(subscriptions, collect_serial, 1, done_serial)
+        return _scan_subscriptions(
+            subscriptions, collect_serial, 1, done_serial, on_scanned=on_scanned
+        )
 
     buffers = [_BufferedOutput() for _ in subscriptions]
 
@@ -1188,7 +1430,9 @@ def _collect_all(
             console.print()
             status.update(progress.Live(status_text))
 
-        return _scan_subscriptions(subscriptions, collect_parallel, workers, done_parallel)
+        return _scan_subscriptions(
+            subscriptions, collect_parallel, workers, done_parallel, on_scanned=on_scanned
+        )
 
 
 def _print_totals(result: dict) -> None:
@@ -1413,13 +1657,12 @@ def _dry_run(args) -> None:
     with console.status("[bold]Authenticating…[/bold]"):
         credential = auth.get_credential(cloud)
 
-    sub_ids = [s.strip() for s in args.subs.split(",")] if args.subs else None
     regions = auth.normalise_regions(
         [r.strip() for r in args.regions.split(",")] if args.regions else None
     )
 
     with console.status("[bold]Resolving subscriptions (read-only)…[/bold]"):
-        subscriptions = auth.resolve_subscriptions(credential, sub_ids, args.all, cloud)
+        subscriptions = _resolve_scope(credential, args, cloud)
 
     scope = Table(title="Scope", box=box.SIMPLE_HEAVY, expand=True, title_style="bold")
     scope.add_column("Subscription ID", style="cyan", no_wrap=True)
@@ -1478,11 +1721,14 @@ def _apply_config_defaults(args) -> None:
         sys.exit(1)
 
     # Scope
-    if args.subs is None and cfg.scope.subscriptions:
+    flagged_scope = bool(
+        args.subs or args.subscriptions or args.management_groups or args.current_subscription
+    )
+    if not flagged_scope and cfg.scope.subscriptions:
         args.subs = ",".join(cfg.scope.subscriptions)
     if args.regions is None and cfg.scope.regions:
         args.regions = ",".join(cfg.scope.regions)
-    if not args.all and cfg.scope.effective_all_subs():
+    if not flagged_scope and not args.all and cfg.scope.effective_all_subs():
         args.all = True
 
     # Discovery
@@ -1509,6 +1755,16 @@ def main() -> None:
 def _main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+    for flag, value in (
+        ("--subs", args.subs),
+        ("--subscriptions", args.subscriptions),
+        ("--management-groups", args.management_groups),
+    ):
+        if value is not None and _split_csv(value) is None:
+            parser.error(
+                f"{flag} was given no values, which would scan every subscription. "
+                "Pass at least one, or leave the flag out."
+            )
 
     if (args.anonymize_fields or args.not_anonymize_fields) and not args.anonymize:
         parser.error("--anonymize-fields and --not-anonymize-fields need --anonymize")
@@ -1524,6 +1780,15 @@ def _main() -> None:
     _apply_config_defaults(args)
     if args.preflight_only and args.mock:
         parser.error("--preflight-only checks real access, so it cannot be used with --mock")
+    if args.keep_partial and not args.resume:
+        parser.error(
+            "--keep-partial keeps what an earlier run finished with gaps instead of scanning it "
+            "again, so it needs --resume"
+        )
+    if (args.resume or args.fresh) and (args.mock or args.dry_run or args.preflight_only):
+        parser.error(
+            "--resume and --fresh apply to a scan, not to --mock, --dry-run or --preflight-only"
+        )
 
     if args.manifest:
         _print_manifest()
@@ -1591,6 +1856,9 @@ def _main() -> None:
     kv_results: Optional[list] = None
     container_results: Optional[list] = None
     access_rows: list[dict] = []
+    store = None  # the checkpoint store of a real scan; None for --mock, which saves nothing
+    # (subscription, why) for each one that finished with gaps; empty for --mock
+    sub_gaps: list = []
     # Subscriptions that are not in the results, and why: each keeps rows in the pre-flight CSV
     # and is named at the end.
     not_scanned: list[dict] = []
@@ -1623,16 +1891,13 @@ def _main() -> None:
         with console.status("[bold]Authenticating…[/bold]"):
             credential = auth.get_credential(cloud)
 
-        sub_ids = [s.strip() for s in args.subs.split(",")] if args.subs else None
         regions = auth.normalise_regions(
             [r.strip() for r in args.regions.split(",")] if args.regions else None
         )
 
         skipped_subs: list = []
         with console.status("[bold]Resolving subscriptions…[/bold]"):
-            subscriptions = auth.resolve_subscriptions(
-                credential, sub_ids, args.all, cloud, skipped=skipped_subs
-            )
+            subscriptions = _resolve_scope(credential, args, cloud, skipped=skipped_subs)
         for sub_id, exc in skipped_subs:
             check = preflight.unreadable_check(sub_id, exc)
             not_scanned.append(
@@ -1663,13 +1928,37 @@ def _main() -> None:
         # Decide optional scans once (prompts on a TTY, flags hard-skip) before scanning.
         scans = _resolve_scans(args)
 
+        to_check = subscriptions
+        if not args.preflight_only:
+            store, resumed = _open_progress(
+                args,
+                output_dir,
+                resume.request_of(
+                    scope=_scope_kind(args),
+                    regions=regions,
+                    cloud=cloud.name,
+                    scans={
+                        **scans,
+                        "containers": args.get_container_details,
+                        "key_vault": args.get_key_vault_amounts,
+                    },
+                    skips=skips,
+                    devops=not getattr(args, "no_devops", False),
+                    devops_orgs=getattr(args, "devops_orgs", None),
+                ),
+            )
+            if resumed:
+                # Subscriptions the earlier run finished keep the access rows it saved: check only
+                # the rest.
+                to_check = resume.split(store, subscriptions, not args.keep_partial)[0]
+
         if args.no_preflight:
             # Without the full check, still warn up front if Monitor metrics read is denied.
             if scans.get("capacity", True):
-                _preflight_monitor_access(subscriptions, credential, regions, cloud)
+                _preflight_monitor_access(to_check, credential, regions, cloud)
         else:
             access_rows = _run_access_check(
-                subscriptions,
+                to_check,
                 subscription_names,
                 credential,
                 regions,
@@ -1696,9 +1985,56 @@ def _main() -> None:
             )
             return
 
-        scanned, scan_errors = _collect_all(
-            subscriptions, credential, regions, cloud, scans, _resolve_workers(args), skips=skips
-        )
+        todo, reuse = list(subscriptions), []
+        if store is not None:
+            todo, reuse, notes = resume.split(store, subscriptions, not args.keep_partial)
+            for note in notes:
+                console.print(f"[dim]{escape(note)}[/dim]")
+            if reuse:
+                console.print(
+                    f"[dim]Resuming: {len(reuse)} of {len(subscriptions)} subscriptions are "
+                    "already scanned and are not scanned again.[/dim]\n"
+                )
+        access_of = _access_by_subscription(access_rows)
+
+        recorder = gaps.GapRecorder(todo).install()
+
+        def save_scan(sub_id: str, result: tuple) -> None:
+            if store is not None:
+                found = {"count": recorder.count(sub_id), "examples": recorder.examples(sub_id)}
+                store.save(
+                    sub_id,
+                    resume.scan_checkpoint(result, access_of.get(sub_id, []), found),
+                    partial=_is_partial(access_of.get(sub_id, []), found["count"]),
+                )
+
+        try:
+            fresh, fresh_errors = (
+                _collect_all(
+                    todo,
+                    credential,
+                    regions,
+                    cloud,
+                    scans,
+                    _resolve_workers(args),
+                    skips=skips,
+                    on_scanned=save_scan,
+                )
+                if todo
+                else ([], {})
+            )
+        finally:
+            recorder.uninstall()
+        scanned, scan_errors = _merge_scans(subscriptions, todo, fresh, fresh_errors, store)
+        sub_gaps = _subscription_gaps(store, subscriptions, subscription_names)
+        for sub_id in reuse:
+            access_rows.extend(
+                row for row in store.load(sub_id)[0]["access"] if row not in access_rows
+            )
+        # In scan order, as an uninterrupted run lists them (sorted() is stable: each subscription's
+        # own rows keep their order).
+        rank = {sub: i for i, sub in enumerate(subscriptions)}
+        access_rows.sort(key=lambda row: rank.get(row.get("Owner"), len(rank)))
         failed_subs = [subscriptions[i] for i in sorted(scan_errors)]
         for i in sorted(scan_errors):
             sub_id = subscriptions[i]
@@ -2035,6 +2371,13 @@ def _main() -> None:
                     path.unlink()
                 except OSError as exc:
                     logger.debug("Could not remove %s after zipping: %s", path, exc)
+
+    kept = resume.keep_progress(not_scanned, sub_gaps)
+    _close_progress(store, keep=kept)
+    # Out of every subscription the run covers: the ones in the results, and the ones that were
+    # not scanned (unreadable, or whose scan failed), which _drop_failed has already taken out of
+    # the list.
+    _print_gaps(sub_gaps, len(subscriptions) + len(not_scanned), kept)
 
     console.print()
     console.print(Rule())

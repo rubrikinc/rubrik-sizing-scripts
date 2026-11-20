@@ -191,9 +191,10 @@ without `--output`, the current folder). Its last line says how the run ended.
 - No `Run ended` line: the process was killed outright, for example by `kill -9`, by the system when it ran out of
   memory, or by the machine stopping. On Linux, `dmesg` may name the out-of-memory kill. Fewer `--workers` use less memory.
 
-In every case run the same command again. A multi-account AWS scan carries on from its `aws-sizing-progress-*` folder
-([aws-resume](#aws-resume)); the other runs start over. The partial log is the real log and is not anonymized, whatever
-`--anonymize` says, so keep it to yourself unless you mean to share names.
+In every case run the same command again with `--resume`: a scan carries on from its progress folder and scans only what
+is missing ([aws-resume](#aws-resume)). Without `--resume` or `--fresh` the run stops and tells you, rather than guessing.
+The partial log is the real log and is not anonymized, whatever `--anonymize` says, so keep it to yourself unless you mean
+to share names.
 
 ### Where the results are
 
@@ -432,7 +433,8 @@ the keys:
 Run: aws sts assume-role --role-arn ROLE_ARN --role-session-name check --query AssumedRoleUser.Arn --output text
 
 Fix the role or the trust policy (`aws/iac/` has the template for the spoke role), or pass the right `--role-name`, and
-run the same command again. Accounts that already finished are not scanned twice ([aws-resume](#aws-resume)).
+run the same command again with `--resume`. Accounts that already finished are not scanned twice
+([aws-resume](#aws-resume)).
 
 To find every account with this problem at once, run with `--preflight-only`: it tries the role in each account, collects
 nothing, and lists the accounts it could not enter, which also have a `sign in` row in `aws_preflight_check-*.csv`.
@@ -484,21 +486,63 @@ its own with no mode option, or use `--cross-account-role` with `--accounts`.
 <a id="aws-resume"></a>
 ### aws-resume
 
-**You see:** `Resuming from .../aws-sizing-progress-<time> — N already complete, M remaining` when you meant to start a
-fresh scan, or a zip with accounts you did not ask for this time.
+**You see:** `Cannot start: An unfinished run is in .../aws-sizing-progress-<time> (N units done, started ...)`, or
+`Resuming from ... — N already complete, M remaining`, or `different options` in that message.
 
 **Why:** a multi-account scan keeps each finished account in an `aws-sizing-progress-*` folder in its output folder (the
-current folder without `--output`), and the folder is kept after the zip is written. A later multi-account scan with the
-same output folder picks the newest such folder, skips every account in it and puts all of them in its zip, even if they
-came from a run with other accounts, regions or services.
+current folder without `--output`). The folder is removed when every account has a result, and kept when one has none: it
+could not be signed in to, its scan failed or stopped, or a service control policy blocked it. A later scan in the same
+folder does not continue it silently, because that could mix the old accounts into a scan they did not belong to. A run
+with no terminal stops with this message. The folder records the options of the run that made it (the mode, role, account
+list, regions, exclusions, services, cost and partition), and a run with other options will not resume it.
 
-**What to do:** to start over, move the old progress folders out of the way (a renamed folder in the same place is still
-found), or give a new `--output` folder:
+**What to do:** to carry on, run the same command again with `--resume`. To start over, add `--fresh`, which deletes the
+unfinished run:
 
-Run: mkdir -p old-runs && mv aws-sizing-progress-* old-runs/
+Run: aws-sizing --fresh ...
 
-To scan one finished account again, delete its subfolder (named by the account ID) inside the progress folder and run the
-same command.
+An account that finished with permission errors, or with a region it could not scan, is scanned again by `--resume`
+(add `--keep-partial` to keep it as it was). The run ends by naming these accounts and the first reason for each. To scan
+one account again that finished clean, delete its subfolder (named by the account ID) inside the progress folder and
+resume.
+
+A progress folder made by an older version records no options and is not resumed; it is left where it is and can be
+deleted.
+
+<a id="azure-resume"></a>
+### azure-resume
+
+**You see:** `Cannot start: An unfinished run is in .../azure-sizing-progress-<time> (N units done, started ...)`, or
+`different options` in that message.
+
+**Why:** the scan of each subscription is saved in an `azure-sizing-progress-*` folder in the output folder as it
+finishes. The folder is removed when every subscription has a result, and kept when one has none (it could not be read, or
+its scan failed). A run with no terminal stops here rather than resume silently, and a run with other options (regions,
+cloud, scans, skips, or how the subscriptions were chosen) will not resume the folder.
+
+**What to do:** run the same command with `--resume` to scan only the missing subscriptions, or `--fresh` to delete the
+unfinished run and start over. A subscription that finished with gaps (a warning was logged for it during its scan, or
+its access check found a service it could not read) is scanned again by `--resume`; add `--keep-partial` to keep it as it
+was. The run ends by naming these subscriptions and the first reason for each. What is collected after the scan (tag
+names, AKS, Cosmos DB, Backup Vaults, containers, Key Vaults, Defender, Purview) runs again for every subscription.
+
+<a id="gcp-resume"></a>
+### gcp-resume
+
+**You see:** `Cannot start: An unfinished run is in .../gcp-sizing-progress-<time> (N units done, started ...)`, or
+`different options` in that message.
+
+**Why:** each finished project is saved in a `gcp-sizing-progress-*` folder in the output folder as it finishes. The folder
+is removed when every project has a result, and kept when one has none: it could not be read, its collection failed, or
+the run was stopped before it. A run with no terminal stops here rather than resume silently, and a run with other options
+(collectors, regions, `--security`, `--org` or `--folder`, or how the projects were chosen) will not resume the folder.
+The list of projects is not one of those options: a scan of all projects may see a few more or fewer the second time.
+
+**What to do:** run the same command with `--resume` to scan only the missing projects, or `--fresh` to delete the
+unfinished run and start over. A project that finished with collector errors, such as an API that was off or a time
+limit that was reached, is scanned again by `--resume`; add `--keep-partial` to keep it as it was. The run ends by naming
+these projects and the first reason for each. A project that ended after you pressed Ctrl-C is not saved, because BigQuery
+then returns only what it had read, so it is scanned again.
 
 <a id="aws-account-or-region-failed"></a>
 ### aws-account-or-region-failed
@@ -507,12 +551,14 @@ same command.
 REGION scan failed: ...`.
 
 **Why:** the text after the colon is the cause; look it up in the index. A failed or skipped account is not in the zip.
-A failed region leaves that region's resources out of that account, but the account still counts as finished.
+A region that failed (it raised, or it could not be reached) leaves that region's resources out of the account, and is
+recorded as a `scan_errors` entry with the service `region`, so the account is one that finished with gaps: the run names
+it at the end and `--resume` scans it again. A region that a service control policy denies is not a failure.
 
-**What to do:** fix the cause and run the same command again. A multi-account scan retries the accounts that failed and
-keeps the ones that finished. Because an account with a failed region counts as finished, delete its subfolder in the
-progress folder first ([aws-resume](#aws-resume)) if you want that region scanned. `Cannot sign in` is covered by
-[aws-assume-role-failed](#aws-assume-role-failed), [aws-sso](#aws-sso) and, for `--profiles`,
+**What to do:** fix the cause and run the same command again with `--resume`. A multi-account scan retries the accounts
+that failed and the ones that finished with gaps, and keeps the ones that finished cleanly. A failed region is one of
+those gaps, so `--resume` scans the account again ([aws-resume](#aws-resume)). `Cannot sign in` is
+covered by [aws-assume-role-failed](#aws-assume-role-failed), [aws-sso](#aws-sso) and, for `--profiles`,
 [aws-no-credentials](#aws-no-credentials).
 
 <a id="aws-scp-deny"></a>
@@ -636,8 +682,9 @@ The second message is a denied vault listing, which leaves `aws_backup_recovery_
 
 **What to do:** grant `backup:ListBackupPlans`, `backup:GetBackupPlan`, `backup:ListBackupSelections`,
 `backup:GetBackupSelection`, `backup:ListBackupVaults` and `backup:ListRecoveryPointsByBackupVault` to the role you scan
-with, then run again. After a throttle the account counts as finished; in a multi-account scan delete its subfolder
-first ([aws-resume](#aws-resume)).
+with, then run again. A throttled read is not recorded as a scan error, so the account is saved as finished cleanly and
+`--resume` does not scan it again: in a multi-account scan delete its subfolder first
+([aws-resume](#aws-resume)), or add `--fresh`.
 
 <a id="aws-bucket-upload"></a>
 ### aws-bucket-upload
@@ -936,7 +983,10 @@ If access was only just granted, refresh the list first with `az account list --
 
 More causes, by how the subscriptions were chosen:
 
-- **No `--subs` and no `--all`**: the tool asks `az account show` for the current subscription. If the `az` CLI is not
+- **No scope option**: every enabled subscription the sign-in can read is scanned; none readable gives this message.
+- **`--subscriptions`**: a name that matches no enabled subscription is left out and reported as not scanned.
+- **`--management-groups`**: a group that cannot be read (needs Reader on it) is left out and reported as not scanned.
+- **`--current-subscription`**: the tool asks `az account show` for the current subscription. If the `az` CLI is not
   installed or not on the `PATH`, or has no current subscription, the result is this message. Pass `--subs`, or select
   one with `az account set --subscription SUBSCRIPTION_ID`.
 - **`--subs`**: each ID that cannot be read prints `Subscription ID not accessible: ... — skipping` and is left out;

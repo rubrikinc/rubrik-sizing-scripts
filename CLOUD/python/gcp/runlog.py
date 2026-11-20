@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import textwrap
+from typing import Optional
 
 import auth
 import preflight
@@ -554,11 +555,17 @@ def crashed(exc: BaseException) -> None:
     core.crashed(exc)
 
 
-def finish(console: Console) -> None:
+STOP_SIGNALS = core.STOP_SIGNALS
+
+
+def finish(console: Console, outcome: Optional[str] = None) -> None:
     """The last lines of the run, on the screen and in the log: every distinct problem once, then
-    the line that says the scan finished."""
+    the line that says the scan finished (or ``outcome``, when the scan was stopped early)."""
     console.print()
     console.print("[bold]Run summary[/bold]")
     for line in core.digest_lines():
         console.print(escape(line))
-    core.finished()
+    if outcome:
+        core.end_run(outcome)
+    else:
+        core.finished()

@@ -197,6 +197,10 @@ def _vm_policies(result: dict) -> dict[tuple[str, str, str], list[str]]:
     """Backup policy names per VM, keyed by subscription, VM name and vault region.
 
     PowerShell keys the join the same way: the vault is in the region of every VM it protects.
+    A SQL in VM item joins on the name of the server it runs on (``ServerName``), after the VM
+    items of the same vault, as the script goes through a vault's VM policies and then its SQL
+    policies. The cell lists each policy once: PowerShell appends the name once per database, so a
+    server with four databases on one policy gets that name four times there.
     """
     policies: dict[tuple[str, str, str], list[str]] = {}
     for posture in result.get("backup_posture") or []:
@@ -205,14 +209,32 @@ def _vm_policies(result: dict) -> dict[tuple[str, str, str], list[str]]:
             (v.get("name") or "").lower(): (v.get("location") or "").lower()
             for v in posture.get("vaults") or []
         }
-        for item in posture.get("protected_items") or []:
-            policy = item.get("policy_name")
-            vm_name = (item.get("source_resource_id") or "").rstrip("/").rsplit("/", 1)[-1]
-            if item.get("workload_type") != "VM" or not policy or not vm_name:
-                continue
-            region = regions.get((item.get("vault_name") or "").lower(), "")
-            policies.setdefault((subscription, vm_name.lower(), region), []).append(policy)
+        items = posture.get("protected_items") or []
+        vault_order = list(dict.fromkeys((i.get("vault_name") or "").lower() for i in items))
+        for vault in vault_order:
+            in_vault = [i for i in items if (i.get("vault_name") or "").lower() == vault]
+            vm_items = [
+                (i, _resource_name(i.get("source_resource_id")))
+                for i in in_vault
+                if i.get("workload_type") == "VM"
+            ]
+            sql_items = [
+                (i, (i.get("rest_properties") or {}).get("serverName"))
+                for i in in_vault
+                if _vault_kind(i) == "VM_SQL"
+            ]
+            for item, host in [*vm_items, *sql_items]:
+                policy = item.get("policy_name")
+                if not policy or not host:
+                    continue
+                policies.setdefault((subscription, host.lower(), regions.get(vault, "")), []).append(
+                    policy
+                )
     return policies
+
+
+def _resource_name(resource_id: Optional[str]) -> str:
+    return (resource_id or "").rstrip("/").rsplit("/", 1)[-1]
 
 
 _STORAGE_ACCOUNT_IN_ID = re.compile(r"/storageAccounts/([^/]+)", re.IGNORECASE)
@@ -1276,6 +1298,691 @@ def _render_json(rows: list[dict[str, Any]]) -> str:
     return json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
 
 
+# ── Recovery Services vault items and policies ────────────────────────────────
+#
+# ``Get-AzRecoveryServicesBackupItem`` and ``Get-AzRecoveryServicesBackupProtectionPolicy`` objects,
+# piped through ``Select-Object Tenant, Subscription, Region, ResourceGroup, *``: the items go to
+# ``Export-Csv`` (an enum is written as its name, a nested object as its .NET type name), the policies
+# to ``ConvertTo-Json -Depth 10`` (an enum is written as its number). The rows are built from the REST
+# payload the collector keeps (``rest_properties``), mapped to the Az property names.
+#
+# Checked cell for cell against Az.RecoveryServices 7.15.0 on a real vault: the VM and Azure Files
+# items, and the VM (standard and enhanced), Azure Files and SQL in VM policies. The SQL in VM and
+# Azure SQL Database *items* and the Azure SQL Database *policies* are built from the Az model and
+# the SDK's field names, and have not been compared with a real run.
+
+# Az enum tables (name -> number), read from Az.RecoveryServices 7.15.0 by reflection.
+_AZ_WORKLOAD_TYPE = {
+    "AzureVM": 1,
+    "AzureSQLDatabase": 2,
+    "AzureFiles": 3,
+    "MSSQL": 4,
+    "FileFolder": 5,
+    "SAPHanaDatabase": 6,
+}
+_AZ_BACKUP_MANAGEMENT_TYPE = {
+    "AzureVM": 1,
+    "SCDPM": 2,
+    "AzureBackupServer": 3,
+    "AzureSQL": 4,
+    "AzureStorage": 5,
+    "AzureWorkload": 6,
+    "MAB": 7,
+    "NA": 8,
+}
+_AZ_CONTAINER_TYPE = {
+    "AzureVM": 1,
+    "Windows": 2,
+    "AzureSQL": 3,
+    "AzureStorage": 4,
+    "AzureVMAppContainer": 5,
+}
+_AZ_SCHEDULE_RUN_TYPE = {"Daily": 1, "Weekly": 2, "Hourly": 3}
+_AZ_TIERING_MODE = {"TierRecommended": 1, "TierAllEligible": 2, "DoNotTier": 3}
+_AZ_RECOVERY_POINT_TIER = {
+    "VaultStandard": 1,
+    "Snapshot": 2,
+    "VaultArchive": 3,
+    "VaultStandardRehydrated": 4,
+    "SnapshotAndVaultStandard": 5,
+    "SnapshotAndVaultArchive": 6,
+}
+_AZ_RETENTION_DURATION_TYPE = {"Days": 1, "Weeks": 2, "Months": 3, "Years": 4}
+_AZ_RETENTION_SCHEDULE_FORMAT = {"Daily": 1, "Weekly": 2}
+_AZ_DAY_OF_WEEK = {
+    "Sunday": 0,
+    "Monday": 1,
+    "Tuesday": 2,
+    "Wednesday": 3,
+    "Thursday": 4,
+    "Friday": 5,
+    "Saturday": 6,
+}
+_AZ_WEEK_OF_MONTH = {"First": 1, "Second": 2, "Third": 3, "Fourth": 4, "Last": 5}
+_AZ_MONTH = {
+    m: i
+    for i, m in enumerate(
+        (
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ),
+        1,
+    )
+}
+
+# REST backupManagementType / workloadType -> the Az names the cmdlets show.
+_REST_TO_AZ_BACKUP_MANAGEMENT = {
+    "AzureIaasVM": "AzureVM",
+    "AzureStorage": "AzureStorage",
+    "AzureWorkload": "AzureWorkload",
+    "AzureSql": "AzureSQL",
+    "MAB": "MAB",
+    "DPM": "SCDPM",
+    "AzureBackupServer": "AzureBackupServer",
+}
+_REST_TO_AZ_WORKLOAD = {
+    "VM": "AzureVM",
+    "AzureFileShare": "AzureFiles",
+    "SQLDataBase": "MSSQL",
+    "SQLDB": "AzureSQLDatabase",
+    "AzureSqlDb": "AzureSQLDatabase",
+    "SAPHanaDatabase": "SAPHanaDatabase",
+    "FileFolder": "FileFolder",
+}
+# The container type Az gives an item, from its backup management type.
+_AZ_CONTAINER_FOR_MANAGEMENT = {
+    "AzureVM": "AzureVM",
+    "AzureStorage": "AzureStorage",
+    "AzureWorkload": "AzureVMAppContainer",
+    "AzureSQL": "AzureSQL",
+}
+
+# The four files of each kind, in PowerShell's order, keyed by (Az backup management, Az workload).
+_VAULT_KINDS = {
+    ("AzureVM", "AzureVM"): ("VM", "azure_backup_vault_VM_items", "azure_backup_vault_VM_policies"),
+    ("AzureWorkload", "MSSQL"): (
+        "VM_SQL",
+        "azure_backup_vault_VM_SQL_items",
+        "azure_backup_vault_VM_SQL_policies",
+    ),
+    ("AzureSQL", "AzureSQLDatabase"): (
+        "Azure_SQL_Database",
+        "azure_backup_vault_Azure_SQL_Database_items",
+        "azure_backup_vault_Azure_SQL_Database_Policies",
+    ),
+    ("AzureStorage", "AzureFiles"): (
+        "Azure_Files",
+        "azure_backup_vault_Azure_Files_items",
+        "azure_backup_vault_Azure_Files_Policies",
+    ),
+}
+
+# Item columns after the four leading ones, in the order Get-AzRecoveryServicesBackupItem's
+# objects have them (Az.RecoveryServices 7.15.0). VM and Azure Files are from a real run; SQL in VM
+# and Azure SQL Database follow the Az model classes (AzureWorkloadSQLDatabaseProtectedItem,
+# AzureSqlItem) and the column list of EXAMPLES/azure_backup_vault_VM_SQL_items-example.csv.
+_ITEM_TAIL = [
+    "ProtectionStatus",
+    "PolicyId",
+    "ProtectionState",
+    "LastBackupStatus",
+    "LastBackupTime",
+    "ProtectionPolicyName",
+    "ExtendedInfo",
+    "DateOfPurge",
+    "DeleteState",
+    "IsArchiveEnabled",
+    "SoftDeleteRetentionPeriodInDays",
+    "IsScheduledForDeferredDelete",
+    "DeferredDeleteTimeInUtc",
+    "DeferredDeleteTimeRemaining",
+    "Name",
+    "Id",
+    "LatestRecoveryPoint",
+    "SourceResourceId",
+    "SourceSideScanStatus",
+    "SourceSideScanSummary",
+    "WorkloadType",
+    "ContainerName",
+    "ContainerType",
+    "BackupManagementType",
+]
+_LEADING = ["Tenant", "Subscription", "Region", "ResourceGroup"]
+_ITEM_COLUMNS = {
+    "VM": [
+        *_LEADING,
+        "VirtualMachineId",
+        "ContainerSubscriptionId",
+        "HealthStatus",
+        "IsInclusionList",
+        "DiskLunList",
+        *_ITEM_TAIL,
+    ],
+    "Azure_Files": [
+        *_LEADING,
+        "ParentContainerFabricId",
+        "FriendlyName",
+        "ResourceState",
+        *_ITEM_TAIL,
+    ],
+    # Not compared with a real run (no SQL in VM item in the test vault).
+    "VM_SQL": [
+        *_LEADING,
+        "FriendlyName",
+        "ServerName",
+        "ParentName",
+        "ParentType",
+        "LastBackupErrorDetail",
+        "ProtectedItemDataSourceId",
+        "ProtectedItemHealthStatus",
+        *_ITEM_TAIL,
+    ],
+    # Not compared with a real run (no Azure SQL Database item in the test vault).
+    "Azure_SQL_Database": [*_LEADING, "ProtectedItemDataId", *_ITEM_TAIL],
+}
+
+
+def _az_name(table: dict[str, str], value: Any) -> Optional[str]:
+    return table.get(value, value) if value else None
+
+
+def _az_enum(table: dict[str, int], name: Any) -> Any:
+    """An Az enum as ConvertTo-Json writes it: its number; a name the table lacks stays text."""
+    if name is None or name == "":
+        return None
+    return table.get(name, name)
+
+
+def _az_enums(table: dict[str, int], names: Any) -> list:
+    """A list of Az enums as numbers (an empty list when there are none)."""
+    return [_az_enum(table, name) for name in names or []]
+
+
+# The collector's workload label -> the REST backup management type, for rows with no payload
+# (a --mock run), and the workload each management type implies when the payload has none (a VM
+# policy's payload carries no workLoadType).
+_MANAGEMENT_FROM_WORKLOAD = {"VM": "AzureIaasVM", "Files": "AzureStorage", "SQL": "AzureWorkload"}
+_WORKLOAD_FROM_MANAGEMENT = {
+    "AzureVM": "AzureVM",
+    "AzureStorage": "AzureFiles",
+    "AzureWorkload": "MSSQL",
+    "AzureSQL": "AzureSQLDatabase",
+}
+
+
+def _az_types(row: dict) -> tuple[Optional[str], Optional[str]]:
+    """The Az backup management type and workload type of an item or policy row, as the names the
+    Az cmdlets show (``AzureVM``, ``MSSQL``, ...).
+
+    Read from the REST payload: an item's key is ``workloadType`` and a policy's ``workLoadType``.
+    A row with no payload (a mock run) falls back to the collector's workload label, and a payload
+    with no workload (a VM policy has none) to the one its management type implies.
+    """
+    rest = row.get("rest_properties") or {}
+    management = _az_name(
+        _REST_TO_AZ_BACKUP_MANAGEMENT,
+        rest.get("backupManagementType") or _MANAGEMENT_FROM_WORKLOAD.get(row.get("workload_type")),
+    )
+    workload = rest.get("workloadType") or rest.get("workLoadType")
+    if workload:
+        return management, _az_name(_REST_TO_AZ_WORKLOAD, workload)
+    return management, _WORKLOAD_FROM_MANAGEMENT.get(management)
+
+
+def _vault_kind(row: dict) -> Optional[str]:
+    """``VM``, ``VM_SQL``, ``Azure_SQL_Database`` or ``Azure_Files``, or None for any other kind
+    (PowerShell does not list items or policies of other workloads).
+    """
+    kind = _VAULT_KINDS.get(_az_types(row))
+    return kind[0] if kind else None
+
+
+def _ps_datetime_or_none(value: Any) -> Optional[str]:
+    """A REST timestamp as Export-Csv writes a ``[datetime]``, or None.
+
+    The API sends up to seven fraction digits (``...06.3921437Z``), which ``fromisoformat`` does
+    not read before Python 3.11, so the fraction is dropped: PowerShell's format has whole seconds.
+    """
+    if not value:
+        return None
+    text = str(value)
+    text = re.sub(r"\.\d+", "", text).replace("Z", "+00:00")
+    try:
+        return _ps_datetime(text)
+    except ValueError:
+        return text
+
+
+def _item_row(ctx: _Context, item: dict, region: Optional[str], kind: str) -> dict[str, Any]:
+    """One item as ``Get-AzRecoveryServicesBackupItem | Select-Object ... *`` gives it to Export-Csv."""
+    rest = item.get("rest_properties") or {}
+    management, workload = _az_types(item)
+    scan = rest.get("sourceSideScanInfo") or {}
+    policy_id = rest.get("policyId") or item.get("policy_id")
+    resource_id = item.get("resource_id") or ""
+    row: dict[str, Any] = {
+        "Tenant": ctx.tenant,
+        "Subscription": ctx.subscription(item.get("subscription_id", "")),
+        "Region": region,
+        "ResourceGroup": item.get("resource_group"),
+        "ProtectionStatus": rest.get("protectionStatus"),
+        "PolicyId": policy_id,
+        "ProtectionState": rest.get("protectionState") or item.get("protection_state"),
+        "LastBackupStatus": rest.get("lastBackupStatus") or item.get("last_backup_status"),
+        "LastBackupTime": _ps_datetime_or_none(
+            rest.get("lastBackupTime") or item.get("last_backup_time")
+        ),
+        "ProtectionPolicyName": rest.get("policyName")
+        or item.get("policy_name")
+        or (_resource_name(policy_id) or None),
+        # Az fills these from an extended-info call the plain listing does not make: empty in every
+        # real row seen, so left empty here.
+        "ExtendedInfo": None,
+        "DateOfPurge": None,
+        # Only "NotDeleted" has been seen on a real vault. A soft-deleted item is written "ToBeDeleted"
+        # (the Az enum has no other name for it); that branch is not compared with a real item.
+        "DeleteState": "ToBeDeleted" if rest.get("isScheduledForDeferredDelete") else "NotDeleted",
+        "IsArchiveEnabled": rest.get("isArchiveEnabled"),
+        # The API sends 0 where Az shows nothing (seen on a real vault). A non-zero period is
+        # passed through; no real item with one has been compared.
+        "SoftDeleteRetentionPeriodInDays": rest.get("softDeleteRetentionPeriod") or None,
+        "IsScheduledForDeferredDelete": rest.get("isScheduledForDeferredDelete"),
+        "DeferredDeleteTimeInUtc": _ps_datetime_or_none(rest.get("deferredDeleteTimeInUTC")),
+        "DeferredDeleteTimeRemaining": rest.get("deferredDeleteTimeRemaining"),
+        "Name": item.get("name"),
+        "Id": resource_id,
+        "LatestRecoveryPoint": _ps_datetime_or_none(rest.get("lastRecoveryPoint")),
+        "SourceResourceId": rest.get("sourceResourceId") or item.get("source_resource_id"),
+        "SourceSideScanStatus": scan.get("sourceSideScanStatus"),
+        "SourceSideScanSummary": scan.get("sourceSideScanSummary"),
+        "WorkloadType": workload,
+        "ContainerName": rest.get("containerName"),
+        "ContainerType": _AZ_CONTAINER_FOR_MANAGEMENT.get(management),
+        "BackupManagementType": management,
+    }
+    if kind == "VM":
+        vm_id = rest.get("virtualMachineId") or item.get("source_resource_id")
+        row.update(
+            {
+                "VirtualMachineId": vm_id,
+                # The VM's subscription: Az reads it from the VM id.
+                "ContainerSubscriptionId": _subscription_in_id(vm_id),
+                "HealthStatus": rest.get("healthStatus"),
+                "IsInclusionList": None,
+                "DiskLunList": None,
+            }
+        )
+    elif kind == "Azure_Files":
+        extended = rest.get("extendedInfo") or {}
+        row.update(
+            {
+                "ParentContainerFabricId": None,
+                "FriendlyName": rest.get("friendlyName") or item.get("friendly_name"),
+                "ResourceState": extended.get("resourceState") or "",
+            }
+        )
+    elif kind == "VM_SQL":
+        row.update(
+            {
+                "FriendlyName": rest.get("friendlyName"),
+                "ServerName": rest.get("serverName"),
+                "ParentName": rest.get("parentName"),
+                "ParentType": rest.get("parentType"),
+                # A nested object: Export-Csv would write its .NET type name when it is set, which
+                # no real run has shown, so it is left empty rather than guessed.
+                "LastBackupErrorDetail": None,
+                "ProtectedItemDataSourceId": rest.get("protectedItemDataSourceId"),
+                "ProtectedItemHealthStatus": rest.get("protectedItemHealthStatus"),
+            }
+        )
+    elif kind == "Azure_SQL_Database":
+        row["ProtectedItemDataId"] = rest.get("protectedItemDataId")
+    return row
+
+
+_SUBSCRIPTION_IN_ID = re.compile(r"/subscriptions/([^/]+)", re.IGNORECASE)
+
+
+def _subscription_in_id(resource_id: Optional[str]) -> Optional[str]:
+    found = _SUBSCRIPTION_IN_ID.search(resource_id or "")
+    return found.group(1) if found else None
+
+
+def _vault_regions(posture: dict) -> dict[str, str]:
+    return {(v.get("name") or "").lower(): v.get("location") for v in posture.get("vaults") or []}
+
+
+def _vault_item_rows(kind: str) -> Callable[[_Context, dict], list[dict[str, Any]]]:
+    def rows(ctx: _Context, result: dict) -> list[dict[str, Any]]:
+        out = []
+        for posture in result.get("backup_posture") or []:
+            regions = _vault_regions(posture)
+            for item in posture.get("protected_items") or []:
+                if _vault_kind(item) != kind:
+                    continue
+                region = regions.get((item.get("vault_name") or "").lower())
+                out.append(_item_row(ctx, item, region, kind))
+        return out
+
+    return rows
+
+
+# ── policies (ConvertTo-Json) ──
+
+
+def _az_retention_times(times: Any) -> list:
+    return list(times or [])
+
+
+def _az_simple_schedule(schedule: dict, time_zone: Optional[str]) -> dict[str, Any]:
+    """A REST SimpleSchedulePolicy as Az's SimpleSchedulePolicy (V1)."""
+    days = schedule.get("scheduleRunDays")
+    return {
+        "ScheduleRunFrequency": _az_enum(
+            _AZ_SCHEDULE_RUN_TYPE, schedule.get("scheduleRunFrequency")
+        ),
+        "ScheduleRunDays": _az_enums(_AZ_DAY_OF_WEEK, days) or None,
+        "ScheduleRunTimes": _az_retention_times(schedule.get("scheduleRunTimes")) or None,
+        # An hourly schedule (Azure Files): not seen on a real vault, whose policies are daily.
+        "ScheduleInterval": (schedule.get("hourlySchedule") or {}).get("interval"),
+        "ScheduleWindowStartTime": (schedule.get("hourlySchedule") or {}).get(
+            "scheduleWindowStartTime"
+        ),
+        "ScheduleWindowDuration": (schedule.get("hourlySchedule") or {}).get(
+            "scheduleWindowDuration"
+        ),
+        "ScheduleRunTimeZone": time_zone,
+    }
+
+
+def _az_simple_schedule_v2(schedule: dict, time_zone: Optional[str]) -> dict[str, Any]:
+    """A REST SimpleSchedulePolicyV2 (enhanced VM policy) as Az's SimpleSchedulePolicyV2."""
+    hourly = schedule.get("hourlySchedule")
+    daily = schedule.get("dailySchedule")
+    weekly = schedule.get("weeklySchedule")
+    return {
+        "ScheduleRunFrequency": _az_enum(
+            _AZ_SCHEDULE_RUN_TYPE, schedule.get("scheduleRunFrequency")
+        ),
+        "HourlySchedule": None
+        if not hourly
+        else {
+            "Interval": hourly.get("interval"),
+            "WindowStartTime": hourly.get("scheduleWindowStartTime"),
+            "WindowDuration": hourly.get("scheduleWindowDuration"),
+        },
+        "DailySchedule": None
+        if not daily
+        else {"ScheduleRunTimes": _az_retention_times(daily.get("scheduleRunTimes"))},
+        "WeeklySchedule": None
+        if not weekly
+        else {
+            "ScheduleRunDays": _az_enums(_AZ_DAY_OF_WEEK, weekly.get("scheduleRunDays")),
+            "ScheduleRunTimes": _az_retention_times(weekly.get("scheduleRunTimes")),
+        },
+        "ScheduleRunTimeZone": time_zone,
+    }
+
+
+def _az_schedule(schedule: Optional[dict], time_zone: Optional[str]) -> Optional[dict[str, Any]]:
+    if not schedule:
+        return None
+    if schedule.get("schedulePolicyType") == "SimpleSchedulePolicyV2":
+        return _az_simple_schedule_v2(schedule, time_zone)
+    if schedule.get("schedulePolicyType") == "LogSchedulePolicy":
+        return {"ScheduleFrequencyInMins": schedule.get("scheduleFrequencyInMins")}
+    return _az_simple_schedule(schedule, time_zone)
+
+
+def _az_month_days(daily: Optional[dict]) -> Optional[dict[str, Any]]:
+    if not daily:
+        return None
+    return {
+        "DaysOfTheMonth": [
+            {"Date": d.get("date"), "IsLast": bool(d.get("isLast"))}
+            for d in daily.get("daysOfTheMonth") or []
+        ]
+    }
+
+
+def _az_month_weeks(weekly: Optional[dict]) -> Optional[dict[str, Any]]:
+    if not weekly:
+        return None
+    return {
+        "DaysOfTheWeek": _az_enums(_AZ_DAY_OF_WEEK, weekly.get("daysOfTheWeek")),
+        "WeeksOfTheMonth": [
+            _az_enum(_AZ_WEEK_OF_MONTH, w) for w in weekly.get("weeksOfTheMonth") or []
+        ],
+    }
+
+
+def _az_long_term_retention(retention: dict, management: str) -> dict[str, Any]:
+    """A REST LongTermRetentionPolicy as Az's LongTermRetentionPolicy.
+
+    Az writes the policy's backup management type into each schedule (``AzureIaasVM`` and
+    ``AzureStorage`` seen in real runs, the empty string for a SQL in VM policy). The daily schedule
+    shape is from real runs; the weekly, monthly and yearly property names and order are those of
+    the Az objects, with values mapped the same way, not seen from a real vault.
+    """
+    daily = retention.get("dailySchedule")
+    weekly = retention.get("weeklySchedule")
+    monthly = retention.get("monthlySchedule")
+    yearly = retention.get("yearlySchedule")
+
+    def count(schedule: Optional[dict]) -> Any:
+        return ((schedule or {}).get("retentionDuration") or {}).get("count")
+
+    return {
+        "IsDailyScheduleEnabled": bool(daily),
+        "IsWeeklyScheduleEnabled": bool(weekly),
+        "IsMonthlyScheduleEnabled": bool(monthly),
+        "IsYearlyScheduleEnabled": bool(yearly),
+        "DailySchedule": None
+        if not daily
+        else {
+            "DurationCountInDays": count(daily),
+            "RetentionTimes": _az_retention_times(daily.get("retentionTimes")),
+            "BackupManagementType": management,
+        },
+        "WeeklySchedule": None
+        if not weekly
+        else {
+            "DurationCountInWeeks": count(weekly),
+            "DaysOfTheWeek": _az_enums(_AZ_DAY_OF_WEEK, weekly.get("daysOfTheWeek")),
+            "RetentionTimes": _az_retention_times(weekly.get("retentionTimes")),
+            "BackupManagementType": management,
+        },
+        "MonthlySchedule": None
+        if not monthly
+        else {
+            "DurationCountInMonths": count(monthly),
+            "RetentionScheduleFormatType": _az_enum(
+                _AZ_RETENTION_SCHEDULE_FORMAT, monthly.get("retentionScheduleFormatType")
+            ),
+            "RetentionScheduleDaily": _az_month_days(monthly.get("retentionScheduleDaily")),
+            "RetentionScheduleWeekly": _az_month_weeks(monthly.get("retentionScheduleWeekly")),
+            "RetentionTimes": _az_retention_times(monthly.get("retentionTimes")),
+            "BackupManagementType": management,
+        },
+        "YearlySchedule": None
+        if not yearly
+        else {
+            "DurationCountInYears": count(yearly),
+            "RetentionScheduleFormatType": _az_enum(
+                _AZ_RETENTION_SCHEDULE_FORMAT, yearly.get("retentionScheduleFormatType")
+            ),
+            "MonthsOfYear": _az_enums(_AZ_MONTH, yearly.get("monthsOfYear")),
+            "RetentionScheduleDaily": _az_month_days(yearly.get("retentionScheduleDaily")),
+            "RetentionScheduleWeekly": _az_month_weeks(yearly.get("retentionScheduleWeekly")),
+            "RetentionTimes": _az_retention_times(yearly.get("retentionTimes")),
+            "BackupManagementType": management,
+        },
+        "BackupManagementType": management,
+    }
+
+
+def _az_simple_retention(retention: dict) -> dict[str, Any]:
+    duration = retention.get("retentionDuration") or {}
+    return {
+        "RetentionDurationType": _az_enum(
+            _AZ_RETENTION_DURATION_TYPE, duration.get("durationType")
+        ),
+        "RetentionCount": duration.get("count"),
+    }
+
+
+def _az_retention(retention: Optional[dict], management: str) -> Optional[dict[str, Any]]:
+    if not retention:
+        return None
+    if retention.get("retentionPolicyType") == "SimpleRetentionPolicy":
+        return _az_simple_retention(retention)
+    return _az_long_term_retention(retention, management)
+
+
+def _az_tiering(tiering: Optional[dict]) -> Optional[dict[str, Any]]:
+    """The REST ``tieringPolicy`` (keyed by tier, ``ArchivedRP``) as Az's TieringPolicy."""
+    archived = (tiering or {}).get("ArchivedRP")
+    if not archived:
+        return None
+    return {
+        "TargetTier": _AZ_RECOVERY_POINT_TIER["VaultArchive"],
+        "TieringMode": _az_enum(_AZ_TIERING_MODE, archived.get("tieringMode")),
+        "TierAfterDuration": archived.get("duration"),
+        "TierAfterDurationType": archived.get("durationType"),
+    }
+
+
+def _policy_common_head(ctx: _Context, policy: dict, region: Optional[str]) -> dict[str, Any]:
+    return {
+        "Tenant": ctx.tenant,
+        "Subscription": ctx.subscription(policy.get("subscription_id", "")),
+        "Region": region,
+        "ResourceGroup": policy.get("resource_group"),
+    }
+
+
+def _policy_common_tail(policy: dict, workload: str, management: str) -> dict[str, Any]:
+    return {
+        "Name": policy.get("name"),
+        "WorkloadType": _az_enum(_AZ_WORKLOAD_TYPE, workload),
+        "Id": policy.get("resource_id"),
+        "BackupManagementType": _az_enum(_AZ_BACKUP_MANAGEMENT_TYPE, management),
+    }
+
+
+def _vm_policy(ctx: _Context, policy: dict, region: Optional[str]) -> dict[str, Any]:
+    rest = policy.get("rest_properties") or {}
+    zone = rest.get("timeZone")
+    enhanced = rest.get("policyType") == "V2"
+    tiering = _az_tiering(rest.get("tieringPolicy"))
+    snapshot_rg = rest.get("instantRPDetails") or {}
+    return {
+        **_policy_common_head(ctx, policy, region),
+        "SnapshotRetentionInDays": rest.get("instantRpRetentionRangeInDays"),
+        "ProtectedItemsCount": rest.get("protectedItemsCount"),
+        "AzureBackupRGName": snapshot_rg.get("azureBackupRGNamePrefix"),
+        "AzureBackupRGNameSuffix": snapshot_rg.get("azureBackupRGNameSuffix"),
+        "PolicySubType": 2 if enhanced else 1,
+        "TieringPolicy": tiering,
+        # "" when the API sends an empty value, null when it sends none (both seen on real policies).
+        "SnapshotConsistencyType": rest.get("snapshotConsistencyType"),
+        "SchedulePolicy": _az_schedule(rest.get("schedulePolicy"), zone),
+        "RetentionPolicy": _az_retention(rest.get("retentionPolicy"), "AzureIaasVM"),
+        **_policy_common_tail(policy, "AzureVM", "AzureVM"),
+    }
+
+
+def _files_policy(ctx: _Context, policy: dict, region: Optional[str]) -> dict[str, Any]:
+    rest = policy.get("rest_properties") or {}
+    zone = rest.get("timeZone")
+    return {
+        **_policy_common_head(ctx, policy, region),
+        "ProtectedItemsCount": rest.get("protectedItemsCount"),
+        "SchedulePolicy": _az_schedule(rest.get("schedulePolicy"), zone),
+        "RetentionPolicy": _az_retention(rest.get("retentionPolicy"), "AzureStorage"),
+        **_policy_common_tail(policy, "AzureFiles", "AzureStorage"),
+    }
+
+
+def _sql_vm_policy(ctx: _Context, policy: dict, region: Optional[str]) -> dict[str, Any]:
+    rest = policy.get("rest_properties") or {}
+    settings = rest.get("settings") or {}
+    zone = settings.get("timeZone")
+    subs = {s.get("policyType"): s for s in rest.get("subProtectionPolicy") or []}
+    full, diff, log = subs.get("Full") or {}, subs.get("Differential") or {}, subs.get("Log") or {}
+    return {
+        **_policy_common_head(ctx, policy, region),
+        "ProtectedItemsCount": rest.get("protectedItemsCount"),
+        "IsCompression": bool(settings.get("isCompression")),
+        "IsDifferentialBackupEnabled": bool(diff),
+        "IsLogBackupEnabled": bool(log),
+        "FullBackupSchedulePolicy": _az_schedule(full.get("schedulePolicy"), zone),
+        "DifferentialBackupSchedulePolicy": _az_schedule(diff.get("schedulePolicy"), zone),
+        "LogBackupSchedulePolicy": _az_schedule(log.get("schedulePolicy"), zone),
+        # Az writes "" as the management type inside a SQL in VM policy's retention (real run).
+        "FullBackupRetentionPolicy": _az_retention(full.get("retentionPolicy"), ""),
+        "DifferentialBackupRetentionPolicy": _az_retention(diff.get("retentionPolicy"), ""),
+        "LogBackupRetentionPolicy": _az_retention(log.get("retentionPolicy"), ""),
+        "FullBackupTieringPolicy": _az_tiering(full.get("tieringPolicy")),
+        **_policy_common_tail(policy, "MSSQL", "AzureWorkload"),
+    }
+
+
+def _sql_db_policy(ctx: _Context, policy: dict, region: Optional[str]) -> dict[str, Any]:
+    """Not compared with a real run: no Azure SQL Database policy in the test vault. The shape
+    follows Az's AzureSqlPolicy (a retention policy only)."""
+    rest = policy.get("rest_properties") or {}
+    return {
+        **_policy_common_head(ctx, policy, region),
+        "ProtectedItemsCount": rest.get("protectedItemsCount"),
+        "RetentionPolicy": _az_retention(rest.get("retentionPolicy"), "AzureSql"),
+        **_policy_common_tail(policy, "AzureSQLDatabase", "AzureSQL"),
+    }
+
+
+_POLICY_BUILDERS = {
+    "VM": _vm_policy,
+    "VM_SQL": _sql_vm_policy,
+    "Azure_SQL_Database": _sql_db_policy,
+    "Azure_Files": _files_policy,
+}
+
+
+def _vault_policy_rows(kind: str) -> Callable[[_Context, dict], list[dict[str, Any]]]:
+    def rows(ctx: _Context, result: dict) -> list[dict[str, Any]]:
+        out = []
+        for posture in result.get("backup_posture") or []:
+            regions = _vault_regions(posture)
+            for policy in posture.get("policies") or []:
+                if _vault_kind(policy) != kind:
+                    continue
+                region = regions.get((policy.get("vault_name") or "").lower())
+                out.append(_POLICY_BUILDERS[kind](ctx, policy, region))
+        return out
+
+    return rows
+
+
+def _render_ps_json(rows: list[dict[str, Any]]) -> str:
+    """``$list | ConvertTo-Json -Depth 10 > file``: nothing for no rows, a bare object for one row
+    and an array for more (checked in pwsh). ``>`` writes a trailing line end.
+    """
+    if not rows:
+        return ""
+    body = rows[0] if len(rows) == 1 else rows
+    return json.dumps(body, indent=2, ensure_ascii=False) + "\n"
+
+
 # ── azure_sizing_summary ──────────────────────────────────────────────────────
 
 _SUMMARY_COLUMNS = ["ResourceType", "Region", "TotalSizeTiB", "TotalSizeTB", "Count"]
@@ -1482,6 +2189,7 @@ SKIPPED_FILES: dict[str, tuple[str, ...]] = {
         "azure_backup_data_protection_vaults",
         "azure_backup_data_protection_policies",
         "azure_backup_data_protection_items",
+        *(prefix for _, items, policies in _VAULT_KINDS.values() for prefix in (items, policies)),
     ),
     "aks": ("azure_aks_info",),
     "cosmos": ("azure_cosmos_db",),
@@ -1494,6 +2202,44 @@ FILES: list[FileSpec] = [
     FileSpec("azure_storage_account_container_info", _CONTAINER_COLUMNS, _container_rows),
     FileSpec("azure_file_share_info", _FILE_SHARE_COLUMNS, _file_share_rows, no_tags=True),
     FileSpec("azure_backup_vault_info", _VAULT_COLUMNS, _vault_rows, no_tags=True),
+    # The Recovery Services vault policies (JSON) and items (CSV), in the order PowerShell writes
+    # them. Always written, empty when there is nothing, as the script writes them. The policy JSON
+    # nests ids and names below the top level, where the row anonymizer does not reach, so an
+    # anonymized run leaves it out, as it does azure_mi_db_items; the item CSVs are flat and are
+    # anonymized.
+    *[
+        FileSpec(
+            policies,
+            [],
+            _vault_policy_rows(kind),
+            no_tags=True,
+            extension="json",
+            renderer=_render_ps_json,
+            omit_when_anonymized=True,
+        )
+        for kind, _, policies in (
+            ("VM", "", "azure_backup_vault_VM_policies"),
+            ("VM_SQL", "", "azure_backup_vault_VM_SQL_policies"),
+            ("Azure_SQL_Database", "", "azure_backup_vault_Azure_SQL_Database_Policies"),
+            ("Azure_Files", "", "azure_backup_vault_Azure_Files_Policies"),
+        )
+    ],
+    *[
+        FileSpec(
+            items,
+            _ITEM_COLUMNS[kind],
+            _vault_item_rows(kind),
+            # Export-Csv writes an empty string as "" (an Azure Files item's ResourceState).
+            frozenset({"ResourceState"}) if kind == "Azure_Files" else frozenset(),
+            no_tags=True,
+        )
+        for kind, items in (
+            ("VM", "azure_backup_vault_VM_items"),
+            ("VM_SQL", "azure_backup_vault_VM_SQL_items"),
+            ("Azure_SQL_Database", "azure_backup_vault_Azure_SQL_Database_items"),
+            ("Azure_Files", "azure_backup_vault_Azure_Files_items"),
+        )
+    ],
     FileSpec("azure_backup_costs", _BACKUP_COST_COLUMNS, _backup_cost_rows, no_tags=True),
     FileSpec(
         "azure_backup_data_protection_vaults",

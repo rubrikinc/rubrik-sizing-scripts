@@ -43,10 +43,13 @@ def test_default_fields_are_the_scripts_list():
     block = block[: block.index(")")]
     in_script = re.findall(r'"([^"]+)"', block)
     # Master's script adds three fields for BigQuery; a checkout that still has the older script
-    # lists the first eight only.
+    # lists the first eight only. The two after them are Python only, for gce_storage_info, which
+    # the script has no file for: they must come last and be exactly these.
     bigquery = ["DatasetId", "TableId", "ExternalSourceUri"]
-    assert list(DEFAULT_FIELDS) in (in_script, in_script + bigquery)
-    assert list(DEFAULT_FIELDS[-3:]) == bigquery
+    python_only = ["BucketName", "BigQueryConnections", "DefaultKmsKeyName"]
+    assert list(DEFAULT_FIELDS[: -len(python_only)]) in (in_script, in_script + bigquery)
+    assert list(DEFAULT_FIELDS[-len(python_only) :]) == python_only
+    assert list(DEFAULT_FIELDS[-len(python_only) - 3 : -len(python_only)]) == bigquery
 
 
 def test_file_order_is_the_order_the_script_anonymizes_in():

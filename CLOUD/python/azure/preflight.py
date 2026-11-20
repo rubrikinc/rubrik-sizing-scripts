@@ -338,7 +338,18 @@ APIS = (
     Api(
         "backup vaults",
         _backup_vaults,
-        ("azure_backup_vault_info", "azure_sizing_summary"),
+        (
+            "azure_backup_vault_info",
+            "azure_backup_vault_VM_policies",
+            "azure_backup_vault_VM_SQL_policies",
+            "azure_backup_vault_Azure_SQL_Database_Policies",
+            "azure_backup_vault_Azure_Files_Policies",
+            "azure_backup_vault_VM_items",
+            "azure_backup_vault_VM_SQL_items",
+            "azure_backup_vault_Azure_SQL_Database_items",
+            "azure_backup_vault_Azure_Files_items",
+            "azure_sizing_summary",
+        ),
         skip="backup",
     ),
     Api(

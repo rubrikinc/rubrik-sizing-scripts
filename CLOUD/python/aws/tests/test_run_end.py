@@ -146,7 +146,7 @@ def test_a_multi_account_run_streams_its_log_to_the_folder_the_zip_goes_to(tmp_p
 def test_a_multi_account_run_tells_a_stopped_run_where_finished_accounts_are_kept(runner):
     runner.main.run_org(zip_dir=str(runner.dir), role_name="R", account_ids=[ACCT_A])
     hint = core._stop_hint
-    assert "aws-sizing-progress-" in hint and "run the same command again to resume." in hint
+    assert "aws-sizing-progress-" in hint and "run the same command again with --resume" in hint
     assert str(runner.dir) in hint
 
 

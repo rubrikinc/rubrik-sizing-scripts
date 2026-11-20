@@ -200,8 +200,9 @@ def _bq_result():
     }
 
 
-def test_the_bigquery_file_is_anonymized_last_and_hides_the_new_fields():
-    assert FILE_ORDER[-1] == "gce_bigquery_info"
+def test_the_bigquery_file_is_anonymized_last_of_the_scripts_files_and_hides_the_new_fields():
+    # gce_storage_info is Python only and comes after it, so it cannot move the script's numbering.
+    assert FILE_ORDER[-2:] == ("gce_bigquery_info", "gce_storage_info")
     text = build_csv_files(_bq_result(), "S", Anonymizer())["gce_bigquery_info-S.csv"]
     for real in ("proj-a", "analytics", "events", "secret-bucket", "data", "prod", "dataset_team"):
         assert real not in text, real
@@ -211,7 +212,8 @@ def test_the_bigquery_file_is_anonymized_last_and_hides_the_new_fields():
         "DatasetId-00000",
         "TableId-00000",
     )
-    assert row["ExternalSourceUri"] == "ExternalSourceUri-00000"
+    # PowerShell labels the whole URI. Python keeps the gs:// shape so the bucket joins the storage file.
+    assert row["ExternalSourceUri"] == "gs://BucketName-00000/ExternalSourceUri-00000"
     assert row["Location"] == "US" and row["TableType"] == "EXTERNAL"
     assert any(c.startswith("Label/Tag:Label/TagName-") for c in row)
 
@@ -232,7 +234,8 @@ def test_the_key_file_maps_the_new_labels_back():
     build_csv_files(_bq_result(), "S", anonymizer)
     actual = dict(anonymizer.key_rows())
     assert actual["DatasetId-00000"] == "analytics" and actual["TableId-00000"] == "events"
-    assert actual["ExternalSourceUri-00000"] == "gs://secret-bucket/x"
+    assert actual["BucketName-00000"] == "secret-bucket"
+    assert actual["ExternalSourceUri-00000"] == "/x"
 
 
 @pytest.mark.parametrize("field", ["DatasetId", "TableId", "ExternalSourceUri"])

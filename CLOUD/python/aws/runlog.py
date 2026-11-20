@@ -178,9 +178,8 @@ SOLUTIONS = (
         "aws-account-or-region-failed",
         re.compile(r"Scan failed for|Region \S+ scan failed|Cannot sign in to"),
         "An account or a region could not be scanned; the error after the colon says why. Fix it "
-        "and run the same command again: a multi-account scan retries the accounts that failed. "
-        "An account with a failed region counts as finished, so delete its folder in the progress "
-        "folder first if you want that region.",
+        "and run the same command again with --resume: a multi-account scan retries the accounts "
+        "that failed and the ones that finished with gaps, a failed region among them.",
     ),
 )
 

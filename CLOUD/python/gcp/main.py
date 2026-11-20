@@ -37,6 +37,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -58,9 +59,11 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
+import checkpoint_core
 import manifest_core
 import preflight
 import preflight_core
+import resume
 import runlog
 import totals
 from anonymize import KEY_FILE_PREFIX, Anonymizer, anonymized_log_note
@@ -78,6 +81,11 @@ _STREAMING_THRESHOLD = 50
 # sizing depth. Optional add-ons (cost/iac/filestore/security) are gated separately.
 _CORE_COLLECTORS = ["asset", "compute", "storage", "database", "bigquery", "backup"]
 
+# Days of Cloud Monitoring history a bucket's growth is measured over. Cloud Storage metrics are
+# kept for 24 months; the cap keeps one project's response well inside Monitoring's 200 MB limit.
+_DEFAULT_GROWTH_DAYS = 30
+_MAX_GROWTH_DAYS = 365
+
 _DRY_RUN_API_CALLS = [
     (
         "asset",
@@ -90,8 +98,14 @@ _DRY_RUN_API_CALLS = [
     (
         "storage",
         "storage.Client.list_buckets()",
-        "roles/storage.objectViewer",
+        "roles/storage.viewer",
         "GCS bucket metadata",
+    ),
+    (
+        "storage",
+        "MetricServiceClient.list_time_series()",
+        "roles/monitoring.viewer",
+        "GCS bucket sizes and object counts",
     ),
     ("database", "sqladmin.instances.list()", "roles/cloudsql.viewer", "Cloud SQL instances"),
     (
@@ -267,12 +281,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "that Get-GCPSizingInfo.ps1 writes.",
     )
     p.add_argument(
+        "--growth-days",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Days of Cloud Monitoring history to measure each Cloud Storage bucket's growth "
+        f"over (default: {_DEFAULT_GROWTH_DAYS}, at most {_MAX_GROWTH_DAYS}). Costs one extra "
+        "Monitoring query per project. A bucket younger than this is measured over its own age.",
+    )
+    p.add_argument(
+        "--no-growth",
+        action="store_true",
+        help="Do not measure bucket growth: skip the extra Monitoring query and leave the growth "
+        "columns of gce_storage_info blank.",
+    )
+    p.add_argument(
         "--no-preflight",
         action="store_true",
         help="Skip the pre-flight access check that runs before the scan. The check makes one "
         "read-only call per service in each project and writes "
         "gcp_preflight_check-<timestamp>.csv, which lists what will be captured and what "
         "will be dropped.",
+    )
+    p.add_argument(
+        "--no-sdk-check",
+        action="store_true",
+        help="Do not stop at the start when a Google library the chosen collectors need is not "
+        "installed. Those collectors then fail in every project and their data is missing.",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not ask before scanning when the access check shows the quota project cannot "
+        "serve the calls (API or billing off, or denied). Runs without a terminal never ask.",
     )
     p.add_argument(
         "--preflight-only",
@@ -282,12 +323,42 @@ def _build_parser() -> argparse.ArgumentParser:
         "gcp_access_check_<timestamp>.zip and stop. Nothing is collected. A project named with "
         "--projects or --project-file that cannot be read gets a row of its own.",
     )
+    resume_group = p.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        action="store_true",
+        help="Carry on with the unfinished run in the output folder: projects it finished are not "
+        "scanned again. Needs the same options as that run. Without --resume or --fresh, a "
+        "terminal is asked what to do; a run with no terminal stops until one is given.",
+    )
+    resume_group.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Delete the unfinished run in the output folder and scan everything again.",
+    )
+    p.add_argument(
+        "--keep-partial",
+        action="store_true",
+        help="With --resume, keep the projects the earlier run finished with errors (an API off, a "
+        "permission missing, a time limit reached), instead of scanning them again (the default). "
+        "The zip then holds them with their gaps.",
+    )
     p.add_argument(
         "--verbose",
         action="store_true",
         help="Show SE-focused terminal output + debug logging from collectors.",
     )
     return p
+
+
+def _resolve_growth_days(args: argparse.Namespace, selected: set[str]) -> Optional[int]:
+    """The days to measure bucket growth over, or None when growth is off for this run.
+
+    Growth rides on the storage collector, so it is off when that collector is not running.
+    """
+    if args.no_growth or "storage" not in selected:
+        return None
+    return args.growth_days or _DEFAULT_GROWTH_DAYS
 
 
 def _parse_csv(value: Optional[str]) -> Optional[list[str]]:
@@ -441,6 +512,66 @@ def _scope_for_manifest(facts) -> Optional[dict]:
     }
 
 
+def _require_sdks(selected: set[str], log_handler: logging.Handler, log_tmp: str) -> None:
+    """Exit with the install command when a library the chosen collectors need is missing.
+
+    The message is on the screen in full, so the run log is not kept (as for a bad option).
+    """
+    missing = preflight.missing_sdks(selected)
+    if not missing:
+        return
+    console.print("[red]Cannot start:[/red] " + escape(preflight.sdk_problem_lines(missing)[0]))
+    for line in preflight.sdk_problem_lines(missing)[1:]:
+        console.print(escape(line))
+    _discard_run_log(log_handler, log_tmp)
+    sys.exit(2)
+
+
+def _confirm_quota_project(access_rows: list[dict], assume_yes: bool = False) -> None:
+    """Stop and ask before scanning when the quota project cannot serve the calls.
+
+    Every call is charged to the quota project, so when it has an API or billing off (or refuses
+    the sign-in) the same calls will fail in every project and the results will be mostly empty.
+    At a terminal the user chooses; ``--yes`` and runs with no terminal carry on, as before, with
+    the warning already printed by the access check.
+    """
+    blocked = preflight.quota_blocking_rows(access_rows)
+    if not blocked or assume_yes:
+        return
+    services = sorted({row.get("Service", "") for row in blocked})
+    projects = {row.get("Owner") for row in blocked}
+    interactive = sys.stdin is not None and sys.stdin.isatty() and sys.stdout.isatty()
+    logger.warning(
+        "The quota project cannot serve %d service(s) in %d project(s): %s",
+        len(services),
+        len(projects),
+        ", ".join(services),
+    )
+    if not interactive:
+        console.print(
+            "[yellow]No terminal to ask on: continuing. Those services will be missing from the "
+            "results; pass --yes to silence this.[/yellow]"
+        )
+        return
+    console.print(
+        f"\n[yellow]The quota project cannot serve {escape(', '.join(services))} "
+        f"({len(projects)} project(s) affected).[/yellow] Scanning now will leave those out of "
+        "the results. The fix is above."
+    )
+    try:
+        answer = input("Continue anyway? [y/N] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer not in ("y", "yes"):
+        logger.warning("Stopped by the user at the quota project question.")
+        console.print("Stopped. Fix the quota project and run again.")
+        runlog.core.end_run(
+            "stopped by the user at the quota project question",
+            ["Nothing was scanned and no results zip was written."],
+        )
+        sys.exit(1)
+
+
 def _manifest_text(files: dict, scope: Optional[dict] = None) -> Optional[str]:
     """The manifest.json of a results zip, or None when it could not be built.
 
@@ -550,6 +681,7 @@ def _finalise_zip(
     anonymizer: Optional[Anonymizer] = None,
     access_rows: Optional[list[dict]] = None,
     scope: Optional[dict] = None,
+    stopped_early: bool = False,
 ) -> pathlib.Path:
     """Bundle the discovery JSON, the PowerShell-style CSV files and the run log into one ZIP,
     leaving a single file.
@@ -567,7 +699,7 @@ def _finalise_zip(
 
     logger.info("Discovery run complete — bundling artefacts.")
     _print_totals(out_path)
-    runlog.finish(console)
+    runlog.finish(console, "scan stopped early (partial results)" if stopped_early else None)
     logging.getLogger().removeHandler(log_handler)
     log_handler.close()
 
@@ -756,6 +888,7 @@ def _collect_project(
     precomputed_asset=None,
     selected: Optional[set[str]] = None,
     switched_off: Optional[set[str]] = None,
+    growth_days: Optional[int] = None,
 ) -> dict:
     """Run all Phase 2 collectors for one project.
 
@@ -815,7 +948,7 @@ def _collect_project(
 
     # Storage
     if "storage" in sel:
-        collector = StorageCollector(project_id, credentials)
+        collector = StorageCollector(project_id, credentials, growth_days=growth_days)
         try:
             storage_inv = collector.collect()
             result["storage"] = storage_inv
@@ -921,12 +1054,33 @@ def _print_project_line(
         )
 
 
+def _print_saved_line(project_id: str, line: dict, idx: int, total: int) -> None:
+    """The completion line of a project taken from the saved run, marked as resumed.
+
+    ``line`` is what ``resume.project_checkpoint`` recorded (asset count and types, and which
+    collectors were switched off), so the line reads as it did the first time.
+    """
+    counter = f"[dim]{idx}/{total}[/dim]"
+    name = f"{project_id[:40]:<40}"
+    if line.get("assets") is not None:
+        detail = (
+            f"[cyan]{line['assets']}[/cyan] assets  [dim]({line.get('asset_types') or 0} types)[/dim]"
+        )
+    elif line.get("switched_off"):
+        detail = f"[dim]nothing enabled to read ({', '.join(line['switched_off'])} off)[/dim]"
+    else:
+        detail = "[dim](no asset spine)[/dim]"
+    console.print(f"  [green]✓[/green] {counter} {name}  {detail}  [dim]· saved by the earlier run[/dim]")
+
+
 def _summarise_project(project_id: str, result: dict) -> dict:
     """Reduce a full collector result to the slim numbers the summary table needs.
 
     Kept tiny so org-scale runs can hold one per project (1000 of these) without
     retaining the heavy inventories.
     """
+    import csv_export
+
     compute = result.get("compute")
     storage = result.get("storage")
     database = result.get("database")
@@ -941,6 +1095,7 @@ def _summarise_project(project_id: str, result: dict) -> dict:
         "bq_datasets": bigquery.dataset_count if bigquery else None,
         "bq_counts": dict(bigquery.table_counts) if bigquery else None,
         "bq_protectable_bytes": bigquery.protectable_logical_bytes if bigquery else None,
+        "bq_other_cloud": csv_export.count_other_cloud(bigquery.tables) if bigquery else {},
         "dbs": database.total_databases if database else None,
         "protected": backup.protected_instance_count if backup_known else None,
         "coverage_pct": backup.protection_coverage_pct if backup_known else None,
@@ -1186,6 +1341,51 @@ def _build_result(
     )
 
 
+def _build_result_from_slices(
+    projects: list[str],
+    regions: Optional[list[str]],
+    slices: dict[str, dict],
+    collection_errors: Optional[list[dict]] = None,
+    access_check: Optional[list[dict]] = None,
+) -> "DiscoveryResult":
+    """``_build_result`` for projects held as slices (``slice_from_result``), in scan order.
+
+    A slice is what ``_build_result`` takes from one project's inventories, already as plain
+    dicts, so a project taken from a saved run needs no inventory objects. The two give the same
+    JSON for the same projects (tests/test_scale.py pins that for the streaming writer, which
+    uses the same slices).
+    """
+    from models.inventory import DiscoveryResult
+
+    asset_counts: dict = {}
+    lists: dict[str, list] = {key: [] for key in ("compute", "storage", "databases", "bigquery")}
+    lists["backup_posture"] = []
+    for pid in projects:
+        piece = slices.get(pid)
+        if piece is None:
+            continue
+        if piece.get("asset_counts") is not None:
+            asset_counts[pid] = piece["asset_counts"]
+        for key, items in lists.items():
+            if piece.get(key) is not None:
+                items.append(piece[key])
+
+    return DiscoveryResult(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        organization_id=None,
+        projects_scanned=projects,
+        regions_in_scope=regions,
+        asset_counts=asset_counts,
+        compute=lists["compute"],
+        storage=lists["storage"],
+        databases=lists["databases"],
+        bigquery=lists["bigquery"],
+        backup_posture=lists["backup_posture"],
+        collection_errors=collection_errors or [],
+        access_check=access_check or [],
+    )
+
+
 def _write_output(result: "DiscoveryResult", output_dir: pathlib.Path) -> pathlib.Path:
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -1289,6 +1489,22 @@ def _print_summary(summaries: list[dict], collection_errors: Optional[list[dict]
             f"{protectable_tb} TB, decimal. Views, external tables and snapshots are not "
             f"counted.[/dim]"
         )
+        other_cloud: dict[str, int] = {}
+        for s in bq:
+            for cloud, n in (s.get("bq_other_cloud") or {}).items():
+                other_cloud[cloud] = other_cloud.get(cloud, 0) + n
+        if other_cloud:
+            console.print(
+                f"[yellow]⚠ {sum(other_cloud.values())} BigQuery table(s) read data in "
+                f"{' and '.join(sorted(other_cloud))}, not in Google Cloud Storage "
+                f"({', '.join(f'{n} in {c}' for c, n in sorted(other_cloud.items()))}).[/yellow]"
+            )
+            console.print(
+                "  [dim]BigQuery Omni tables like these are not sized by this scan: their data is "
+                "not in gce_storage_info. Run the AWS or Azure sizing script against the storage "
+                "they read. They are marked in the ExternalCloud column of "
+                "gce_bigquery_info.[/dim]"
+            )
 
     # Surface partial coverage loudly — a project we couldn't fully read shows as
     # zeros above and would otherwise silently undercount the sizing estimate.
@@ -1340,6 +1556,19 @@ def _main() -> None:
         parser.error("--preflight-only already collects nothing; use it or --dry-run, not both")
     if args.preflight_only and args.mock:
         parser.error("--preflight-only checks real access, so it cannot be used with --mock")
+    if args.keep_partial and not args.resume:
+        parser.error(
+            "--keep-partial keeps what an earlier run finished with gaps instead of scanning it "
+            "again, so it needs --resume"
+        )
+    if (args.resume or args.fresh) and (args.mock or args.dry_run or args.preflight_only):
+        parser.error(
+            "--resume and --fresh apply to a scan, not to --mock, --dry-run or --preflight-only"
+        )
+    if args.no_growth and args.growth_days is not None:
+        parser.error("--no-growth turns growth off, so it cannot be used with --growth-days")
+    if args.growth_days is not None and not 1 <= args.growth_days <= _MAX_GROWTH_DAYS:
+        parser.error(f"--growth-days must be between 1 and {_MAX_GROWTH_DAYS}")
     anonymizer = (
         Anonymizer.from_options(args.anonymize_fields, args.not_anonymize_fields)
         if args.anonymize
@@ -1390,6 +1619,10 @@ def _main() -> None:
         return
 
     # ── Live run ───────────────────────────────────────────────────────────────
+    # A missing Google library fails here, before sign-in and before any API call.
+    if not args.no_sdk_check and not args.dry_run:
+        _require_sdks(selected, log_handler, log_tmp)
+
     import auth
 
     if args.project_file:
@@ -1444,6 +1677,7 @@ def _main() -> None:
         args.folder_id or cfg.discovery.folder_id,
     )
     enable_security = args.security or cfg.discovery.collectors.security
+    growth_days = _resolve_growth_days(args, selected)
     if selected != set(_CORE_COLLECTORS):
         console.print(
             f"[dim]Collectors:[/dim] running [cyan]"
@@ -1451,9 +1685,35 @@ def _main() -> None:
             f"[dim](subset — other core collectors skipped)[/dim]"
         )
 
+    output_dir = _resolve_output_dir(args.output or cfg.discovery.output_dir)
+    store = None
+    to_check = projects
+    if not args.preflight_only:
+        store, resumed = _open_progress(
+            args,
+            output_dir,
+            resume.request_of(
+                selected=selected,
+                regions=regions,
+                security=enable_security,
+                scope=scope,
+                project_scope=(
+                    "current"
+                    if _current_project_only(args, cfg)
+                    else "named" if project_ids else "all"
+                ),
+            ),
+        )
+        if resumed:
+            # Projects the earlier run finished keep the access rows it saved: check only the rest.
+            to_check = resume.split(store, projects, not args.keep_partial)[0]
+
     access_rows: list[dict] = []
     if not args.no_preflight:
-        access_rows = _run_access_check(projects, credentials, selected, workers)
+        access_rows = _run_access_check(to_check, credentials, selected, workers)
+
+    if access_rows and not args.preflight_only:
+        _confirm_quota_project(access_rows, assume_yes=args.yes)
 
     if args.preflight_only:
         _finish_access_check(
@@ -1477,26 +1737,45 @@ def _main() -> None:
     console.print(Rule(f"[bold]Collecting assets[/bold]  [dim]({workers} workers)[/dim]"))
     console.print()
 
-    output_dir = _resolve_output_dir(args.output or cfg.discovery.output_dir)
     failed_projects: list = []
-    out_path = _collect_and_write(
-        projects=projects,
-        regions=regions,
-        credentials=credentials,
-        enable_security=enable_security,
-        workers=workers,
-        org_assets=org_assets,
-        output_dir=output_dir,
-        selected=selected,
-        access_rows=access_rows,
-        failed=failed_projects,
-    )
+    zip_access: list[dict] = []
+    project_gaps: list = []
+    with _graceful_stop():
+        out_path = _collect_and_write(
+            projects=projects,
+            regions=regions,
+            credentials=credentials,
+            enable_security=enable_security,
+            workers=workers,
+            org_assets=org_assets,
+            output_dir=output_dir,
+            selected=selected,
+            access_rows=access_rows,
+            failed=failed_projects,
+            store=store,
+            retry_partial=not args.keep_partial,
+            access_out=zip_access,
+            gaps_out=project_gaps,
+            growth_days=growth_days,
+        )
+    from collectors.utils import ScanStopped, stop_requested
+
+    stopped_early = stop_requested()
     for pid, exc in failed_projects:
         check = preflight.scan_failed_check(pid, exc)
-        not_scanned.append(
-            {"id": pid, "why": f"collection failed: {check.code}", "rows": [check.to_row()]}
+        why = (
+            "not scanned: the run was stopped"
+            if isinstance(exc, ScanStopped)
+            else f"collection failed: {check.code}"
         )
+        not_scanned.append({"id": pid, "why": why, "rows": [check.to_row()]})
     _print_not_scanned(not_scanned, "Not scanned:")
+    if stopped_early:
+        console.print(
+            "\n[yellow]The run was stopped early: the results are PARTIAL.[/yellow] Projects "
+            "listed above are missing, and BigQuery tables the run did not reach show a size "
+            "of 0."
+        )
 
     zip_path = _finalise_zip(
         out_path,
@@ -1505,9 +1784,13 @@ def _main() -> None:
         started=started,
         write_csv=not args.no_csv,
         anonymizer=anonymizer,
-        access_rows=[*access_rows, *(row for entry in not_scanned for row in entry["rows"])],
+        access_rows=[*zip_access, *(row for entry in not_scanned for row in entry["rows"])],
         scope=_scope_for_manifest(scope_facts),
+        stopped_early=stopped_early,
     )
+    kept = resume.keep_progress(not_scanned, stopped_early, project_gaps)
+    _close_progress(store, keep=kept)
+    _print_gaps(project_gaps, len(projects), kept)
 
     console.print()
     console.print(f"[green]Discovery complete.[/green]  Output: [cyan]{zip_path}[/cyan]")
@@ -1515,6 +1798,66 @@ def _main() -> None:
         "[dim]Share this ZIP with your Rubrik SE, who will run "
         "generate_report.py to produce the HTML + Excel report.[/dim]"
     )
+
+
+def _print_gaps(gaps: list, total: int, kept: bool) -> None:
+    """End the run by saying which projects finished with gaps, and what to do about them.
+
+    A project that finished is complete as far as the scan got, not as far as the project goes: a
+    collector that failed leaves something out, and the zip alone does not say so.
+    """
+    lines = checkpoint_core.gaps_summary("project", gaps, total, kept=kept)
+    if not lines:
+        return
+    console.print()
+    console.print(f"[yellow]{escape(lines[0])}[/yellow]")
+    for line in lines[1:]:
+        console.print(escape(line))
+
+
+def _open_progress(args, output_dir: pathlib.Path, request: dict):
+    """Open this run's progress folder, or resume the unfinished one in output_dir.
+
+    Returns the checkpoint store, and whether it is a resumed run. A previous run that cannot be
+    resumed (different options, or no terminal to ask on) ends the run with what to do, not a
+    traceback; nothing is deleted unless --fresh or the person's answer says so.
+    """
+    try:
+        store, resumed = checkpoint_core.prepare(
+            str(output_dir),
+            prefix=resume.PREFIX,
+            tool="gcp",
+            request=request,
+            mode=resume.mode_of(args),
+            code_version=runlog.core.code_version(runlog.HERE),
+            say=lambda text: console.print(f"[dim]{escape(text)}[/dim]"),
+        )
+    except checkpoint_core.ResumeRefused as exc:
+        console.print(f"[red]Cannot start:[/red] {escape(str(exc))}")
+        runlog.core.end_run("not started: an unfinished run is in the way", [str(exc)])
+        sys.exit(2)
+    runlog.core.set_stop_hint(
+        f"Projects that finished are saved in {store.root}; run the same command with --resume "
+        "to carry on where this one stopped."
+    )
+    return store, resumed
+
+
+def _close_progress(store, keep: bool) -> None:
+    """The results are written: remove the progress folder, unless something is left to resume.
+
+    keep is True when a project has no saved result (it died, or was not reached after a stop),
+    so a later --resume can scan just those. The folder is then left marked as unfinished.
+    """
+    if store is None:
+        return
+    if keep:
+        console.print(
+            f"[dim]Progress kept in {escape(store.root)}: run again with --resume to scan the "
+            "projects that were not finished.[/dim]"
+        )
+        return
+    store.finish()
 
 
 def _maybe_org_asset_spine(scope, credentials, projects: list[str]) -> dict:
@@ -1548,6 +1891,65 @@ def _maybe_org_asset_spine(scope, credentials, projects: list[str]) -> dict:
     return org_assets
 
 
+def _collect_unless_stopped(pid: str, *args, **kwargs) -> dict:
+    """``_collect_project``, unless the run was asked to stop before this project started."""
+    from collectors.utils import ScanStopped, stop_requested
+
+    if stop_requested():
+        raise ScanStopped("the run was stopped before this project started")
+    return _collect_project(pid, *args, **kwargs)
+
+
+@contextlib.contextmanager
+def _graceful_stop():
+    """For the scan only: the first Ctrl-C, SIGTERM or SIGHUP asks the scan to wind down, so the
+    results of the projects done so far are still written (marked partial). A second one is handed
+    to the handler that was there before, which logs the stop and exits at once.
+
+    Does nothing off the main thread. The previous handlers are put back on exit.
+    """
+    import signal
+    import threading
+
+    from collectors.utils import request_stop, reset_stop, stop_requested
+
+    reset_stop()
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous: dict = {}
+
+    def handle(signum, frame) -> None:
+        if stop_requested():
+            handler = previous.get(signum)
+            if callable(handler):
+                handler(signum, frame)
+            os._exit(128 + int(signum))
+        request_stop()
+        console.print(
+            "\n[yellow]Stop requested.[/yellow] Finishing the calls in flight, then writing the "
+            "results gathered so far (projects not reached are listed as not scanned). "
+            "Press Ctrl-C again to quit at once without results."
+        )
+
+    for name, _label in runlog.STOP_SIGNALS:
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            previous[number] = signal.signal(number, handle)
+        except (ValueError, OSError):
+            continue
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            try:
+                signal.signal(number, handler)
+            except (ValueError, OSError):
+                pass
+
+
 def _collect_and_write(
     *,
     projects: list[str],
@@ -1560,11 +1962,26 @@ def _collect_and_write(
     selected: Optional[set[str]] = None,
     access_rows: Optional[list[dict]] = None,
     failed: Optional[list] = None,
+    store=None,
+    retry_partial: bool = True,
+    access_out: Optional[list] = None,
+    gaps_out: Optional[list] = None,
+    growth_days: Optional[int] = None,
 ) -> pathlib.Path:
     """Collect all projects in parallel and write the discovery JSON.
 
     ``failed``, when given, gets ``(project_id, exception)`` for each project whose collection
     stopped on an error as a whole (one collector failing is recorded in the project's errors).
+
+    ``gaps_out``, when given, is filled with ``(project, why)`` for every project in the output that
+    has collector errors, scanned now or taken from the earlier run.
+
+    ``access_out``, when given, is filled with the access-check rows of every project in the output:
+    this run's, plus those saved with the projects taken from the earlier run (not checked again).
+
+    ``store`` is the run's checkpoint store. Each project that finishes is saved to it as it
+    finishes, and a project it already holds is taken from it instead of being scanned again (unless
+    ``retry_partial`` and it finished with errors). Without a store nothing is saved.
 
     Above ``_STREAMING_THRESHOLD`` projects the output is streamed to disk one
     project at a time (bounded memory); below it the simple in-memory path is
@@ -1572,63 +1989,122 @@ def _collect_and_write(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    from collectors.utils import collection_error, stop_requested
+    from streaming_writer import StreamingDiscoveryWriter, slice_from_result
+
     total = len(projects)
     use_streaming = total > _STREAMING_THRESHOLD
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
     summaries: list[dict] = []
-    per_project: dict[str, dict] = {}
     all_errors: list[dict] = []
     off_by_project = preflight.switched_off_collectors(access_rows or [])
-    writer = None
-    if use_streaming:
-        from streaming_writer import StreamingDiscoveryWriter, slice_from_result
+    access_of = resume.access_by_project(access_rows or [])
+    # What the output records as checked: this run's rows, plus those of the projects taken from
+    # the saved run (they were not checked again).
+    output_access: list[dict] = list(access_rows or [])
 
+    reuse: list[str] = []
+    todo = list(projects)
+    if store is not None:
+        todo, reuse, notes = resume.split(store, projects, retry_partial)
+        for note in notes:
+            console.print(f"[dim]{escape(note)}[/dim]")
+        if reuse:
+            console.print(
+                f"[dim]Resuming: {len(reuse)} of {total} projects are already done and are not "
+                f"scanned again.[/dim]\n"
+            )
+
+    writer = None
+    slices: dict[str, dict] = {}  # the in-memory path: project -> slice
+    if use_streaming:
         writer = StreamingDiscoveryWriter(output_dir, ts)
         console.print(
             f"[dim]Streaming output (> {_STREAMING_THRESHOLD} projects) — bounded memory.[/dim]\n"
         )
 
+    def _emit(pid: str, slice_dict: dict) -> None:
+        if writer is not None:
+            writer.add(pid, slice_dict)
+        else:
+            slices[pid] = slice_dict
+
+    counter = {"n": 0}
+
+    # Projects taken from the saved run: what they recorded, read back as it was written.
+    for pid in reuse:
+        loaded = store.load(pid)
+        data = loaded[0]
+        counter["n"] += 1
+        all_errors.extend(data["errors"])
+        output_access.extend(row for row in data["access"] if row not in output_access)
+        _print_saved_line(pid, data["line"], counter["n"], total)
+        summaries.append(data["summary"])
+        _emit(pid, data["slice"])
+
+    def _finish(pid: str, res: dict, *, died: bool, stopped: bool) -> None:
+        """One scanned project is done: save it, print its line, add it to the output."""
+        counter["n"] += 1
+        summary = _summarise_project(pid, res)
+        slice_dict = slice_from_result(pid, res)
+        if store is not None and resume.should_save(stopped=stopped, died=died):
+            try:
+                store.save(
+                    pid,
+                    resume.project_checkpoint(
+                        pid, res, summary, slice_dict, off_by_project.get(pid), access_of.get(pid, [])
+                    ),
+                    partial=resume.is_partial(res),
+                )
+            except OSError as exc:  # a full disk must not end a scan that is otherwise working
+                logger.warning("Could not save the checkpoint of %s: %s", pid, exc)
+        all_errors.extend(res.get("errors", []))
+        _print_project_line(pid, res, counter["n"], total, off_by_project.get(pid))
+        summaries.append(summary)
+        _emit(pid, slice_dict)
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
-                _collect_project,
+                _collect_unless_stopped,
                 pid,
                 credentials,
                 regions,
                 enable_security,
                 org_assets.get(pid),
                 selected,
+                **({"growth_days": growth_days} if growth_days else {}),
                 **({"switched_off": off_by_project[pid]} if pid in off_by_project else {}),
             ): pid
-            for pid in projects
+            for pid in todo
         }
-        for idx, future in enumerate(as_completed(futures), 1):
+        for future in as_completed(futures):
             pid = futures[future]
+            died = False
             try:
                 res = future.result()
             except Exception as exc:  # a project that died entirely
-                from collectors.utils import collection_error
-
                 logger.error("Project %s collection failed: %s", pid, exc)
                 if failed is not None:
                     failed.append((pid, exc))
                 err = collection_error("*", exc)
                 err["project_id"] = pid
                 res = {"errors": [err]}
-
-            all_errors.extend(res.get("errors", []))
-            _print_project_line(pid, res, idx, total, off_by_project.get(pid))
-            summaries.append(_summarise_project(pid, res))
-
-            if writer is not None:
-                writer.add(pid, slice_from_result(pid, res))
-            else:
-                per_project[pid] = res
+                died = True
+            _finish(pid, res, died=died, stopped=stop_requested())
 
     # Keep the summary table in scan order regardless of completion order.
     order = {pid: i for i, pid in enumerate(projects)}
     summaries.sort(key=lambda s: order.get(s["project_id"], 0))
+    # In scan order, as an uninterrupted run lists them (sorted() is stable: each project's own rows
+    # keep their order). The rows of projects taken from the saved run were added after this run's.
+    rank = {pid: i for i, pid in enumerate(projects)}
+    output_access.sort(key=lambda row: rank.get(row.get("Owner"), len(rank)))
+    if access_out is not None:
+        access_out[:] = output_access
+    if gaps_out is not None:
+        gaps_out[:] = resume.gaps_of_errors(all_errors)
 
     if writer is not None:
         meta = {
@@ -1638,12 +2114,14 @@ def _collect_and_write(
             "projects_scanned": projects,
             "regions_in_scope": regions,
             "collection_errors": all_errors,
-            "access_check": access_rows or [],
+            "access_check": output_access,
         }
-        out_path = writer.finalize(meta=meta, filename=f"gcp-sizing-discovery-{ts}.json")
+        out_path = writer.finalize(
+            meta=meta, filename=f"gcp-sizing-discovery-{ts}.json", order=projects
+        )
     else:
-        result = _build_result(
-            projects, regions, per_project, collection_errors=all_errors, access_check=access_rows
+        result = _build_result_from_slices(
+            projects, regions, slices, collection_errors=all_errors, access_check=output_access
         )
         out_path = _write_output(result, output_dir)
 

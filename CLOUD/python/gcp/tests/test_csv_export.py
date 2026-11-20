@@ -329,7 +329,8 @@ def test_label_columns_are_the_union_in_first_seen_order_and_a_missing_label_is_
     assert dict(zip(header, vm2))["Label/Tag: zone_tag"] == "z"
 
 
-def test_empty_result_gives_empty_files_with_powershell_names():
+def test_empty_result_gives_empty_files_with_the_expected_names():
+    # gce_storage_info has no PowerShell file to match; the others keep PowerShell's names.
     assert build_csv_files({"projects_scanned": [], "compute": []}, "2026-10-06_120000") == {
         "gce_vm_info-2026-10-06_120000.csv": "",
         "gce_attached_disk_info-2026-10-06_120000.csv": "",
@@ -337,6 +338,7 @@ def test_empty_result_gives_empty_files_with_powershell_names():
         "gce_cloudsql_info-2026-10-06_120000.csv": "",
         "gce_spanner_info-2026-10-06_120000.csv": "",
         "gce_bigquery_info-2026-10-06_120000.csv": "",
+        "gce_storage_info-2026-10-06_120000.csv": "",
     }
 
 
@@ -500,6 +502,7 @@ def test_the_zip_log_and_csv_files_take_the_powershell_names(tmp_path):
             "gce_cloudsql_info-2026-10-06_175903.csv",
             "gce_spanner_info-2026-10-06_175903.csv",
             "gce_bigquery_info-2026-10-06_175903.csv",
+            "gce_storage_info-2026-10-06_175903.csv",
             "manifest.json",
             "output_gcp_2026-10-06_175903.log",
         ]
@@ -524,8 +527,9 @@ def test_a_mock_run_writes_the_zip_with_csv_files(monkeypatch, tmp_path):
     main.main()
     (archive,) = tmp_path.glob("gcp_sizing_results_*.zip")
     names = zipfile.ZipFile(archive).namelist()
-    assert sum(n.startswith("gce_") and n.endswith(".csv") for n in names) == 6
+    assert sum(n.startswith("gce_") and n.endswith(".csv") for n in names) == 7
     assert any(n.startswith("gce_bigquery_info-") for n in names)
+    assert any(n.startswith("gce_storage_info-") for n in names)
     assert any(n.startswith("output_gcp_") for n in names)
     assert sorted(p.name for p in tmp_path.iterdir()) == [archive.name]
 

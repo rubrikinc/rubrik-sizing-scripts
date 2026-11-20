@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional
 
 import boto3
+import checkpoint_core
 import csv_export
 import manifest_core
 import plans_json
@@ -141,6 +142,11 @@ def _print_box(lines: list[str], color: str = _C.CYAN) -> None:
 
 
 # ── Region scanning ───────────────────────────────────────────────────────────
+
+
+# The scan_errors "service" of a region that was not scanned at all, so --resume rescans its
+# account.
+REGION_SERVICE = "region"
 
 
 def _is_scp_denial(exc: Exception) -> bool:
@@ -252,8 +258,12 @@ def _scan_region(
             # they each have their own error handling.
             log.debug("Region %s: availability-zone probe denied, scanning anyway", region)
         else:
-            # Opt-in region not enabled, unreachable endpoint, etc.
-            log.debug("Region %s skipped: %s", region, exc)
+            # A region named with --regions that is not enabled, an unreachable endpoint, etc. Its
+            # resources are missing from the account, so the account is partial: recorded, not just
+            # logged.
+            log.warning("Region %s could not be scanned: %s", region, exc)
+            if tracker is not None:
+                tracker.record_permission_error(REGION_SERVICE, region, exc)
             return _EMPTY
 
     need_protected = bool(services & _BACKUP_PROTECTED_CONSUMERS)
@@ -525,6 +535,8 @@ def _scan_all_regions(
                         aggregated[key].append(value)
             except Exception as exc:
                 log.warning("Region %s scan failed: %s", region, exc)
+                if tracker is not None:
+                    tracker.record_permission_error(REGION_SERVICE, region, exc)
     return aggregated
 
 
@@ -703,7 +715,14 @@ def _package_results(
     title: str = "Org Scan Complete",
     collect_cost: bool = True,
     not_scanned: Optional[list[dict]] = None,
+    only: Optional[set] = None,
 ) -> str:
+    """Zip the account files in progress_dir (only those of ``only``, when given) with the CSV files.
+
+    ``only`` is the set of account folder names this run asked for: a progress folder can hold an
+    account an earlier, differently-scoped list had and this one dropped. An account file that
+    cannot be read is left out and named in the log, instead of ending the run after the scan.
+    """
     not_scanned = not_scanned or []
     stamp = stamp or _run_stamp()
     results: list[dict] = []
@@ -712,16 +731,21 @@ def _package_results(
     in_zip: dict[str, Any] = {}  # every data file written below, for the manifest
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for acct_id_dir in sorted(os.listdir(progress_dir)):
-            json_file = os.path.join(progress_dir, acct_id_dir, "aws_sizing_discovery.json")
+            if only is not None and acct_id_dir not in only:
+                continue
+            json_file = os.path.join(progress_dir, acct_id_dir, ACCOUNT_FILE)
             if os.path.exists(json_file):
-                # The raw JSON holds every real name, so an anonymized zip leaves it out.
-                if anonymizer is None:
+                try:
                     with open(json_file, "rb") as f:
                         raw = f.read()
-                    in_zip[f"{acct_id_dir}/aws_sizing_discovery.json"] = raw
-                    zf.writestr(f"{acct_id_dir}/aws_sizing_discovery.json", raw)
-                with open(json_file, encoding="utf-8") as f:
-                    discovery = json.load(f)
+                    discovery = json.loads(raw.decode("utf-8"))
+                except (OSError, ValueError) as exc:
+                    log.warning("Leaving out %s: its file cannot be read (%s)", acct_id_dir, exc)
+                    continue
+                # The raw JSON holds every real name, so an anonymized zip leaves it out.
+                if anonymizer is None:
+                    in_zip[f"{acct_id_dir}/{ACCOUNT_FILE}"] = raw
+                    zf.writestr(f"{acct_id_dir}/{ACCOUNT_FILE}", raw)
                 scanned.append(discovery)
                 # The plans come from every account file, resumed ones included, whether or not
                 # CSV files are written; an anonymized zip has no plans file either.
@@ -808,22 +832,137 @@ def _not_scanned_lines(not_scanned: list[dict], heading: str = "Not scanned:") -
 # ── Resume helpers ────────────────────────────────────────────────────────────
 
 
-def _find_latest_progress_dir(zip_dir: str) -> Optional[str]:
-    """Return the most-recent aws-sizing-progress-* directory, or None."""
-    dirs = sorted(glob.glob(os.path.join(zip_dir, "aws-sizing-progress-*")))
-    return dirs[-1] if dirs else None
+PROGRESS_PREFIX = "aws-sizing-progress"
+ACCOUNT_FILE = "aws_sizing_discovery.json"
 
 
-def _completed_account_ids(progress_dir: str) -> set:
-    """Return set of account IDs that already have a completed JSON in progress_dir."""
-    completed = set()
+def _progress_request(
+    scope: Optional[dict],
+    regions: Optional[list[str]],
+    exclude_regions: Optional[list[str]],
+    services: Optional[frozenset[str]],
+    collect_cost: bool,
+    bucket_name: str,
+) -> dict:
+    """What decides which accounts a run scans and what each one contributes.
+
+    A progress folder is resumed only by a run with the same request. --workers, --output, the
+    CSV and anonymization options are not in it: they change how the results are packaged, not
+    what an account's file holds.
+    """
+    return {
+        "tool": "aws",
+        "scope": scope or {},
+        "regions": sorted(regions) if regions else None,
+        "exclude_regions": sorted(exclude_regions) if exclude_regions else None,
+        "services": sorted(services) if services is not None else None,
+        "cost": bool(collect_cost),
+        "partition": partition_id(),
+        "query_region": query_region(),
+        # Each account's file records this, so a run without the upload must not resume one with it.
+        "s3_upload": bool(bucket_name),
+    }
+
+
+def _open_progress(
+    zip_dir: str,
+    *,
+    scope: Optional[dict],
+    regions: Optional[list[str]],
+    exclude_regions: Optional[list[str]],
+    services: Optional[frozenset[str]],
+    collect_cost: bool,
+    bucket_name: str,
+    mode: str,
+):
+    """Open this run's progress folder in zip_dir, or the unfinished one it can resume.
+
+    The account JSON is the checkpoint (it is also what the zip is built from), so the store keeps
+    the per-account layout. A previous run that cannot be resumed ends the run with what to do.
+    """
     try:
-        for entry in os.listdir(progress_dir):
-            if os.path.exists(os.path.join(progress_dir, entry, "aws_sizing_discovery.json")):
-                completed.add(entry)
-    except FileNotFoundError:
-        pass
-    return completed
+        store, _resumed = checkpoint_core.prepare(
+            zip_dir,
+            prefix=PROGRESS_PREFIX,
+            tool="aws",
+            request=_progress_request(
+                scope, regions, exclude_regions, services, collect_cost, bucket_name
+            ),
+            mode=mode,
+            code_version=runlog.core.code_version(os.path.dirname(os.path.abspath(__file__))),
+            envelope=False,
+            filename=ACCOUNT_FILE,
+            say=lambda text: log.info("%s", text),
+        )
+    except checkpoint_core.ResumeRefused as exc:
+        log.error("Cannot start: %s", exc)
+        runlog.core.end_run("not started: an unfinished run is in the way", [str(exc)])
+        print(f"\nCannot start: {exc}", file=sys.stderr)
+        sys.exit(2)
+    return store
+
+
+def _print_gaps(gaps: list, total: int, kept: bool) -> None:
+    """End the run by saying which accounts finished with gaps, and what to do about them.
+
+    An account that finished is complete as far as the scan got, not as far as the account goes: a
+    service that was denied or a region that could not be scanned leaves something out, and the
+    zip alone does not say so.
+    """
+    lines = checkpoint_core.gaps_summary("account", gaps, total, kept=kept)
+    if lines:
+        runlog.say("\n" + "\n".join(lines))
+
+
+def _close_progress(store, keep: bool) -> None:
+    """The zip is written: remove the progress folder, unless an account has no result yet.
+
+    An account that could not be signed in to, or whose scan stopped or was blocked by a service
+    control policy, has no file, so a later --resume can scan just those. The folder is then kept.
+    """
+    if store is None:
+        return
+    if keep:
+        log.info(
+            "Progress kept in %s: run again with --resume to scan the accounts that were not "
+            "finished.",
+            store.root,
+        )
+        return
+    store.finish()
+
+
+def _account_gaps(progress_dir: str, accounts: set) -> dict:
+    """``{account: why}`` for each of ``accounts`` whose file records scan errors (a partial scan).
+
+    ``why`` is the first error, as "service (region): error", and how many more follow it. An
+    account file that cannot be read is not counted: it is dropped at the start of a resume and
+    scanned again, and left out of the zip at the end.
+    """
+    gaps = {}
+    for acct in sorted(accounts):
+        try:
+            with open(
+                os.path.join(progress_dir, checkpoint_core.safe_unit_name(acct), ACCOUNT_FILE),
+                encoding="utf-8",
+            ) as f:
+                errors = json.load(f).get("scan_errors") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not errors:
+            continue
+        first = errors[0]
+        where = f" ({first['region']})" if first.get("region") else ""
+        why = f"{first.get('service', '?')}{where}: {str(first.get('error', ''))[:90]}"
+        if len(errors) > 1:
+            why += f" (+{len(errors) - 1} more)"
+        gaps[acct] = why
+    return gaps
+
+
+def _partial_accounts(progress_dir: str, accounts: set) -> set:
+    """The accounts among ``accounts`` whose file records permission errors (a partial scan)."""
+    return set(_account_gaps(progress_dir, accounts))
 
 
 # ── Core orchestration ────────────────────────────────────────────────────────
@@ -1156,9 +1295,10 @@ def run(
         access_check=access_rows,
     )
 
-    out_path = os.path.join(output_dir, "aws_sizing_discovery.json")
-    with open(out_path, "w") as f:
-        json.dump(_to_dict(result), f, indent=2, default=str)
+    out_path = os.path.join(output_dir, ACCOUNT_FILE)
+    # Written whole or not at all: this file is what a resume counts as a finished account, so a
+    # run killed while writing must not leave a half-written one behind.
+    checkpoint_core.write_json_atomic(out_path, _to_dict(result), indent=2)
     log.info("Discovery JSON written to %s", out_path)
 
     abs_path = os.path.abspath(out_path)
@@ -1216,12 +1356,22 @@ def _scan_accounts(
     access_check: bool = True,
     sign_in_permission: str = "",
     preflight_only: bool = False,
+    scope: Optional[dict] = None,
+    resume_mode: str = checkpoint_core.AUTO,
+    retry_partial: bool = True,
 ) -> str:
     """Scan every target (account or profile), a few in parallel, and zip the results.
 
     ``targets`` are ``{"id": account id or None, "name": ...}``; ``open_session`` turns one into
     a boto3 session (and may raise). A target without an id gets it from STS once its session is
-    open. Finished accounts are kept in a progress folder, so a rerun resumes where it stopped.
+    open. Finished accounts are kept in a progress folder, so a rerun can resume where it stopped.
+
+    ``scope`` says how the targets were chosen (the mode, role, account list), and with the regions,
+    services and cost option it is the fingerprint of the run: a progress folder is resumed only by
+    a run with the same one. ``resume_mode`` is the checkpoint core's AUTO, RESUME or FRESH, and
+    ``retry_partial`` (the default) scans again the accounts that finished with permission errors or
+    a region that could not be scanned, so a gap cannot hide behind "saved"; ``--keep-partial``
+    turns it off.
 
     Every account that is not scanned (no sign-in, a scan that stopped, a service control policy)
     keeps rows in the pre-flight CSV and is listed by name at the end. ``sign_in_permission`` is
@@ -1233,15 +1383,50 @@ def _scan_accounts(
     abs_zip_dir = os.path.abspath(zip_dir)
     stamp = stamp or _run_stamp()
     completed_ids: set = set()
+    store = None
     progress_dir = ""
     if preflight_only:
         zip_path = os.path.join(abs_zip_dir, _access_zip_name(stamp))
         log.info("Access check only: nothing is collected and no progress folder is used")
     else:
-        existing_dir = _find_latest_progress_dir(abs_zip_dir)
-        completed_ids = _completed_account_ids(existing_dir) if existing_dir else set()
+        store = _open_progress(
+            abs_zip_dir,
+            scope=scope,
+            regions=regions,
+            exclude_regions=exclude_regions,
+            services=services,
+            collect_cost=collect_cost,
+            bucket_name=bucket_name,
+            mode=resume_mode,
+        )
+        progress_dir = store.root
+        completed_ids = set(store.completed())
+        partial_ids = _partial_accounts(progress_dir, completed_ids)
+        if retry_partial and partial_ids:
+            for acct in partial_ids:
+                # Its old file must not be zipped if the new scan of the account fails: an account
+                # that cannot be scanned again is then missing, which the run says, and not quietly
+                # present with the gaps of the earlier run. (The zip is also built only from
+                # accounts that ended with a file in this run, which keeps it out too; removing the
+                # file as well keeps the progress folder true to what is in it. No test pins this
+                # one: it changes nothing a run can observe.)
+                try:
+                    os.unlink(store.unit_path(acct))
+                except OSError:
+                    pass
+            completed_ids -= partial_ids
+            log.info(
+                "%d account(s) finished with gaps in the earlier run and are scanned again "
+                "(add --keep-partial to keep them as they were)",
+                len(partial_ids),
+            )
+        elif partial_ids:
+            log.info(
+                "%d account(s) finished with gaps in the earlier run and are kept as they were "
+                "because of --keep-partial; their gaps are still in the results",
+                len(partial_ids),
+            )
         if completed_ids:
-            progress_dir = existing_dir
             targets = [t for t in targets if not t.get("id") or t["id"] not in completed_ids]
             log.info(
                 "Resuming from %s — %d already complete, %d remaining",
@@ -1250,13 +1435,10 @@ def _scan_accounts(
                 len(targets),
             )
         else:
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            progress_dir = os.path.join(abs_zip_dir, f"aws-sizing-progress-{timestamp}")
-            os.makedirs(progress_dir, exist_ok=True)
             log.info("Progress dir: %s  (kept on disk if interrupted)", progress_dir)
         runlog.set_stop_hint(
-            f"Accounts that finished are kept in {progress_dir}; run the same command again to "
-            "resume."
+            f"Accounts that finished are kept in {progress_dir}; run the same command again with "
+            "--resume to carry on."
         )
         zip_path = os.path.join(abs_zip_dir, _zip_name(stamp))
 
@@ -1264,6 +1446,9 @@ def _scan_accounts(
     log.info("Scanning %d remaining accounts (parallel workers: %d)", len(targets), max_workers)
     counter = {"done": len(completed_ids)}
     started: set[str] = set()
+    # The accounts the zip is built from: the ones taken from the saved run, and each one scanned
+    # now that ends with a file (a profile's account id is known only once it has signed in).
+    this_run: set[str] = set(completed_ids)
     not_scanned: list[dict] = []
     checked_rows: list[dict] = []
     lock = threading.Lock()
@@ -1324,7 +1509,7 @@ def _scan_accounts(
 
         log.info("[%d/%d] [%s / %s] Starting scan...", n, total, acct_id, name)
         try:
-            acct_dir = os.path.join(progress_dir, acct_id)
+            acct_dir = os.path.join(progress_dir, checkpoint_core.safe_unit_name(acct_id))
             os.makedirs(acct_dir, exist_ok=True)
             tracker = DenialTracker()
             json_path = run(
@@ -1371,6 +1556,8 @@ def _scan_accounts(
                     f"{acct_id}/aws_sizing_discovery.json",
                     bucket_region,
                 )
+            with lock:
+                this_run.add(acct_id)
             log.info("[%d/%d] [%s] ✓ done", n, total, acct_id)
             return "ok"
         except Exception as exc:
@@ -1411,7 +1598,7 @@ def _scan_accounts(
     log.info(
         "%s scan complete — %d/%d succeeded, %d failed / skipped", label, success, total, failed
     )
-    return _package_results(
+    zip_path = _package_results(
         progress_dir,
         zip_path,
         success,
@@ -1423,7 +1610,13 @@ def _scan_accounts(
         title=f"{label} Scan Complete",
         collect_cost=collect_cost,
         not_scanned=not_scanned,
+        only=({checkpoint_core.safe_unit_name(a) for a in this_run} if this_run else None),
     )
+    gaps = _account_gaps(progress_dir, this_run)
+    kept = bool(not_scanned) or bool(gaps)
+    _close_progress(store, kept)
+    _print_gaps(sorted(gaps.items()), len(this_run) + len(not_scanned), kept)
+    return zip_path
 
 
 def _access_rows_of(json_path: str) -> list[dict]:
@@ -1501,6 +1694,8 @@ def run_org(
     stamp: Optional[str] = None,
     access_check: bool = True,
     preflight_only: bool = False,
+    resume_mode: str = checkpoint_core.AUTO,
+    retry_partial: bool = True,
 ) -> str:
     """Scan accounts via sts:AssumeRole, scanning up to max_workers accounts in parallel.
 
@@ -1575,6 +1770,9 @@ def run_org(
         access_check=access_check,
         sign_in_permission="sts:AssumeRole",
         preflight_only=preflight_only,
+        scope={"mode": "org", "role": role_name, "accounts": sorted(account_ids or [])},
+        resume_mode=resume_mode,
+        retry_partial=retry_partial,
     )
 
 
@@ -1593,6 +1791,8 @@ def run_profiles(
     stamp: Optional[str] = None,
     access_check: bool = True,
     preflight_only: bool = False,
+    resume_mode: str = checkpoint_core.AUTO,
+    retry_partial: bool = True,
 ) -> str:
     """Scan the account behind each local profile (PowerShell's ``-AllLocalProfiles`` and
     ``-UserSpecifiedProfileNames``). Two profiles that reach the same account give one result."""
@@ -1618,6 +1818,9 @@ def run_profiles(
         access_check=access_check,
         sign_in_permission="sts:GetCallerIdentity",
         preflight_only=preflight_only,
+        scope={"mode": "profiles", "profiles": sorted(profiles)},
+        resume_mode=resume_mode,
+        retry_partial=retry_partial,
     )
 
 
@@ -1816,6 +2019,8 @@ def run_org_sso(
     stamp: Optional[str] = None,
     access_check: bool = True,
     preflight_only: bool = False,
+    resume_mode: str = checkpoint_core.AUTO,
+    retry_partial: bool = True,
 ) -> str:
     """Scan accounts using IAM Identity Center (SSO) credential vending, in parallel.
 
@@ -1874,6 +2079,14 @@ def run_org_sso(
         access_check=access_check,
         sign_in_permission="sso:GetRoleCredentials",
         preflight_only=preflight_only,
+        scope={
+            "mode": "sso",
+            "start_url": sso_start_url,
+            "role": role_name,
+            "accounts": sorted(account_ids or []),
+        },
+        resume_mode=resume_mode,
+        retry_partial=retry_partial,
     )
 
 
@@ -2258,6 +2471,27 @@ examples:
     parser.add_argument(
         "--workers", type=int, default=8, help="Number of accounts to scan in parallel (default: 8)"
     )
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        action="store_true",
+        help="Carry on with the unfinished multi-account run in the output folder: accounts it "
+        "finished are not scanned again. Needs the same options as that run. Without --resume or "
+        "--fresh, a terminal is asked what to do; a run with no terminal stops until one is given.",
+    )
+    resume_group.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Delete the unfinished multi-account run in the output folder and scan everything "
+        "again.",
+    )
+    parser.add_argument(
+        "--keep-partial",
+        action="store_true",
+        help="With --resume, keep the accounts the earlier run finished with permission errors or "
+        "a region it could not scan, instead of scanning them again (the default). The zip then "
+        "holds them with their gaps.",
+    )
     parser.add_argument(
         "--assume-role",
         default="",
@@ -2303,6 +2537,13 @@ def _main(argv: Optional[list[str]] = None) -> None:
         parser.error("--preflight-only runs only the access check, so it cannot skip it")
     if args.preflight_only and args.no_csv:
         parser.error("--preflight-only writes only the access-check CSV, so it cannot use --no-csv")
+    if args.keep_partial and not args.resume:
+        parser.error(
+            "--keep-partial keeps what an earlier run finished with gaps instead of scanning it "
+            "again, so it needs --resume"
+        )
+    if (args.resume or args.fresh) and args.preflight_only:
+        parser.error("--resume and --fresh apply to a scan, not to --preflight-only")
     if args.sso and not args.role_name:
         parser.error(
             "--sso needs --role-name: the IAM Identity Center permission set assigned to you in the "
@@ -2412,6 +2653,12 @@ def _main(argv: Optional[list[str]] = None) -> None:
         stamp=stamp,
         access_check=not args.no_preflight,
         preflight_only=args.preflight_only,
+        resume_mode=(
+            checkpoint_core.FRESH
+            if args.fresh
+            else checkpoint_core.RESUME if args.resume else checkpoint_core.AUTO
+        ),
+        retry_partial=not args.keep_partial,
     )
     if args.sso:
         zip_path = run_org_sso(

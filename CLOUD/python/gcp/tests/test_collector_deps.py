@@ -26,6 +26,7 @@ DEFERRED_COLLECTOR_IMPORTS = [
     ("google.cloud.asset_v1", "google-cloud-asset"),
     ("google.cloud.compute_v1", "google-cloud-compute"),
     ("google.cloud.storage", "google-cloud-storage"),
+    ("google.cloud.monitoring_v3", "google-cloud-monitoring"),
     ("google.cloud.backupdr_v1", "google-cloud-backupdr"),
     ("google.cloud.spanner_admin_instance_v1", "google-cloud-spanner"),
     ("google.cloud.spanner_admin_database_v1", "google-cloud-spanner"),

@@ -85,8 +85,44 @@ def _result():
     }
 
 
+def _without_python_only_columns(text: str) -> list[str]:
+    """The file's lines with the columns PowerShell does not write removed.
+
+    ``ExternalCloud`` is a deliberate break from PowerShell parity: it marks BigQuery Omni tables
+    whose data is in S3 or Azure Blob. Every other column must still be PowerShell's, byte for byte.
+    """
+    lines = text.splitlines()
+    header = next(csv.reader(io.StringIO(lines[0])))
+    drop = {header.index(name) for name in PYTHON_ONLY_COLUMNS if name in header}
+    # Cells are split raw, because the file quotes every cell except an empty (null) one, which is
+    # a bare empty field, and that difference is part of what the test checks.
+    return [
+        ",".join(cell for i, cell in enumerate(_split_raw(line)) if i not in drop) for line in lines
+    ]
+
+
+def _split_raw(line: str) -> list[str]:
+    """A CSV line's cells exactly as written, quotes kept, so a bare empty cell stays bare."""
+    cells, current, quoted = [], "", False
+    for char in line:
+        if char == '"':
+            quoted = not quoted
+            current += char
+        elif char == "," and not quoted:
+            cells.append(current)
+            current = ""
+        else:
+            current += char
+    cells.append(current)
+    return cells
+
+
+# Columns this tool writes that Get-GCPBigQueryInventory does not.
+PYTHON_ONLY_COLUMNS = ("ExternalCloud",)
+
+
 def test_the_file_matches_what_the_powershell_script_writes():
-    lines = build_csv_files(_result(), "S")["gce_bigquery_info-S.csv"].splitlines()
+    lines = _without_python_only_columns(build_csv_files(_result(), "S")["gce_bigquery_info-S.csv"])
     assert lines == [
         '"Project","DatasetId","Location","TableId","TableType","NumRows","NumberOfColumns","TotalLogicalSizeBytes","TotalLogicalSizeGb","TotalLogicalSizeTb","TotalLogicalSizeGiB","TotalLogicalSizeTiB","ActiveLogicalSizeBytes","ActiveLogicalSizeGb","ActiveLogicalSizeTb","ActiveLogicalSizeGiB","ActiveLogicalSizeTiB","LongTermLogicalSizeBytes","LongTermLogicalSizeGb","LongTermLogicalSizeTb","LongTermLogicalSizeGiB","LongTermLogicalSizeTiB","ExternalSourceFormat","ExternalSourceUri","CreationTime","LastModifiedTime","Label/Tag: dataset_a_b","Label/Tag: team","Label/Tag: dataset_team"',
         '"proj-a","analytics","US","events","TABLE","1200000","14","5000000000","5","0.005","4.6566","0.004547","3000000000","3","0.003","2.794","0.002728","2000000000","2","0.002","1.8626","0.001819","","","2025-01-15T09:30:00Z","2025-10-01T04:00:00Z","1","override","t"',

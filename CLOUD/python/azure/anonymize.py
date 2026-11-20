@@ -41,6 +41,8 @@ DEFAULT_FIELDS: tuple[str, ...] = (
     "ProtectionPolicyName",
     "Id",
     "SourceResourceId",
+    # Not in PowerShell's list: Az.RecoveryServices 7.x writes the VM's subscription id here.
+    "ContainerSubscriptionId",
     "ContainerName",
     "FriendlyName",
     "ServerName",

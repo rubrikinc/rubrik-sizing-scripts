@@ -12,7 +12,9 @@ project at a time:
      (one JSON object per line) and the in-memory object is dropped.
   2. ``finalize`` streams the canonical combined JSON from the shard — writing
      the category arrays (compute/storage/databases/backup_posture) by reading
-     the shard back one line at a time, never holding them all at once.
+     the shard back one line at a time, never holding them all at once. Projects
+     finish in any order, so ``finalize(order=...)`` seeks to them in the scan
+     order, using the byte offsets recorded as they were added.
 
 The output file is byte-for-byte the same grouped schema ``main._write_output``
 produces, so the (future) SE-side report reader is unaffected — this is purely a
@@ -42,7 +44,10 @@ class StreamingDiscoveryWriter:
         self._output_dir = output_dir
         self._timestamp = timestamp
         self._shard_path = output_dir / f".gcp-sizing-shard-{timestamp}.ndjson"
-        self._shard = self._shard_path.open("w", encoding="utf-8")
+        # Binary, so each slice's byte offset is known and finalize can read them in any order.
+        self._shard = self._shard_path.open("wb")
+        self._pos = 0
+        self._entries: list[tuple[str, int]] = []  # (project_id, byte offset), as added
         self._asset_counts: dict[str, Any] = {}
         self._project_count = 0
 
@@ -58,8 +63,10 @@ class StreamingDiscoveryWriter:
         """
         if slice_dict.get("asset_counts") is not None:
             self._asset_counts[project_id] = slice_dict["asset_counts"]
-        self._shard.write(json.dumps(slice_dict, default=str))
-        self._shard.write("\n")
+        data = (json.dumps(slice_dict, default=str) + "\n").encode("utf-8")
+        self._entries.append((project_id, self._pos))
+        self._shard.write(data)
+        self._pos += len(data)
         self._project_count += 1
 
     def finalize(
@@ -68,6 +75,7 @@ class StreamingDiscoveryWriter:
         meta: dict[str, Any],
         filename: str,
         keep_shard: bool = False,
+        order: Optional[list[str]] = None,
     ) -> pathlib.Path:
         """Stream the combined grouped JSON to ``filename`` and remove the shard.
 
@@ -76,12 +84,16 @@ class StreamingDiscoveryWriter:
                 organization_id, projects_scanned, regions_in_scope).
             filename: Output file name within the writer's output dir.
             keep_shard: If True, leave the NDJSON shard on disk (debugging).
+            order: Project IDs in the order their entries should be written (the scan order).
+                Slices arrive as projects finish, which is not the scan order; without this the
+                file lists them as they arrived. A project not named here goes last.
 
         Returns:
             Path to the written combined JSON file.
         """
         self._shard.close()
         out_path = self._output_dir / filename
+        entries = self._ordered(order)
 
         with out_path.open("w", encoding="utf-8") as f:
             f.write("{\n")
@@ -95,7 +107,7 @@ class StreamingDiscoveryWriter:
             for i, category in enumerate(_CATEGORIES):
                 f.write(f"  {json.dumps(category)}: [")
                 first = True
-                for entry in self._iter_category(category):
+                for entry in self._iter_category(category, entries):
                     f.write("\n    " if first else ",\n    ")
                     f.write(json.dumps(entry, default=str))
                     first = False
@@ -111,11 +123,19 @@ class StreamingDiscoveryWriter:
 
         return out_path
 
-    def _iter_category(self, category: str):
+    def _ordered(self, order: Optional[list[str]]) -> list[tuple[str, int]]:
+        """The shard entries in output order: as added, or sorted by ``order`` (stable)."""
+        if not order:
+            return list(self._entries)
+        rank = {project_id: i for i, project_id in enumerate(order)}
+        return sorted(self._entries, key=lambda entry: rank.get(entry[0], len(rank)))
+
+    def _iter_category(self, category: str, entries: list[tuple[str, int]]):
         """Yield each project's value for ``category`` from the shard, one at a time."""
-        with self._shard_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
+        with self._shard_path.open("rb") as f:
+            for _project_id, offset in entries:
+                f.seek(offset)
+                line = f.readline().strip()
                 if not line:
                     continue
                 slice_dict = json.loads(line)

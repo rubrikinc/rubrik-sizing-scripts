@@ -5,7 +5,7 @@ All GCP SDK calls are mocked — no credentials or live APIs are needed.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,20 @@ PROJECT_ID = "test-project-123"
 ORG_ID = "123456789"
 ZONE = "us-central1-a"
 REGION = "us-central1"
+
+
+@pytest.fixture(autouse=True)
+def no_real_monitoring_calls():
+    """Cloud Monitoring is never reached from a test.
+
+    The storage collector asks Monitoring for bucket sizes. Without this, a test that only
+    patches the Storage client would send a real request to Google with fake credentials (and
+    get a 401). A test that wants Monitoring data patches ``MetricServiceClient`` itself, which
+    replaces this.
+    """
+    refused = MagicMock(side_effect=RuntimeError("a test reached the real Cloud Monitoring API"))
+    with patch("google.cloud.monitoring_v3.MetricServiceClient", refused):
+        yield
 
 
 @pytest.fixture

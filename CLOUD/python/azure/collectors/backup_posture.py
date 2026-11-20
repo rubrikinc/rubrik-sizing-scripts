@@ -33,6 +33,23 @@ from collectors.utils import (
 logger = logging.getLogger(__name__)
 
 
+def rest_payload(props: object) -> dict:
+    """The REST (camelCase) form of an SDK model's ``properties``, or ``{}`` when it has none.
+
+    The SDK's models serialise with ``as_dict()``; anything else (a test double, ``None``) gives an
+    empty dict so a collector never fails on a payload it cannot read.
+    """
+    as_dict = getattr(props, "as_dict", None)
+    if not callable(as_dict):
+        return {}
+    try:
+        payload = as_dict()
+    except Exception as exc:  # noqa: BLE001 - best effort, the typed fields still work
+        logger.debug("Could not read the REST payload of %s: %s", type(props).__name__, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 #: Azure backup management type → human-readable workload label.
 _WORKLOAD_TYPE_MAP: dict[str, str] = {
     "AzureIaasVM": "VM",
@@ -92,6 +109,10 @@ class BackupPolicy:
     weekly_retention_weeks: Optional[int]
     monthly_retention_months: Optional[int]
     yearly_retention_years: Optional[int]
+    # The policy's REST ``properties`` as the API returned them (camelCase keys). The
+    # ``azure_backup_vault_*_policies`` files are built from them, as
+    # ``Get-AzRecoveryServicesBackupProtectionPolicy`` shows a policy. Empty when unavailable.
+    rest_properties: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -112,6 +133,10 @@ class ProtectedItem:
     protection_state: str  # Protected / ProtectionStopped / etc.
     source_resource_id: Optional[str]  # ARM ID of the protected resource (e.g. the VM)
     friendly_name: Optional[str] = None  # an Azure Files item's share name
+    # The item's REST ``properties`` as the API returned them (camelCase keys). The
+    # ``azure_backup_vault_*_items`` files are built from them, as ``Get-AzRecoveryServicesBackupItem``
+    # shows an item. Empty when unavailable.
+    rest_properties: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -356,6 +381,7 @@ class BackupPostureCollector:
                             weekly_retention_weeks=weekly,
                             monthly_retention_months=monthly,
                             yearly_retention_years=yearly,
+                            rest_properties=rest_payload(props),
                         )
                     )
                 except Exception as exc:
@@ -395,20 +421,33 @@ class BackupPostureCollector:
                     policy_id: Optional[str] = getattr(props, "policy_id", None)
                     policy_name = parse_resource_name(policy_id) if policy_id else None
 
+                    # The API sends a VM item's discriminator as "Microsoft.Compute/virtualMachines",
+                    # which the SDK does not map to AzureIaaSVMProtectedItem, so it builds the base
+                    # ProtectedItem: the VM-only fields are then only in the REST payload.
+                    rest = rest_payload(props)
+
                     # The ARM ID of the underlying protected resource (e.g. the VM).
                     # Field name varies by item type — check both common aliases.
-                    source_resource_id: Optional[str] = getattr(
-                        props, "source_resource_id", None
-                    ) or getattr(props, "virtual_machine_id", None)
+                    source_resource_id: Optional[str] = (
+                        getattr(props, "source_resource_id", None)
+                        or getattr(props, "virtual_machine_id", None)
+                        or rest.get("virtualMachineId")
+                    )
 
-                    last_backup_time_raw = getattr(props, "last_backup_time", None)
+                    last_backup_time_raw = getattr(props, "last_backup_time", None) or rest.get(
+                        "lastBackupTime"
+                    )
                     last_backup_time: Optional[str] = (
                         last_backup_time_raw.isoformat()
                         if isinstance(last_backup_time_raw, datetime)
                         else (str(last_backup_time_raw) if last_backup_time_raw else None)
                     )
 
-                    protection_state = enum_text(getattr(props, "protection_state", None)) or "Unknown"
+                    protection_state = (
+                        enum_text(getattr(props, "protection_state", None))
+                        or rest.get("protectionState")
+                        or "Unknown"
+                    )
 
                     items.append(
                         ProtectedItem(
@@ -421,7 +460,8 @@ class BackupPostureCollector:
                             subscription_id=self._sub_id,
                             policy_name=policy_name,
                             policy_id=policy_id,
-                            last_backup_status=getattr(props, "last_backup_status", None),
+                            last_backup_status=enum_text(getattr(props, "last_backup_status", None))
+                            or rest.get("lastBackupStatus"),
                             last_backup_time=last_backup_time,
                             protection_state=protection_state,
                             source_resource_id=source_resource_id,
@@ -430,6 +470,7 @@ class BackupPostureCollector:
                                 if workload_type == "Files"
                                 else None
                             ),
+                            rest_properties=rest,
                         )
                     )
                 except Exception as exc:

@@ -28,7 +28,7 @@ const commandLine = (script) => script.split("\n").filter((l) => l.startsWith("p
 const base = { outDir: "./output", cloud: "auto", noCost: true, noDevops: true };
 const tools = {
   aws: { ...base, mode: "single", services: [] },
-  azure: { ...base, mode: "current", subs: "" },
+  azure: { ...base, mode: "current", subs: "", subNames: "", mgs: "" },
   gcp: { ...base, mode: "current", collectors: ["asset", "compute", "storage", "database", "bigquery", "backup"] },
 };
 
@@ -100,6 +100,20 @@ check("azure: --subs mode lists the IDs it will scan and checks each against az"
 for (const mode of ["current", "all"]) {
   check(`azure: ${mode} mode has no subscription listing`, !azure.g.buildScript({ ...tools.azure, mode }).includes("for id in"));
 }
+// The tool scans every subscription when no scope flag is given, so each mode must say what it means.
+check("azure: current mode passes --current-subscription, so it cannot scan everything by accident",
+  commandLine(azure.g.buildScript({ ...tools.azure, mode: "current" })).includes("--current-subscription"));
+check("azure: all mode passes --all and not --current-subscription",
+  commandLine(azure.g.buildScript({ ...tools.azure, mode: "all" })).includes("--all") && !commandLine(azure.g.buildScript({ ...tools.azure, mode: "all" })).includes("--current-subscription"));
+const names = azure.g.buildScript({ ...tools.azure, mode: "names", subNames: "Azure subscription 1,Prod (East)" });
+check("azure: names mode quotes names with spaces and gives valid bash",
+  commandLine(names).includes("--subscriptions 'Azure subscription 1,Prod (East)'") && validBash(names, "azure-names"));
+check("azure: names mode refuses a quote, dollar sign or backslash in a name",
+  ["it's", "a$b", "a\\b", "a`b"].every((n) => azure.g.validate({ ...tools.azure, mode: "names", subNames: n }).length > 0));
+const mgs = azure.g.buildScript({ ...tools.azure, mode: "mgs", mgs: "mg-prod,mg-dev" });
+check("azure: management-groups mode passes --management-groups and gives valid bash", commandLine(mgs).includes("--management-groups 'mg-prod,mg-dev'") && validBash(mgs, "azure-mgs"));
+check("azure: names and management-groups modes ask for their field",
+  azure.g.validate({ ...tools.azure, mode: "names", subNames: "" }).length > 0 && azure.g.validate({ ...tools.azure, mode: "mgs", mgs: "" }).length > 0);
 
 // Where OUT_DIR points when the script is run from another folder: the script's lines up to OUT_DIR.
 function outDirOf(script, label) {

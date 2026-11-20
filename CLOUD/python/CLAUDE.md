@@ -10,7 +10,7 @@ contract B, per-cloud AWS/AZ/GCP, anonymizer D).
 | Path | Purpose |
 |------|---------|
 | `aws/`, `azure/`, `gcp/` | One tool per cloud: `main.py`, `collectors/`, `models/`, `tests/` |
-| `common/` | Shared helpers: CSV writer, size units (`units.py`), retry, the pre-flight core (`preflight.py`) and the run-log core (`runlog.py`), each copied into the tools as `preflight_core.py` and `runlog_core.py`. Only those two cores are used by the tools |
+| `common/` | Shared helpers: CSV writer, size units (`units.py`), retry, the pre-flight core (`preflight.py`), the run-log core (`runlog.py`) and the checkpoint core (`checkpoint.py`), each copied into the tools as `preflight_core.py`, `runlog_core.py` and `checkpoint_core.py`. Only those three cores (and `manifest.py`) are used by the tools |
 | `contract/` | Per-file CSV columns extracted from the PowerShell code, plus header checks (see its README) |
 | `docs/powershell-parameter-mapping.md` | Every PowerShell parameter and its Python flag, or the task that closes the gap |
 | `README.md`, `docs/user-guide.md`, `docs/troubleshooting.md`, `docs/permissions.md`, `docs/logging.md` | The user-facing documentation; each tool's `tests/test_docs.py` and `tests/bootstrap/test_docs.py` fail when it drifts from the code |
@@ -120,6 +120,62 @@ python -m common.consolidate ./runs                    # one CSV per kind from s
   Glue and S3 Tables names there stay readable unless named with `--anonymize-fields`.
 - **Consolidate** (`common/consolidate.py`) ports `consolidate.ps1` for all three clouds.
 
+## Resuming a scan
+
+Each tool saves every finished unit (AWS account, Azure subscription, GCP project) in a progress folder inside the output
+folder, and `--resume` scans only the missing ones. `common/checkpoint.py` is the shared core (byte-identical copy
+`checkpoint_core.py` in each tool, drift-tested like the other cores); each tool has a thin layer on top: `gcp/resume.py`,
+`azure/resume.py`, and for AWS the helpers in `aws/main.py`. Read `docs/user-guide.md` ("Resuming an interrupted scan") for
+what a user sees. The rules below are not visible from the code and each one came from a bug:
+
+- **Atomic writes.** `write_json_atomic` (temp file, fsync, rename). AWS's account file was written in place, so a run killed
+  mid-write left a truncated file that counted as finished and made the final zip step fail after the whole scan.
+- **A fingerprint, and an explicit decision.** The manifest holds a fingerprint of the options that decide what a unit holds.
+  A run with other options is refused. An unfinished run is never continued silently: a terminal is asked, and with none the
+  run stops until `--resume` or `--fresh` says what to do. AWS used to resume the newest folder whatever created it, which
+  zipped one scan's accounts into another's results.
+- **What is in the fingerprint.** Only what changes a unit's contents. `--workers`, `--output` and the CSV and anonymization
+  options are not in it. The resolved list of units is in it for AWS (it scans exactly the accounts given) and not for
+  Azure and GCP (an "all" scan may see a few more or fewer the second time); how the scope was asked for ("all", "named",
+  "current") is.
+- **When a unit is saved.** Not when it died, and not when it ended after a stop was asked for: GCP's BigQuery collector
+  records "the run was stopped" as an error and returns what it has, which is cut off, not finished. A unit that finished
+  with gaps is saved as partial and rescanned by `--resume` (`--keep-partial` keeps it). "Partial" means: AWS, the account
+  file has `scan_errors`, which a failed region now adds (an SCP-denied region does not: orgs routinely deny regions);
+  Azure, a warning was logged for the subscription during its scan (`gaps.py` counts them: every warning in the scan
+  collectors is something left out) or the access check found a service it could not read; GCP, a collector recorded an
+  error.
+- **When the folder is removed.** When every unit has a full result. It is kept (marked unfinished) when any has none,
+  including a named unit the sign-in could not read, and when any finished with gaps, so a later `--resume` picks them up
+  once the cause is fixed. The second half is what makes rescanning partial units by default mean anything: without it a
+  run whose every unit finished, some with gaps, deleted its folder and the rescan could never run.
+- **A unit saved as complete is not necessarily complete.** The collectors keep going when a call fails (the repo's
+  graceful-degradation rule), so "saved" means the scan ran to the end, not that it found everything. Every tool records
+  what it can: AWS `scan_errors` (including a failed region), Azure the warnings logged for the subscription
+  (`gaps.py`), GCP the collector errors. What none can record is a failure that neither raises nor logs. AWS also has
+  collector paths that swallow an error without recording it (a throttled backup-plan read is one); only the ones that
+  reach the tracker make an account partial. Treat the gaps summary at the end of a run as the signal, and an empty one
+  as "nothing recorded", not as proof that nothing is missing.
+- **The gaps summary is tested through the real `main()`.** Azure's call to it was missing in the first version of the
+  wiring: every unit test of the pieces passed, and the summary would never have printed. Only an end-to-end test that
+  reads the screen catches that. The summary text lives once in `checkpoint_core.gaps_summary`, so the three tools say it
+  the same way; each tool supplies its own `(unit, why)` pairs.
+- **A resumed run writes the same output as an uninterrupted one.** Units are written in scan order, not completion order
+  (`streaming_writer.finalize(order=...)`, a stable sort of the access rows, `_merge_scans`). The end-to-end tests compare
+  the two JSON documents; this caught the access-row order in both Azure and GCP.
+- **Azure reads a saved subscription back as `resume.Saved`, not as the 48 dataclasses.** It answers attribute reads, wraps
+  nested dataclasses by their declared type, and is deliberately not a dict: `DataProtectionInventory.items` and
+  `KeyVault.keys` are fields named like dict methods. `test_resume_saved.py` builds a populated instance of every
+  collector dataclass from its type hints and compares every attribute; a new dataclass is covered automatically, and a
+  new `@property` on one fails a test until `Saved` learns it.
+- **Azure saves only the scan.** What runs after it (tag names, AKS, Cosmos DB, Backup Vaults, containers, Key Vaults,
+  Defender, Purview) runs again for every subscription on a resume. Saving it too would mean restructuring `_main`'s stages,
+  which changes the console order and the failure scope of the Defender/Purview/Site Recovery block, and `--mock` fixtures
+  are not in the public checkout to test it.
+- **Test a rule by breaking it.** Several of these tests passed with the behavior they protect removed (a test that checked
+  the source text for a function name; one whose stub produced no rows to lose). The mutation scripts that found them are
+  not kept in the repo: when you change one of these rules, comment the rule out and confirm a test fails.
+
 ## Pre-flight access check
 
 Every run first checks what the signed-in identity can read, so the report says which output files the scan
@@ -217,8 +273,9 @@ will fill and which it will leave empty or partial. `--no-preflight` skips the c
   on every line, and removed only after it is in the zip. Every way a run ends writes one `Run ended: ...` line through
   `runlog_core` (`finished()` after the digest, `crashed()` from the `main()` wrapper, and the signal handlers from
   `install_stop_handlers()` for Ctrl-C, `SIGTERM` and `SIGHUP`, which exit with `os._exit(128 + signal)` because
-  `sys.exit` waits for worker threads). A log with no `Run ended` line was killed outright. AWS sets a stop hint with the
-  progress folder so a multi-account scan can be resumed. The tests send real signals to a child process.
+  `sys.exit` waits for worker threads). A log with no `Run ended` line was killed outright. All three tools set a stop hint
+  with the progress folder so a stopped scan can be resumed (see "Resuming a scan"). The tests send real signals to a
+  child process.
 - **Adding a fix for an error.** Add a `Solution` to the tool's `runlog.py` and a section with a matching
   `<a id="..."></a>` anchor to `docs/troubleshooting.md`; the tool's `tests/test_docs.py` fails without the section.
 - **Adding an option, permission or output file** means adding it to `docs/user-guide.md` or `docs/permissions.md`;
@@ -482,8 +539,12 @@ JSON keeps its `rubrik-discovery-<stamp>.json` name. Use `--no-csv` for JSON onl
   `azure_postgres_info`, `azure_sql_info`, `azure_mi_sql_info`, `azure_sizing_summary`, and, when
   `azure-mgmt-dataprotection` is installed, the three `azure_backup_data_protection_*` files, plus the
   JSON `azure_mi_db_items`; with `--get-container-details`, `azure_storage_account_container_info`, and with
-  `--get-key-vault-amounts`, `azure_key_vault`. Not written yet: the Recovery Services item CSVs and policy
-  JSON files.
+  `--get-key-vault-amounts`, `azure_key_vault`. The Recovery Services item CSVs
+  (`azure_backup_vault_{VM,VM_SQL,Azure_SQL_Database,Azure_Files}_items`) and policy JSON files
+  (`..._policies`; the SQL Database and Files ones are spelled `_Policies`) are written from the SDK's raw REST
+  payload, in the property order of Az.RecoveryServices 7.15.0. Checked against real Az output for VM and Azure Files
+  items and VM, Azure Files and SQL-in-VM policies; SQL-in-VM items, Azure SQL Database items and policies, and
+  non-daily retention are built from the SDK fields only.
 - **`azure_mi_db_items`:** each managed-instance database with its short-term (`STR`) and long-term
   (`LTR`) retention policies, nested tenant, subscription, instance. The record is built at collection
   time by `az_managed_database`: the 28 keys of `Get-AzSqlInstanceDatabase` in its order, dates as
@@ -527,8 +588,8 @@ JSON keeps its `rubrik-discovery-<stamp>.json` name. Use `--no-csv` for JSON onl
 - **Row order:** PowerShell fills a hashtable for VMs, so its VM order is not stable. Python
   writes subscriptions in scan order and rows in API order.
 - **VM `BackupPolicies`:** joined from Recovery Services items of the VM workload on subscription,
-  VM name and the vault's region. SQL-in-VM items are not joined yet (PowerShell matches them by
-  server name).
+  VM name and the vault's region, and from SQL-in-VM items by server name (each policy once; PowerShell
+  repeats it per database).
 - **VM `Status`:** PowerShell writes `$vm.StatusCode` of `Get-AzVM`, written here as `0`. Check
   that against a PowerShell run.
 - **Disks:** `Disks` and the sizes count the managed disks attached to the VM. PowerShell counts

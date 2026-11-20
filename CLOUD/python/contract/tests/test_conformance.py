@@ -29,9 +29,19 @@ PY = Path(__file__).resolve().parents[2]
 # Files the Python tools write that the contract does not list yet. Remove an entry when the PowerShell
 # change that adds the file reaches this branch and columns.json is regenerated.
 NOT_YET_IN_THE_CONTRACT = {
-    "gcp": set(),
+    # gce_storage_info: one row per Cloud Storage bucket, with Cloud Monitoring sizes. PowerShell
+    # writes no bucket file; it is the only way to see the size of the data BigQuery points at.
+    "gcp": {"gce_storage_info"},
     "aws": set(),
     "azure": set(),
+}
+
+# Columns the Python tool writes that PowerShell does not, by file. The contract is read from the PowerShell
+# scripts, so it cannot list them; the checks below leave them out. A test fails if PowerShell gains one
+# (remove it from here then) or if the Python tool stops writing it.
+PYTHON_ONLY_COLUMNS = {
+    # gce_bigquery_info.ExternalCloud: which other cloud a BigQuery Omni table's data is in.
+    "gce_bigquery_info": {"ExternalCloud"},
 }
 
 _RUN = (
@@ -67,7 +77,8 @@ def test_every_csv_file_a_mock_run_writes_conforms_to_the_contract(tool, contrac
         spec = contract.spec(entry["kind"])  # a file the contract does not list raises KeyError
         if not entry["columns"]:
             continue  # a zero-byte file: nothing to report
-        issues = spec.check_header(entry["columns"])
+        python_only = PYTHON_ONLY_COLUMNS.get(entry["kind"], set())
+        issues = spec.check_header([c for c in entry["columns"] if c not in python_only])
         if issues:
             problems.append(f"{entry['kind']}: {issues[:3]}")
     assert problems == []
@@ -256,7 +267,10 @@ def test_the_bigquery_file_matches_masters_powershell_while_the_contract_lacks_i
 
     gcp_csv_export = _load_tool_module("gcp", "csv_export")
     python = [
-        c for c in gcp_csv_export._BIGQUERY_COLUMNS if not c.startswith(("Label/Tag", "Tag"))
+        c
+        for c in gcp_csv_export._BIGQUERY_COLUMNS
+        if not c.startswith(("Label/Tag", "Tag"))
+        and c not in PYTHON_ONLY_COLUMNS["gce_bigquery_info"]
     ]
     assert [c.lower() for c in python] == [c.lower() for c in powershell]
 
@@ -336,11 +350,29 @@ def test_every_gcp_files_declared_columns_conform_to_the_contract(contract):
     for prefix, columns in _gcp_declared_columns().items():
         if prefix in NOT_YET_IN_THE_CONTRACT["gcp"]:
             continue
-        allowed = COLUMNS_NOT_YET_IN_THE_CONTRACT.get(prefix, set())
+        allowed = COLUMNS_NOT_YET_IN_THE_CONTRACT.get(prefix, set()) | PYTHON_ONLY_COLUMNS.get(
+            prefix, set()
+        )
         checked = [c for c in columns if c not in allowed]
         issues = contract.spec(prefix).check_header(checked)
         if issues:
             problems.append(f"{prefix}: {issues[:3]}")
+    assert problems == []
+
+
+def test_a_python_only_column_is_written_by_python_and_missing_from_the_contract(contract):
+    """The list must not hide a column the tool does not write, or one the contract has since gained."""
+    declared = _gcp_declared_columns()
+    problems = []
+    for prefix, columns in PYTHON_ONLY_COLUMNS.items():
+        known = set(contract.spec(prefix).static)
+        for column in sorted(columns):
+            if column not in declared.get(prefix, []):
+                problems.append(f"{prefix}.{column} is not written by the Python tool")
+            if column in known:
+                problems.append(
+                    f"{prefix}.{column} is in the contract now; remove it from the list"
+                )
     assert problems == []
 
 

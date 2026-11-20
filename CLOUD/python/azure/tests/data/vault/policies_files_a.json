@@ -1,0 +1,39 @@
+{
+  "Tenant": "TENANT",
+  "Subscription": "SUB",
+  "Region": "centralus",
+  "ResourceGroup": "rg-backup",
+  "ProtectedItemsCount": 0,
+  "SchedulePolicy": {
+    "ScheduleRunFrequency": 1,
+    "ScheduleRunDays": null,
+    "ScheduleRunTimes": [
+      "2018-07-30T23:00:00Z"
+    ],
+    "ScheduleInterval": null,
+    "ScheduleWindowStartTime": null,
+    "ScheduleWindowDuration": null,
+    "ScheduleRunTimeZone": "UTC"
+  },
+  "RetentionPolicy": {
+    "IsDailyScheduleEnabled": true,
+    "IsWeeklyScheduleEnabled": false,
+    "IsMonthlyScheduleEnabled": false,
+    "IsYearlyScheduleEnabled": false,
+    "DailySchedule": {
+      "DurationCountInDays": 7,
+      "RetentionTimes": [
+        "2018-07-30T23:00:00Z"
+      ],
+      "BackupManagementType": "AzureStorage"
+    },
+    "WeeklySchedule": null,
+    "MonthlySchedule": null,
+    "YearlySchedule": null,
+    "BackupManagementType": "AzureStorage"
+  },
+  "Name": "files-daily-lrs",
+  "WorkloadType": 3,
+  "Id": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/vault-a/backupPolicies/files-daily-lrs",
+  "BackupManagementType": 5
+}

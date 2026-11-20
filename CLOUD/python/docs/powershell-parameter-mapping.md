@@ -83,11 +83,11 @@ does the same only on request; by default only the zip is left, as with Azure an
 
 | PowerShell | Parameter set | Python | Status | Notes / task |
 |---|---|---|---|---|
-| `-AllSubscriptions` | AllSubscriptions (default) | `--all` | Differs | PowerShell default is all subscriptions. Python default is the current subscription. AZ-1 |
-| `-CurrentSubscription` | CurrentSubscription | no flag (Python default) | Differs | AZ-1 will flip the default, then this needs an explicit flag. |
+| `-AllSubscriptions` | AllSubscriptions (default) | `--all`, or no scope flag | Same | Default is all enabled subscriptions the sign-in can read. |
+| `-CurrentSubscription` | CurrentSubscription | `--current-subscription` | Same | Only the subscription of `az account show`. Before AZ-1 this was the default. |
 | `-SubscriptionIds a,b` | SubscriptionIds | `--subs a,b` | Same | Python `--subs` takes IDs. |
-| `-Subscriptions name,name` | Subscriptions | none | Missing | AZ-1 (subscription names) |
-| `-ManagementGroups a,b` | ManagementGroups | none | Missing | AZ-1 |
+| `-Subscriptions name,name` | Subscriptions | `--subscriptions name,name` | Same | Display names, ignoring case; a name that matches no enabled subscription is reported as not scanned. |
+| `-ManagementGroups a,b` | ManagementGroups | `--management-groups a,b` | Same | Subscriptions under the group at any depth, read with the ARM `descendants` call (needs Reader on the group). Not run against a real tenant. |
 | `-SkipAzureVMandManagedDisks` | | `--skip-vms`, `--skip-azure-vm-and-managed-disks` | Same | No prompt. The VM collector does not run and `azure_vmdisk_info` is not written. |
 | `-SkipAzureSQLandMI` | | `--skip-sql-mi`, `--skip-azure-sql-and-mi` | Same | `azure_sql_info`, `azure_mi_sql_info` and `azure_mi_db_items` are not written. Flexible servers (Python only) are still collected. |
 | `-SkipAzureStorageAccounts` | | `--skip-storage-accounts`, `--skip-azure-storage-accounts` | Same | Also skips file shares. `azure_storage_account_info` and `azure_file_share_info` are not written. |
@@ -124,7 +124,7 @@ Python has `--projects` and `--all` only, and defaults to the current project.
 
 Python-only: `--config`, `--regions`, `--workers`, `--org`, `--folder`, `--output`, `--mock`,
 `--dry-run`, `--security`, `--collectors`, `--inventory-only`, `--verbose`, `--no-preflight`,
-`--current-project` (added by GCP-1) and `--no-csv` (JSON only; the PowerShell-style CSV files are written by
+`--no-sdk-check`, `--yes`, `--current-project` (added by GCP-1) and `--no-csv` (JSON only; the PowerShell-style CSV files are written by
 default).
 
 ## Cross-cutting differences

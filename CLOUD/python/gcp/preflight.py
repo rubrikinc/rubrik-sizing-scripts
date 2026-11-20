@@ -29,20 +29,20 @@ log = logging.getLogger(__name__)
 FILE_PREFIX = "gcp_preflight_check"
 
 ASSET_JSON = "asset inventory in the JSON"
-STORAGE_JSON = "Cloud Storage buckets in the JSON"
 ALLOYDB_JSON = "AlloyDB clusters in the JSON"
 BIGTABLE_JSON = "Bigtable instances in the JSON"
-NON_FILE_EFFECTS = frozenset({ASSET_JSON, STORAGE_JSON, ALLOYDB_JSON, BIGTABLE_JSON})
+NON_FILE_EFFECTS = frozenset({ASSET_JSON, ALLOYDB_JSON, BIGTABLE_JSON})
 
 
 # The IAM permission each probe needs, as Google documents it (not checked against a live project).
-# roles/viewer covers the list permissions; BigQuery metadata and Backup and DR need their own viewer
-# roles.
+# roles/viewer covers the list permissions; BigQuery metadata, Cloud Monitoring and Backup and DR
+# need their own viewer roles.
 PERMISSIONS = {
     "cloud asset inventory": "cloudasset.assets.listResource",
     "compute instances": "compute.instances.list",
     "compute disks": "compute.disks.list",
     "cloud storage buckets": "storage.buckets.list",
+    "cloud monitoring bucket sizes": "monitoring.timeSeries.list",
     "cloud sql instances": "cloudsql.instances.list",
     "spanner instances": "spanner.instances.list",
     "alloydb clusters": "alloydb.clusters.list",
@@ -124,6 +124,27 @@ def _buckets(ctx: Context) -> bool:
     return _seen(client.list_buckets(max_results=1))
 
 
+def _bucket_sizes(ctx: Context) -> Optional[bool]:
+    import datetime
+
+    from google.cloud import monitoring_v3
+
+    from collectors.storage import BYTES_METRIC
+
+    client = monitoring_v3.MetricServiceClient(credentials=ctx.credentials)
+    end = datetime.datetime.now(datetime.timezone.utc)
+    request = monitoring_v3.ListTimeSeriesRequest(
+        name=ctx.parent,
+        filter=f'metric.type="{BYTES_METRIC}" AND resource.type="gcs_bucket"',
+        interval=monitoring_v3.TimeInterval(
+            end_time=end, start_time=end - datetime.timedelta(days=1)
+        ),
+        view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.HEADERS,
+        page_size=1,
+    )
+    return _first_page(client.list_time_series(request=request))
+
+
 def _cloud_sql(ctx: Context) -> bool:
     import googleapiclient.discovery
 
@@ -193,7 +214,9 @@ APIS = (
         _disks,
         ("gce_attached_disk_info", "gce_unattached_disk_info"),
     ),
-    Api("storage", "cloud storage buckets", _buckets, (STORAGE_JSON,)),
+    Api("storage", "cloud storage buckets", _buckets, ("gce_storage_info",)),
+    # Without it the buckets are still listed, but their size columns are blank.
+    Api("storage", "cloud monitoring bucket sizes", _bucket_sizes, ("gce_storage_info",)),
     Api("database", "cloud sql instances", _cloud_sql, ("gce_cloudsql_info",)),
     Api("database", "spanner instances", _spanner, ("gce_spanner_info",)),
     Api("database", "alloydb clusters", _alloydb, (ALLOYDB_JSON,)),
@@ -210,6 +233,7 @@ API_NAMES = {
     "compute instances": "compute.googleapis.com",
     "compute disks": "compute.googleapis.com",
     "cloud storage buckets": "storage.googleapis.com",
+    "cloud monitoring bucket sizes": "monitoring.googleapis.com",
     "cloud sql instances": "sqladmin.googleapis.com",
     "spanner instances": "spanner.googleapis.com",
     "alloydb clusters": "alloydb.googleapis.com",
@@ -454,6 +478,78 @@ def run_access_check(
             "[%s] Access check could not run (%s); the scan goes on", project_id, type(exc).__name__
         )
         return []
+
+
+# The Google libraries each collector imports, as (module, pip package). Checked before sign-in so
+# a missing library fails the run in seconds, not after an hour with half the collectors dead.
+# Every project listing and the sign-in's project lookup need Resource Manager, whatever is chosen.
+ALWAYS_NEEDED_SDKS = (("google.cloud.resourcemanager_v3", "google-cloud-resource-manager"),)
+COLLECTOR_SDKS = {
+    "asset": (("google.cloud.asset_v1", "google-cloud-asset"),),
+    "compute": (("google.cloud.compute_v1", "google-cloud-compute"),),
+    "storage": (
+        ("google.cloud.storage", "google-cloud-storage"),
+        ("google.cloud.monitoring_v3", "google-cloud-monitoring"),
+    ),
+    "database": (
+        ("googleapiclient.discovery", "google-api-python-client"),
+        ("google.cloud.spanner_admin_instance_v1", "google-cloud-spanner"),
+        ("google.cloud.spanner_admin_database_v1", "google-cloud-spanner"),
+        ("google.cloud.alloydb_v1", "google-cloud-alloydb"),
+        ("google.cloud.bigtable", "google-cloud-bigtable"),
+    ),
+    "bigquery": (("googleapiclient.discovery", "google-api-python-client"),),
+    "backup": (("google.cloud.backupdr_v1", "google-cloud-backupdr"),),
+}
+
+
+def missing_sdks(selected: set) -> list:
+    """``[(package, [collector, ...])]`` for each library the chosen collectors need and the
+    environment lacks, in a stable order. A library that is installed but broken counts as
+    missing: the scan would fail on the same import."""
+    import importlib
+
+    needed: dict = {}
+    for module, package in ALWAYS_NEEDED_SDKS:
+        needed.setdefault((module, package), ["project lookup"])
+    for collector, sdks in COLLECTOR_SDKS.items():
+        if collector in selected:
+            for sdk in sdks:
+                needed.setdefault(sdk, []).append(collector)
+    missing: dict = {}
+    for (module, package), users in needed.items():
+        try:
+            importlib.import_module(module)
+        except Exception:  # noqa: BLE001 - ImportError, or a library that fails while loading
+            for user in users:
+                if user not in missing.setdefault(package, []):
+                    missing[package].append(user)
+    return sorted(missing.items())
+
+
+def sdk_problem_lines(missing: list) -> list:
+    """What to tell the user when ``missing_sdks`` found something: the packages, the fix."""
+    packages = " ".join(package for package, _ in missing)
+    lines = ["These Google libraries are not installed, so the scan would skip what needs them:"]
+    for package, users in missing:
+        lines.append(f"   {package}  (needed by: {', '.join(users)})")
+    lines += [
+        "Install everything the tool needs, from the tool's folder:",
+        "   pip install -r requirements.txt",
+        f"or just these: pip install {packages}",
+        "Or scan without them: name the collectors you can run with --collectors, or accept the "
+        "gaps with --no-sdk-check.",
+    ]
+    return lines
+
+
+# The quota project cannot serve the calls: they fail in every scanned project the same way.
+_QUOTA_STOPPERS = frozenset({QUOTA_API_OFF, QUOTA_BILLING_OFF, QUOTA_DENIED})
+
+
+def quota_blocking_rows(rows: list) -> list:
+    """The access-check rows whose calls the quota project refuses (API off, billing off, denied)."""
+    return [row for row in rows if row.get("Detail") in _QUOTA_STOPPERS]
 
 
 def run_all(projects: list, credentials: Any, selected: set, workers: int = 8) -> list:

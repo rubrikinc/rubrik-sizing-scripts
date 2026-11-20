@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from anonymize import Anonymizer, file_rank
+from models.discovery_dataclasses import STORAGE_CLASSES
 
 FILE_TIMESTAMP_FORMAT = "%Y-%m-%d_%H%M%S"
 
@@ -377,9 +378,69 @@ _BIGQUERY_COLUMNS = [
     ],
     "ExternalSourceFormat",
     "ExternalSourceUri",
+    "ExternalCloud",
     "CreationTime",
     "LastModifiedTime",
 ]
+
+# A BigQuery Omni table reads data that is in another cloud, so its size is not in this file or in
+# the Cloud Storage file. Three signals say which cloud, strongest first: the dataset location
+# (``aws-us-east-1``; Google's Omni locations all start with ``aws-`` or ``azure-``), an ``s3://``
+# source URI, and an ``azure://`` or an Azure Blob host-name source URI. Google's docs show the
+# S3 URI form and an Azure Blob host form, but not an Azure ``uris`` example, so an Azure match is
+# reported as likely and has not been checked against a real table.
+EXTERNAL_CLOUD_S3 = "S3"
+EXTERNAL_CLOUD_AZURE = "Azure Blob"
+_AZURE_URI = re.compile(r"^(azure://|https?://[^/\s;]+\.blob\.core\.windows\.net)", re.IGNORECASE)
+
+
+def external_cloud(table: Any) -> Optional[str]:
+    """``S3`` or ``Azure Blob`` when a table reads data that is not in Google Cloud, else None.
+
+    ``table`` is a table's dict from the JSON or a ``BigQueryTable``. Only an external (or
+    BigLake) table is looked at: a native table in an ``aws-`` dataset is BigQuery's own storage,
+    and a view holds no data.
+    """
+
+    def field(name: str) -> Any:
+        return table.get(name) if isinstance(table, dict) else getattr(table, name, None)
+
+    uris = [
+        u.strip()
+        for u in f"{field('external_source_uri') or ''};{field('biglake_storage_uri') or ''}".split(
+            ";"
+        )
+        if u.strip()
+    ]
+    location = (field("location") or "").lower()
+    if field("table_type") != "EXTERNAL" and not uris:
+        return None
+    if location.startswith("aws-") or any(u.lower().startswith("s3://") for u in uris):
+        return EXTERNAL_CLOUD_S3
+    if location.startswith("azure-") or any(_AZURE_URI.match(u) for u in uris):
+        return EXTERNAL_CLOUD_AZURE
+    return None
+
+
+def other_cloud_tables(result: dict) -> dict[str, int]:
+    """``{cloud: tables}`` for the tables of every scanned project that read S3 or Azure Blob."""
+    counts: dict[str, int] = {}
+    for entry in _bigquery_entries(result):
+        for table in entry.get("tables") or []:
+            cloud = external_cloud(table)
+            if cloud:
+                counts[cloud] = counts.get(cloud, 0) + 1
+    return counts
+
+
+def count_other_cloud(tables: Any) -> dict[str, int]:
+    """``{cloud: tables}`` for one project's tables (``BigQueryTable`` objects or dicts)."""
+    counts: dict[str, int] = {}
+    for table in tables or []:
+        cloud = external_cloud(table)
+        if cloud:
+            counts[cloud] = counts.get(cloud, 0) + 1
+    return counts
 
 
 def _bigquery_entries(result: dict) -> list[dict]:
@@ -428,12 +489,244 @@ def _bigquery_rows(result: dict) -> list[dict[str, Any]]:
                 {
                     "ExternalSourceFormat": table.get("external_source_format"),
                     "ExternalSourceUri": table.get("external_source_uri"),
+                    "ExternalCloud": external_cloud(table),
                     "CreationTime": table.get("creation_time"),
                     "LastModifiedTime": table.get("last_modified_time"),
                 }
             )
             _label_cells(table.get("dataset_labels"), f"{LABEL_PREFIX}dataset_", row)
             _label_cells(table.get("labels"), LABEL_PREFIX, row)
+            rows.append(row)
+    return rows
+
+
+# ── gce_storage_info ──────────────────────────────────────────────────────────
+#
+# One row per Cloud Storage bucket. PowerShell writes no bucket file, so this one has no script to
+# match: it exists so the size of data that BigQuery points at (BigLake, external tables) can be
+# read, because BigQuery reports 0 bytes for data it does not store.
+
+_STORAGE_SIZES = ("Size", "Live", "Noncurrent", "SoftDeleted", "Multipart")
+_STORAGE_COLUMNS = [
+    "Project",
+    "BucketName",
+    "CreationTime",
+    "Location",
+    "LocationType",
+    "DualRegionLocations",
+    "TurboReplicationEnabled",
+    "StorageClass",
+    "AutoclassEnabled",
+    "AutoclassTerminalStorageClass",
+    "NamespaceType",
+    "VersioningEnabled",
+    "RetentionPolicyEnabled",
+    "RetentionPeriodDays",
+    "BucketLockState",
+    "SoftDeleteEnabled",
+    "SoftDeleteRetentionDays",
+    "EncryptionType",
+    "DefaultKmsKeyName",
+    "UniformBucketLevelAccessEnabled",
+    "PublicAccessPrevention",
+    "RequesterPays",
+    "LifecycleRuleCount",
+    "LifecycleDeleteDays",
+    "LifecycleNoncurrentDeleteDays",
+    "LifecycleTransitions",
+    *[
+        f"{prefix}{suffix}"
+        for prefix in _STORAGE_SIZES
+        for suffix in ("Bytes", "Gb", "Tb", "GiB", "TiB")
+    ],
+    "ObjectCount",
+    "SizeStatus",
+    "GrowthStatus",
+    "GrowthDays",
+    "GrowthStartBytes",
+    "GrowthEndBytes",
+    "GrowthBytes",
+    "GrowthPercent",
+    "AnnualGrowthPercent",
+    *[f"SizeBytes_{name}" for name in STORAGE_CLASSES],
+    *[f"LiveBytes_{name}" for name in STORAGE_CLASSES],
+    *[f"NoncurrentBytes_{name}" for name in STORAGE_CLASSES],
+    *[f"ObjectCount_{name}" for name in STORAGE_CLASSES],
+    "BigQueryTables",
+    "BigQueryExternalTables",
+    "BigQueryConnections",
+]
+
+# The buckets a BigQuery table reads. ``gs://bucket/path/*`` and ``gs://bucket/`` both name ``bucket``.
+_GCS_BUCKET = re.compile(r"gs://([^/\s;]+)", re.IGNORECASE)
+
+
+def _storage_entries(result: dict) -> list[dict]:
+    """The per-project storage inventories, in the order the projects were scanned."""
+    order = {pid: i for i, pid in enumerate(result.get("projects_scanned") or [])}
+    entries = [e for e in result.get("storage") or [] if e]
+    return sorted(entries, key=lambda e: order.get(e.get("project_id"), len(order)))
+
+
+def bigquery_bucket_links(result: dict) -> dict[str, dict[str, Any]]:
+    """What BigQuery says about each bucket it reads: ``{bucket: {tables, external, connections}}``.
+
+    A table counts when its source URIs (an external or BigLake table) or its BigLake storage URI
+    (a BigQuery Iceberg table) name the bucket. ``external`` counts only the tables BigQuery
+    reports as EXTERNAL, whose own size it leaves at 0; ``connections`` are the connection ids those
+    tables read with. A table with several URIs in one bucket counts once. Buckets are matched by
+    name alone (bucket names are global), so the same name in two projects shares one link.
+    """
+    links: dict[str, dict[str, Any]] = {}
+    for entry in _bigquery_entries(result):
+        for table in entry.get("tables") or []:
+            uris = f"{table.get('external_source_uri') or ''}; {table.get('biglake_storage_uri') or ''}"
+            for bucket in dict.fromkeys(m.casefold() for m in _GCS_BUCKET.findall(uris)):
+                link = links.setdefault(bucket, {"tables": 0, "external": 0, "connections": []})
+                link["tables"] += 1
+                if table.get("table_type") == "EXTERNAL":
+                    link["external"] += 1
+                connection = table.get("connection_id")
+                if connection and connection not in link["connections"]:
+                    link["connections"].append(connection)
+    return links
+
+
+def _optional_bytes(value: Optional[int], prefix: str) -> dict[str, Any]:
+    """A size's five cells. A size Monitoring did not give is blank in every one of them."""
+    if value is None:
+        return {f"{prefix}{suffix}": None for suffix in ("Bytes", "Gb", "Tb", "GiB", "TiB")}
+    return {f"{prefix}Bytes": int(value), **_bytes_units(int(value), prefix)}
+
+
+def _namespace_type(hns_enabled: Any) -> Optional[str]:
+    """``HNS`` or ``Standard`` (flat) namespace; blank when the bucket did not say."""
+    if hns_enabled is None:
+        return None
+    return "HNS" if hns_enabled else "Standard"
+
+
+def _lock_state(locked: Any) -> Optional[str]:
+    """``locked`` when a retention policy is locked on the bucket, else ``unlocked``."""
+    if locked is None:
+        return None
+    return "locked" if locked else "unlocked"
+
+
+# A rate measured over a few days says little about a year, so the annual figure needs a window of
+# at least this many days. The change itself is written whatever the window.
+_MIN_DAYS_FOR_ANNUAL_RATE = 7
+
+
+def _growth_cells(bucket: dict) -> dict[str, Any]:
+    """The growth cells. All blank unless the run measured this bucket, never 0 for "unknown".
+
+    ``GrowthPercent`` is the change over the window. ``AnnualGrowthPercent`` scales it to a year
+    in a straight line (not compounded), which is the form the sizing page's annual data growth
+    rate takes. It is blank when the bucket started at 0 bytes (a percent of nothing) or when the
+    window was shorter than ``_MIN_DAYS_FOR_ANNUAL_RATE``.
+    """
+    start, end = bucket.get("growth_start_bytes"), bucket.get("growth_end_bytes")
+    days = bucket.get("growth_days")
+    status = bucket.get("growth_status") or "not requested"
+    cells: dict[str, Any] = {
+        "GrowthStatus": status,
+        "GrowthDays": None,
+        "GrowthStartBytes": None,
+        "GrowthEndBytes": None,
+        "GrowthBytes": None,
+        "GrowthPercent": None,
+        "AnnualGrowthPercent": None,
+    }
+    if status != "measured" or start is None or end is None or not days:
+        return cells
+    cells.update(
+        {
+            "GrowthDays": days,
+            "GrowthStartBytes": int(start),
+            "GrowthEndBytes": int(end),
+            "GrowthBytes": int(end) - int(start),
+        }
+    )
+    if start > 0:
+        percent = (end - start) / start * 100
+        cells["GrowthPercent"] = _ps_round(percent, 2)
+        if days >= _MIN_DAYS_FOR_ANNUAL_RATE:
+            cells["AnnualGrowthPercent"] = _ps_round(percent * 365 / days, 2)
+    return cells
+
+
+def _storage_rows(result: dict) -> list[dict[str, Any]]:
+    links = bigquery_bucket_links(result)
+    rows = []
+    for entry in _storage_entries(result):
+        for bucket in entry.get("buckets") or []:
+            link = links.get((bucket.get("name") or "").casefold())
+            row: dict[str, Any] = {
+                "Project": entry.get("project_id"),
+                "BucketName": bucket.get("name"),
+                "CreationTime": bucket.get("creation_time"),
+                "Location": bucket.get("location") or None,
+                "LocationType": bucket.get("location_type") or None,
+                "DualRegionLocations": "; ".join(bucket.get("dual_region_locations") or []) or None,
+                "TurboReplicationEnabled": bucket.get("turbo_replication_enabled"),
+                "StorageClass": bucket.get("storage_class") or None,
+                "AutoclassEnabled": bucket.get("autoclass_enabled"),
+                "AutoclassTerminalStorageClass": bucket.get("autoclass_terminal_storage_class"),
+                "NamespaceType": _namespace_type(bucket.get("hns_enabled")),
+                "VersioningEnabled": bool(bucket.get("versioning_enabled")),
+                "RetentionPolicyEnabled": bucket.get("retention_policy_enabled"),
+                "RetentionPeriodDays": bucket.get("retention_period_days"),
+                "BucketLockState": _lock_state(bucket.get("bucket_lock_locked")),
+                "SoftDeleteEnabled": bucket.get("soft_delete_enabled"),
+                "SoftDeleteRetentionDays": bucket.get("soft_delete_retention_days"),
+                "EncryptionType": "CMEK" if bucket.get("default_kms_key_name") else "Google-managed",
+                "DefaultKmsKeyName": bucket.get("default_kms_key_name"),
+                "UniformBucketLevelAccessEnabled": bucket.get("ubla_enabled"),
+                "PublicAccessPrevention": bucket.get("public_access_prevention"),
+                "RequesterPays": bucket.get("requester_pays"),
+                "LifecycleRuleCount": bucket.get("lifecycle_rule_count"),
+                "LifecycleDeleteDays": bucket.get("lifecycle_delete_days"),
+                "LifecycleNoncurrentDeleteDays": bucket.get("lifecycle_noncurrent_delete_days"),
+                "LifecycleTransitions": bucket.get("lifecycle_transitions"),
+            }
+            for prefix, key in (
+                ("Size", "size_bytes"),
+                ("Live", "live_bytes"),
+                ("Noncurrent", "noncurrent_bytes"),
+                ("SoftDeleted", "soft_deleted_bytes"),
+                ("Multipart", "multipart_bytes"),
+            ):
+                row.update(_optional_bytes(bucket.get(key), prefix))
+            row.update(
+                {
+                    "ObjectCount": bucket.get("object_count"),
+                    "SizeStatus": bucket.get("size_status") or "not read",
+                    **_growth_cells(bucket),
+                    **{
+                        f"SizeBytes_{name}": (bucket.get("class_bytes") or {}).get(name)
+                        for name in STORAGE_CLASSES
+                    },
+                    **{
+                        f"LiveBytes_{name}": (bucket.get("live_class_bytes") or {}).get(name)
+                        for name in STORAGE_CLASSES
+                    },
+                    **{
+                        f"NoncurrentBytes_{name}": (bucket.get("noncurrent_class_bytes") or {}).get(
+                            name
+                        )
+                        for name in STORAGE_CLASSES
+                    },
+                    **{
+                        f"ObjectCount_{name}": (bucket.get("class_object_counts") or {}).get(name)
+                        for name in STORAGE_CLASSES
+                    },
+                    "BigQueryTables": link["tables"] if link else 0,
+                    "BigQueryExternalTables": link["external"] if link else 0,
+                    "BigQueryConnections": "; ".join(link["connections"]) if link else None,
+                }
+            )
+            _label_cells(bucket.get("labels"), LABEL_PREFIX, row)
             rows.append(row)
     return rows
 
@@ -454,6 +747,7 @@ FILES: list[FileSpec] = [
     FileSpec("gce_cloudsql_info", _CLOUDSQL_COLUMNS, _cloudsql_rows),
     FileSpec("gce_spanner_info", _SPANNER_COLUMNS, _spanner_rows),
     FileSpec("gce_bigquery_info", _BIGQUERY_COLUMNS, _bigquery_rows),
+    FileSpec("gce_storage_info", _STORAGE_COLUMNS, _storage_rows),
 ]
 
 

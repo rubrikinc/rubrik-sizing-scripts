@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -11,6 +12,30 @@ _RATE_LIMITED = re.compile(
     r"resource_exhausted|quota exceeded|rate_limit_exceeded|too many requests|"
     r"(?<![\w/-])429(?![\w-])"
 )
+
+# ── Graceful stop ─────────────────────────────────────────────────────────────
+#
+# The first Ctrl-C (or SIGTERM) during the scan sets this flag instead of ending the process.
+# Collectors that loop over many calls check it and return what they have, so the results zip is
+# still written, marked partial. ``main`` installs the signal handlers; collectors only read it.
+
+_STOP = threading.Event()
+
+
+class ScanStopped(Exception):
+    """A project that was not scanned (or only partly) because the run was asked to stop."""
+
+
+def request_stop() -> None:
+    _STOP.set()
+
+
+def stop_requested() -> bool:
+    return _STOP.is_set()
+
+
+def reset_stop() -> None:
+    _STOP.clear()
 
 
 def brief_error(exc: Exception) -> str:

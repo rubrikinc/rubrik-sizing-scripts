@@ -35,12 +35,20 @@ _SCRIPT = Path(__file__).resolve().parents[3] / "Get-AzureSizingInfo.ps1"
 # ── the field list and the file order ─────────────────────────────────────────
 
 
+# Fields the Python tool anonymizes that the script's list lacks, because a column it writes holds
+# a real id the script never wrote: Az.RecoveryServices 7.x puts the VM's subscription id in
+# ContainerSubscriptionId of the VM items file.
+ADDED_TO_THE_SCRIPTS_LIST = ("ContainerSubscriptionId",)
+
+
 @pytest.mark.skipif(not _SCRIPT.exists(), reason="the PowerShell script is not in this checkout")
-def test_default_fields_are_the_scripts_list():
+def test_default_fields_are_the_scripts_list_plus_the_documented_additions():
     text = _SCRIPT.read_text(encoding="utf-8")
     block = text[text.index("$global:anonymizeProperties = @(") :]
     block = block[: block.index(")")]
-    assert list(DEFAULT_FIELDS) == re.findall(r'"([^"]+)"', block)
+    script_fields = re.findall(r'"([^"]+)"', block)
+    assert [f for f in DEFAULT_FIELDS if f not in ADDED_TO_THE_SCRIPTS_LIST] == script_fields
+    assert set(ADDED_TO_THE_SCRIPTS_LIST) <= set(DEFAULT_FIELDS)
 
 
 def test_file_order_is_the_order_the_script_anonymizes_in():

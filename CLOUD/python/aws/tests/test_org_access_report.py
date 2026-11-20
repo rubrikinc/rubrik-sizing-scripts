@@ -12,6 +12,7 @@ import os
 import re
 import zipfile
 
+import checkpoint_core
 import preflight
 import pytest
 from botocore.exceptions import ClientError
@@ -166,6 +167,7 @@ def test_a_rerun_lists_only_the_accounts_still_not_scanned(scans_with_access_row
         role_name="R",
         account_ids=[ACCT_A, ACCT_SCP],
         stamp=STAMP,
+        resume_mode=checkpoint_core.RESUME,
     )
     rows = _csv_rows(zip_path)
     assert sorted(r["Owner"] for r in rows) == [ACCT_A, ACCT_SCP]  # one row each, no repeats

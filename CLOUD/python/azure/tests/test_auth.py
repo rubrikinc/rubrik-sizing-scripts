@@ -366,3 +366,62 @@ def test_a_tenant_that_is_not_listed_says_so(monkeypatch, caplog):
     with _sdk(), caplog.at_level("WARNING"):
         assert auth.resolve_tenant_name(_credential(), TENANT) is None
     assert "not in the list of tenants" in caplog.text
+
+
+def _named(sub_id, name, state="Enabled"):
+    sub = MagicMock()
+    sub.subscription_id = sub_id
+    sub.display_name = name
+    sub.state = state
+    return sub
+
+
+def test_resolve_subscriptions_by_name_ignores_case_and_reports_unknown():
+    client = MagicMock()
+    client.subscriptions.list.return_value = iter(
+        [_named("a", "Prod"), _named("b", "Dev"), _named("c", "Old", "Disabled")]
+    )
+    skipped: list = []
+    with patch("auth.SubscriptionClient", return_value=client):
+        result = auth.resolve_subscriptions(
+            MagicMock(), None, False, skipped=skipped, names=["prod", "Old", "Nope"]
+        )
+    assert result == ["a"]
+    assert [name for name, _ in skipped] == ["Old", "Nope"]
+
+
+def test_resolve_subscriptions_by_name_exits_when_none_match():
+    client = MagicMock()
+    client.subscriptions.list.return_value = iter([_named("a", "Prod")])
+    with patch("auth.SubscriptionClient", return_value=client):
+        with patch("auth._exit_no_subs", side_effect=SystemExit(1)):
+            with pytest.raises(SystemExit):
+                auth.resolve_subscriptions(MagicMock(), None, False, names=["Nope"])
+
+
+def test_resolve_subscriptions_by_management_group_follows_descendants_and_filters_enabled():
+    client = MagicMock()
+    client.subscriptions.list.return_value = iter([_named("s1", "One"), _named("s2", "Two")])
+    pages = {
+        "mg1": {
+            "value": [
+                {"type": "Microsoft.Management/managementGroups", "name": "child"},
+                {"type": "Microsoft.Management/managementGroups/subscriptions", "name": "s1"},
+                {"type": "Microsoft.Management/managementGroups/subscriptions", "name": "gone"},
+            ]
+        },
+    }
+
+    def fake_get(_cred, _cloud, path):
+        if "/mg1/" not in path:
+            raise RuntimeError("403")
+        return pages["mg1"]
+
+    skipped: list = []
+    with patch("auth.SubscriptionClient", return_value=client):
+        with patch("auth._arm_get_json", side_effect=fake_get):
+            result = auth.resolve_subscriptions(
+                MagicMock(), None, False, skipped=skipped, management_groups=["mg1", "bad"]
+            )
+    assert result == ["s1"]
+    assert [group for group, _ in skipped] == ["bad"]

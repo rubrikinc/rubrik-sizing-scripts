@@ -91,6 +91,24 @@ class ComputeInventory:
 # ── Phase 2: Storage ──────────────────────────────────────────────────────────
 
 
+# How a bucket's size came out. Monitoring measures a bucket once a day and leaves an empty (or
+# brand new) bucket out, so "no datapoint" is told apart from a read that failed.
+SIZE_MEASURED = "measured"
+SIZE_NO_DATAPOINT = "no datapoint"
+SIZE_NOT_READ = "not read"
+
+# How a bucket's growth came out. Growth needs two daily readings, so a bucket with one (a new or
+# empty bucket) is told apart from a read that failed and from a run that did not ask for it.
+GROWTH_NOT_REQUESTED = "not requested"
+GROWTH_MEASURED = "measured"
+GROWTH_TOO_FEW_READINGS = "too few readings"
+GROWTH_NOT_READ = "not read"
+
+# The storage classes a bucket's bytes are reported under. Cloud Monitoring labels Standard data
+# REGIONAL or MULTI_REGIONAL, so those count as STANDARD; any other class goes to OTHER.
+STORAGE_CLASSES = ("STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE", "OTHER")
+
+
 @dataclass
 class GCSBucket:
     """A single Google Cloud Storage bucket."""
@@ -102,11 +120,77 @@ class GCSBucket:
     versioning_enabled: bool
     soft_delete_retention_days: Optional[int]  # None = not enabled
     labels: dict[str, str] = field(default_factory=dict)
-    size_bytes: Optional[int] = None  # from Cloud Monitoring; may be unavailable
+
+    # Bucket settings, all read from the bucket object the listing already returns. None means the
+    # setting does not apply (Turbo on a single-region bucket) or the API did not report it.
+    creation_time: Optional[str] = None
+    dual_region_locations: list[str] = field(default_factory=list)
+    turbo_replication_enabled: Optional[bool] = None
+    autoclass_enabled: Optional[bool] = None
+    autoclass_terminal_storage_class: Optional[str] = None
+    hns_enabled: Optional[bool] = None
+    retention_policy_enabled: Optional[bool] = None
+    retention_period_days: Optional[int] = None
+    bucket_lock_locked: Optional[bool] = None
+    soft_delete_enabled: Optional[bool] = None
+    default_kms_key_name: Optional[str] = None
+    ubla_enabled: Optional[bool] = None
+    public_access_prevention: Optional[str] = None
+    requester_pays: Optional[bool] = None
+
+    # Lifecycle rules, read from the bucket object. A rule counts toward retention only when it is
+    # a plain age rule; a rule that also needs a prefix, label, version count or date is counted in
+    # ``lifecycle_rule_count`` but not read as a retention. None means the listing did not say.
+    lifecycle_rule_count: Optional[int] = None
+    lifecycle_delete_days: Optional[int] = None
+    """Smallest age, in days, at which a rule deletes a live object. None when no rule does."""
+    lifecycle_noncurrent_delete_days: Optional[int] = None
+    """Smallest days-since-noncurrent at which a rule deletes an older version."""
+    lifecycle_transitions: Optional[str] = None
+    """Storage class changes by age, ``NEARLINE@30d; ARCHIVE@365d``. None when there are none."""
+
+    size_bytes: Optional[int] = None
+    """Live plus noncurrent (older version) bytes, from Cloud Monitoring. None when it has no
+    datapoint or could not be read; soft-deleted objects and unfinished uploads are not in it."""
+
     # Straight decimal unit conversions of size_bytes (native precision — no
     # false-precision concern, so no _derived suffix). None when size_bytes is None.
     size_gb: Optional[float] = None
     size_tb: Optional[float] = None
+
+    # The same Cloud Monitoring reading split by the type of data (``storage/v2/total_bytes``).
+    live_bytes: Optional[int] = None
+    noncurrent_bytes: Optional[int] = None
+    soft_deleted_bytes: Optional[int] = None
+    multipart_bytes: Optional[int] = None
+    object_count: Optional[int] = None
+    """``storage/object_count``: soft-deleted objects are not counted. None when not read."""
+
+    class_bytes: dict[str, int] = field(default_factory=dict)
+    """Live plus noncurrent bytes by storage class (``STANDARD`` ... ``OTHER``); empty when unread."""
+
+    live_class_bytes: dict[str, int] = field(default_factory=dict)
+    """Current-object bytes by storage class, same keys as ``class_bytes``; empty when unread."""
+
+    noncurrent_class_bytes: dict[str, int] = field(default_factory=dict)
+    """Older-version bytes by storage class. Each class's live and noncurrent bytes add up to its
+    ``class_bytes`` entry. Non-zero only where Object Versioning has kept older versions."""
+
+    class_object_counts: dict[str, int] = field(default_factory=dict)
+    """Objects by storage class, with the same keys as ``class_bytes``; empty when not read."""
+
+    size_status: str = SIZE_NOT_READ
+
+    # Growth over the window the run was asked for (``--growth-days``), from the same Monitoring
+    # metric as the size. All None when growth was off, the read failed, or the bucket has fewer
+    # than two daily readings. ``growth_days`` is the time actually between the two readings, so a
+    # bucket younger than the window says how short its trend is.
+    growth_start_bytes: Optional[int] = None
+    """Live plus noncurrent bytes at the oldest reading in the window."""
+    growth_end_bytes: Optional[int] = None
+    """The same figure at the newest reading of the same query, so the change is one read's."""
+    growth_days: Optional[float] = None
+    growth_status: str = GROWTH_NOT_REQUESTED
 
 
 @dataclass
@@ -238,6 +322,12 @@ class BigQueryTable:
     long_term_logical_bytes: int = 0
     external_source_format: str = ""
     external_source_uri: str = ""
+    connection_id: str = ""
+    """The connection an external or BigLake table reads its data with; empty for a plain one."""
+
+    biglake_storage_uri: str = ""
+    """``biglakeConfiguration.storageUri`` of a BigQuery Iceberg table: ``gs://bucket/path/``."""
+
     creation_time: str = ""
     last_modified_time: str = ""
     dataset_labels: dict[str, str] = field(default_factory=dict)

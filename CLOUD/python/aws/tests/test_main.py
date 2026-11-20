@@ -363,13 +363,37 @@ class TestScanRegionOptIn:
         assert set(result.keys()) == self._EMPTY_KEYS
         assert all(v == [] for v in result.values())
 
-    def test_unreachable_endpoint_logs_debug_not_warning(self, caplog):
-        """Non-SCP probe failure must not surface as a WARNING (customer sees no noise)."""
+    def test_unreachable_endpoint_is_a_recorded_gap_not_a_silent_skip(self, caplog):
+        """A region that is scanned at all but cannot be reached is missing from the account, so it is
+        a warning and a scan error (the account is partial). It used to be a debug line only.
+
+        What this must not do is spam the customer for opt-in regions that were never asked for: those
+        do not get here, because _resolve_regions keeps only enabled regions unless --regions names one
+        (see test_a_region_that_is_not_enabled_is_not_scanned_unless_named).
+        """
+        from collectors import DenialTracker
+
+        tracker = DenialTracker()
         session = self._session(Exception("EndpointResolutionError: region not enabled"))
         with caplog.at_level(logging.DEBUG, logger="root"):
-            _scan_region(session, "me-south-1", "123456789012", "acct", frozenset())
-        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert not warning_msgs, f"unexpected WARNING log(s): {warning_msgs}"
+            _scan_region(session, "me-south-1", "123456789012", "acct", frozenset(), tracker)
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [e["region"] for e in tracker.permission_errors()] == ["me-south-1"]
+
+    def test_a_region_that_is_not_enabled_is_not_scanned_unless_named(self):
+        """The case the old quiet skip was for: opt-in regions the account has not enabled."""
+        from unittest.mock import MagicMock
+
+        from main import _resolve_regions
+
+        ec2 = MagicMock()
+        ec2.describe_regions.return_value = {"Regions": [{"RegionName": "us-east-1"}]}
+        session = MagicMock()
+        session.client.return_value = ec2
+        assert _resolve_regions(session, None, None) == ["us-east-1"]  # me-south-1 is not offered
+        filters = ec2.describe_regions.call_args.kwargs["Filters"][0]
+        assert filters["Values"] == ["opt-in-not-required", "opted-in"]
+        assert _resolve_regions(session, ["me-south-1"], None) == ["me-south-1"]  # named: scanned
 
     def test_scp_denial_logs_info_not_warning(self, caplog):
         """SCP explicit-deny on the probe → INFO (not WARNING, not silent)."""
