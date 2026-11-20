@@ -2305,9 +2305,9 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionId $sub.Id -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
-    Write-Error "Error switching to subscription: $($sub.Name)"
+    Write-Error "Error switching to subscription: $($sub.Name) ($($sub.Id))"
     Write-Error "Error: $_"
     Continue
   }
@@ -2339,9 +2339,9 @@ foreach ($sub in $subs) {
   $subNum++
 
   try {
-    Set-AzContext -SubscriptionName $sub.Name -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
+    Set-AzContext -SubscriptionId $sub.Id -TenantId $context.Tenant.Id -ErrorAction Stop | Out-Null
   } catch {
-    Write-Error "Error switching to subscription: $($sub.Name)"
+    Write-Error "Error switching to subscription: $($sub.Name) ($($sub.Id))"
     Write-Error "Error: $_"
     Continue
   }

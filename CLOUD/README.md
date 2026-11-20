@@ -315,7 +315,7 @@ To run the Azure sizing script, ensure you have the following:
 - PowerShell 7 installed if running locally.
 - Required Azure PowerShell modules installed:
     ```powershell
-    Install-Module Az.Accounts,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement,Az.CosmosDB
+    Install-Module Az.Accounts,Az.Aks,Az.Compute,Az.Storage,Az.Sql,Az.SqlVirtualMachine,Az.ResourceGraph,Az.Monitor,Az.Resources,Az.RecoveryServices,Az.CostManagement,Az.CosmosDB
     ```
 - Optional modules. If one is missing, the script prints a warning and skips only that collection:
     ```powershell
