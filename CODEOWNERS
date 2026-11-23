@@ -12,12 +12,26 @@
 # M365 folder ownership
 /M365/ @akashjaingis
 
-# Other folder ownership
+# AZURE_DEVOPS folder ownership
 /AZURE_DEVOPS/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# GITHUB folder ownership
 /GITHUB/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# HANA folder ownership
 /HANA/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# IDENTITY folder ownership
 /IDENTITY/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# MSSQL folder ownership
 /MSSQL/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# ORACLE folder ownership
 /ORACLE/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# SAAS folder ownership
 /SAAS/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# VMWARE folder ownership
 /VMWARE/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
