@@ -8863,6 +8863,17 @@ $script:RubrikBrandmarkSvg = @'
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 720 720"><defs><style>.cls-1{fill:url(#linear-gradient);stroke-width:0px;}</style><linearGradient id="linear-gradient" x1="1005.62" y1="-257.45" x2="1351.35" y2="-603.17" gradientTransform="translate(-63.62 -815.87) rotate(90)" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#00b287"/><stop offset=".26" stop-color="#08b5ab"/><stop offset=".58" stop-color="#11b8d2"/><stop offset=".84" stop-color="#16bbeb"/><stop offset="1" stop-color="#19bcf4"/></linearGradient></defs><path class="cls-1" d="m281.02,459.01v61.7c0,5.92-4.84,10.8-10.8,10.8h-61.73c-5.95,0-10.8-4.88-10.8-10.8v-61.7c0-5.92,4.88-10.8,10.8-10.8h61.73c5.95,0,10.8,4.84,10.8,10.8Zm-7.65,83.6l-30.45,30.42c-4.19,4.19-3.36,9.93,1.87,12.73l26.23,12.39c5.5,2.28,9.97-.73,9.97-6.64v-45.75c0-5.95-3.43-7.37-7.65-3.15h.03Zm-135.75-265.58h45.78c5.95,0,7.37-3.43,3.15-7.65l-30.45-30.42c-4.19-4.19-9.93-3.36-12.73,1.87l-12.42,26.19c-2.28,5.5.73,9.97,6.64,9.97l.03.03Zm134.43,93.22c4.19-4.19,4.19-11.07,0-15.26l-68.45-68.41c-4.19-4.19-11.07-4.19-15.26,0l-68.51,68.41c-4.19,4.19-4.19,11.07,0,15.26l68.51,68.41c4.19,4.19,11.07,4.19,15.26,0,0,0,68.45-68.41,68.45-68.41Zm277.9-93.22h45.78c5.95,0,8.93-4.5,6.68-9.97l-12.42-26.19c-2.8-5.23-8.55-6.06-12.77-1.87l-30.45,30.42c-4.19,4.19-2.77,7.65,3.15,7.65l.03-.03Zm-86.82,0h61.73c5.95,0,10.8-4.84,10.8-10.8v-61.7c0-5.92-4.84-10.8-10.8-10.8h-61.73c-5.95,0-10.8,4.88-10.8,10.8v61.7c0,5.95,4.84,10.8,10.8,10.8Zm-3.18-94.4l30.45-30.42c4.19-4.19,3.36-9.93-1.87-12.73l-26.23-12.39c-5.47-2.28-9.97.73-9.97,6.64v45.75c0,5.95,3.43,7.37,7.65,3.15h-.03ZM183.4,448.21h-45.78c-5.95,0-8.93,4.5-6.64,9.97l12.42,26.19c2.8,5.23,8.55,6.09,12.73,1.87l30.45-30.42c4.19-4.19,2.77-7.65-3.15-7.65l-.03.03Zm412.33,0h-45.78c-5.95,0-7.37,3.43-3.15,7.65l30.45,30.42c4.19,4.19,9.93,3.36,12.77-1.87l12.42-26.19c2.28-5.47-.73-9.97-6.68-9.97l-.03-.03Zm-70.87,0h-61.73c-5.95,0-10.8,4.84-10.8,10.8v61.7c0,5.92,4.84,10.8,10.8,10.8h61.73c5.95,0,10.8-4.88,10.8-10.8v-61.7c0-5.92-4.84-10.8-10.8-10.8Zm88.69-93.22l-68.45-68.41c-4.19-4.19-11.07-4.19-15.29,0l-68.51,68.41c-4.19,4.19-4.19,11.07,0,15.26l68.51,68.41c4.22,4.19,11.07,4.19,15.29,0l68.45-68.41c4.19-4.19,4.19-11.07,0-15.26Zm-153.57,187.62c-4.19-4.19-7.65-2.77-7.65,3.15v45.75c0,5.92,4.5,8.93,9.97,6.64l26.23-12.39c5.23-2.8,6.09-8.55,1.87-12.73l-30.45-30.42h.03Zm-85.64-426.66c-4.19-4.19-11.07-4.19-15.29,0l-68.51,68.41c-4.19,4.19-4.19,11.07,0,15.26l68.51,68.41c4.22,4.19,11.07,4.19,15.29,0l68.45-68.41c4.19-4.19,4.19-11.07,0-15.26l-68.45-68.41Zm-103.29,11.11l-26.23,12.39c-5.23,2.8-6.09,8.55-1.87,12.73l30.45,30.42c4.19,4.19,7.65,2.77,7.65-3.15v-45.71c0-5.95-4.5-8.93-9.97-6.64l-.03-.03Zm-.83,66.68h-61.73c-5.95,0-10.8,4.88-10.8,10.8v61.7c0,5.95,4.88,10.8,10.8,10.8h61.73c5.95,0,10.8-4.84,10.8-10.8v-61.7c0-5.92-4.84-10.8-10.8-10.8Zm104.12,263.85c-4.19-4.19-11.07-4.19-15.29,0l-68.51,68.41c-4.19,4.19-4.19,11.07,0,15.26l68.51,68.41c4.22,4.19,11.07,4.19,15.29,0l68.45-68.41c4.19-4.22,4.19-11.07,0-15.26l-68.45-68.41Z"/></svg>
 '@
 
+function ConvertTo-RowsJson {
+    <# JSON array for a row set. ConvertTo-ReportRows returns an empty array as $null at the call site (function output unrolls), and Windows PowerShell 5.1 turns ConvertTo-Json -InputObject $null into an EMPTY STRING - which crashed the Summary build (all four workload arrays are empty there) and would crash any tenant with zero rows in a workload. Always return a valid array. #>
+    param($Rows)
+    if ($null -eq $Rows) { return '[]' }
+    $items = @($Rows)
+    if ($items.Count -eq 0) { return '[]' }
+    $j = ConvertTo-Json -InputObject $items -Depth 12 -Compress
+    if ([string]::IsNullOrEmpty($j)) { return '[]' }
+    return $j
+}
+
 function ConvertTo-ReportRows {
     <# Builds the JSON-ready row shape - common fields plus a `metrics` sub-object of raw numeric fields used for client-side scoring/tiering/totals/recovery math. #>
     param(
@@ -9354,6 +9365,7 @@ function New-M365HtmlReport {
     # scoring arrays) that's gone out of scope but hasn't been collected yet.
     [System.GC]::Collect()
     $reportMetaJson = $dataObject | ConvertTo-Json -Depth 12 -Compress
+    if ([string]::IsNullOrEmpty($reportMetaJson)) { throw "New-M365HtmlReport: ConvertTo-Json returned an empty string for the report metadata (build mode '$BuildMode'). Report not written." }
     Assert-ValidReportJson -Json $reportMetaJson -Context 'the embedded HTML report-data-meta blob'
     # NEW: -InputObject (parameter binding), NOT the pipeline - piping a
     # collection into ConvertTo-Json unrolls it one item at a time, so a
@@ -9362,10 +9374,10 @@ function New-M365HtmlReport {
     # elsewhere in this script). -InputObject passes
     # the whole array as one argument, so ConvertTo-Json always emits an
     # array regardless of row count.
-    $reportMailboxesJson  = ConvertTo-Json -InputObject $mailboxesRows  -Depth 12 -Compress
-    $reportOnedriveJson   = ConvertTo-Json -InputObject $onedriveRows   -Depth 12 -Compress
-    $reportSharepointJson = ConvertTo-Json -InputObject $sharepointRows -Depth 12 -Compress
-    $reportTeamsJson      = ConvertTo-Json -InputObject $teamsRows      -Depth 12 -Compress
+    $reportMailboxesJson  = ConvertTo-RowsJson -Rows $mailboxesRows
+    $reportOnedriveJson   = ConvertTo-RowsJson -Rows $onedriveRows
+    $reportSharepointJson = ConvertTo-RowsJson -Rows $sharepointRows
+    $reportTeamsJson      = ConvertTo-RowsJson -Rows $teamsRows
     Assert-ValidReportJson -Json $reportMailboxesJson  -Context 'the embedded HTML report-data-mailboxes blob'
     Assert-ValidReportJson -Json $reportOnedriveJson   -Context 'the embedded HTML report-data-onedrive blob'
     Assert-ValidReportJson -Json $reportSharepointJson -Context 'the embedded HTML report-data-sharepoint blob'
@@ -9840,17 +9852,28 @@ if (-not $SkipHtmlReport) {
         DetailedSizingRequested = [bool]$DetailedSizing
         Sizing                  = $detailedSizingResult
     }
-    $htmlReportPath = New-M365HtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        @commonReportParams -BuildMode 'full' `
-        -OutFile (Join-Path $OutputPath 'Interactive_CriticalityAssessment_Report.html')
-    Write-Host "Interactive report        ->  $htmlReportPath" -ForegroundColor Gray
-
     # v2.0: aggregate-only companion (same engine, buildMode 'summary'): no per-object data, safe to
-    # email/forward. See New-M365SummaryHtmlReport's header comment.
-    $summaryReportPath = New-M365SummaryHtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
-        -CommonParams $commonReportParams `
-        -OutFile (Join-Path $OutputPath 'Summary_CriticalityAssessment_Report.html')
-    Write-Host "Summary report             ->  $summaryReportPath" -ForegroundColor Gray
+    # email/forward. See New-M365SummaryHtmlReport's header comment. Built FIRST (small, fast) and in its own
+    # try/catch so a failure while building the very large Interactive report can never cost the Summary,
+    # and vice versa.
+    try {
+        $summaryReportPath = New-M365SummaryHtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
+            -CommonParams $commonReportParams `
+            -OutFile (Join-Path $OutputPath 'Summary_CriticalityAssessment_Report.html')
+        Write-Host "Summary report             ->  $summaryReportPath" -ForegroundColor Gray
+    } catch {
+        Write-Host "Summary report FAILED: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  at $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
+    }
+    try {
+        $htmlReportPath = New-M365HtmlReport -Mailboxes $mailboxes -OneDrive $onedrive -SharePoint $sharepoint -Teams $teams `
+            @commonReportParams -BuildMode 'full' `
+            -OutFile (Join-Path $OutputPath 'Interactive_CriticalityAssessment_Report.html')
+        Write-Host "Interactive report        ->  $htmlReportPath" -ForegroundColor Gray
+    } catch {
+        Write-Host "Interactive report FAILED: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  at $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
+    }
 
     # Also save the embedded data blob standalone, so a FUTURE run's -CompareTo can load it.
     $reportDataForCompare = [PSCustomObject]@{
