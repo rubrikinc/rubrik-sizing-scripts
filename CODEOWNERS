@@ -4,10 +4,34 @@
 # More info: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Overall maintainers — any one can approve a PR
-* @mtellin @stevenctong
+* @mtellin @stevenctong @arvindkumar-rubrik @arnald-dutta-rbrk @srikar-rubrik-dev @abhijith-rubrik @bhaskard
 
 # CLOUD folder ownership
-/CLOUD/ @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+/CLOUD/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
 
 # M365 folder ownership
-/M365/ @akashjaingis
+/M365/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# AZURE_DEVOPS folder ownership
+/AZURE_DEVOPS/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# GITHUB folder ownership
+/GITHUB/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# HANA folder ownership
+/HANA/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# IDENTITY folder ownership
+/IDENTITY/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# MSSQL folder ownership
+/MSSQL/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# ORACLE folder ownership
+/ORACLE/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# SAAS folder ownership
+/SAAS/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
+
+# VMWARE folder ownership
+/VMWARE/ @arvindkumar-rubrik @arnald-dutta-rbrk @abhijith-rubrik @Aparna-Sharma15 @bhaskard @srikar-rubrik-dev @sri-codebrik @visharma28
