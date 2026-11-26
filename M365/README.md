@@ -18,7 +18,7 @@
 
 ## Installation
 
-1. Download the [Get-RubrikM365SizingInfo.ps1](https://github.com/rubrikinc/microsoft-365-sizing/archive/refs/heads/main.zip) PowerShell script to your local machine
+1. Download the [Get-RubrikM365SizingInfo.ps1](https://github.com/rubrikinc/rubrik-sizing-scripts/blob/master/M365/Get-RubrikM365SizingInfo.ps1) PowerShell script to your local machine
 2. Install the `Microsoft.Graph.Reports` and `ExchangeOnlineManagement` modules from the PowerShell Gallery
 
 ```powershell
